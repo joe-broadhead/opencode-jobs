@@ -156,6 +156,25 @@ describe("the overlap table", () => {
     await setup5.runner.settle()
   })
 
+  test("queue-one keeps the schedule where it was, so a skipped slot never runs afterwards", async () => {
+    const runs = deferred()
+    const setup5 = setup({ jobs: [job({ policy: { overlap: "queue-one" } })], execute: runs.execute })
+    await setup5.runner.tick(START)
+    await setup5.runner.tick(START + 5 * MINUTE)
+    await setup5.runner.tick(START + 10 * MINUTE)
+    await setup5.runner.tick(START + 15 * MINUTE)
+    await setup5.runner.tick(START + 20 * MINUTE)
+    expect((await readState(setup5.storage.storage, "five")).nextDueAt).toBe(START + 25 * MINUTE)
+    runs.release()
+    await setup5.runner.settle()
+    await setup5.runner.tick(START + 20 * MINUTE)
+    await settle()
+    expect(slots(runs.asked)).toEqual([5, 10])
+    expect((await readState(setup5.storage.storage, "five")).nextDueAt).toBe(START + 25 * MINUTE)
+    runs.release()
+    await setup5.runner.settle()
+  })
+
   test("replace interrupts the run in its way and starts the new slot", async () => {
     const runs = deferred()
     const setup5 = setup({ jobs: [job({ policy: { overlap: "replace" } })], execute: runs.execute })
