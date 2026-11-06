@@ -31,6 +31,7 @@ What each field does:
 - `timeout: 10m`: a run that has not finished in ten minutes is interrupted and recorded `timed_out`.
 
 The body is the prompt. It names real tools and says what is data, which matters because a calendar or a pull request
-can contain anything.
+can contain anything. The read-only profile has `read`, `glob`, `grep` and `list`; add the calendar or GitHub tool to
+that agent's own `permissions` if the brief needs it, and only if a person has agreed to it.
 
 To check it, run `/jobs-status` for the next run, and `/jobs-run morning` to try it now.

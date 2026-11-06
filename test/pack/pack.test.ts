@@ -22,6 +22,7 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
   files: string[]
   exports: Record<string, string>
   devDependencies: Record<string, string>
+  jelly: { skills: string[] }
 }
 // Outside the repository, so nothing resolves from the repository's own node_modules.
 const work = realpathSync(mkdtempSync(join(realpathSync("/tmp"), "jobs-pack-")))
@@ -126,6 +127,9 @@ describe("package tarball", () => {
     expect(size).toBeLessThanOrEqual(MAX_PACKED_BYTES)
     expect(paths.filter((path) => path.includes("node_modules/") || /\.(?:tsx|jsx)$/.test(path))).toEqual([])
     for (const target of Object.values(pkg.exports)) expect(paths).toContain(target.replace(/^\.\//, ""))
+    // Every skill the jelly declaration names ships, and no other skill does.
+    const declared = (pkg as unknown as { jelly: { skills: string[] } }).jelly.skills
+    expect(paths.filter((path) => path.startsWith("skills/")).sort()).toEqual(declared.map((name) => `skills/${name}/SKILL.md`).sort())
     expect(paths.filter((path) => path.endsWith(".d.ts"))).toEqual([])
   }, 120_000)
 

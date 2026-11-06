@@ -100,7 +100,8 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
   // A reminder posts into an existing session: no run session, no parked parent, and nothing to interrupt but the
   // target's own turn, which is the person's, so a replace never touches it.
   const action = job.action
-  if (action.type === "remind") return complete(input, key, clock.now(), action.sessionID, await remind(input, action, slotISO(slot)))
+  // A reminder's session is the person's, so the record names it but never owns it.
+  if (action.type === "remind") return complete(input, key, clock.now(), action.sessionID, await remind(input, action, slotISO(slot)), false)
 
   // A run needs an agent that denies by default (D7). One that has become unguarded since the job was created is
   // refused per slot rather than run into a denial: the slot is recorded as skipped, with the code and the block to
@@ -159,7 +160,7 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
 }
 
 /** Writes the final record, unless this instance stopped leading: then the new leader adopts the open one. */
-async function complete(input: ExecuteInput, key: string, startedAt: number, sessionID: string | undefined, result: Finished): Promise<RunResult> {
+async function complete(input: ExecuteInput, key: string, startedAt: number, sessionID: string | undefined, result: Finished, owned = true): Promise<RunResult> {
   const { job, clock, storage } = input
   if (sessionID !== undefined) forgetJobSession(sessionID)
   if (!input.active()) return { claimed: true, status: result.status, ...(sessionID === undefined ? {} : { sessionID }), abandoned: true }
@@ -171,6 +172,7 @@ async function complete(input: ExecuteInput, key: string, startedAt: number, ses
     attempt: input.attempt,
     token: input.token,
     ...(sessionID === undefined ? {} : { sessionID }),
+    ...(sessionID === undefined || !owned ? {} : { sessionOwned: true }),
     startedAt,
     endedAt: clock.now(),
     ...(result.outcome === undefined ? {} : { outcome: result.outcome }),

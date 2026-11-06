@@ -10,6 +10,7 @@ import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import { LineCounter, parseDocument } from "yaml"
 import { errorText } from "../constants.js"
+import { oneLine } from "../redact.js"
 import { JobInputError, parseJob, slug, type Job } from "./model.js"
 
 /** A file the parser refused: the path, and the coded message, which repeats the path and names the line. */
@@ -44,6 +45,8 @@ export interface JobFileSources {
 export type AgentGuard = (agent: string) => { readonly code: string; readonly what: string; readonly nextStep: string } | undefined
 
 const FRONT_MATTER = "---"
+/** A job file is a definition and a prompt, not a document: past this, it is refused rather than parsed (DR-9). */
+export const MAX_FILE_BYTES = 256 * 1024
 
 /**
  * What the watch compares to decide whether to parse again: every job file's path, modification time and size, in the
@@ -135,8 +138,11 @@ async function readJobFile(path: string, context: ReadContext): Promise<Job | In
   let text: string
   let modified: number
   try {
-    const [raw, info] = await Promise.all([readFile(path, "utf8"), stat(path)])
-    text = raw.replace(/\r\n/g, "\n")
+    const info = await stat(path)
+    if (info.size > MAX_FILE_BYTES) {
+      return invalidAt(path, 1, `The file is ${info.size} bytes, over the ${MAX_FILE_BYTES} byte limit.`, `Keep the job definition and its prompt under ${MAX_FILE_BYTES} bytes, or commit the detail in another file.`)
+    }
+    text = (await readFile(path, "utf8")).replace(/\r\n/g, "\n")
     modified = info.mtimeMs
   } catch (error) {
     return invalidAt(path, 1, `The file could not be read (${reason(error)}).`, `Check that the file is readable, then run /jobs-status again.`)
@@ -158,7 +164,13 @@ async function readJobFile(path: string, context: ReadContext): Promise<Job | In
     const line = (broken.linePos?.[0]?.line ?? 1) + 1
     return invalidAt(path, line, `The front matter is not valid YAML: ${firstLine(broken.message)}.`, `Fix the YAML in the front matter, then run /jobs-status again.`)
   }
-  const value = doc.toJS() ?? {}
+  // `toJS` can throw on excessive alias expansion; one file is refused, the rest still load (DR-9).
+  let value: unknown
+  try {
+    value = doc.toJS() ?? {}
+  } catch (error) {
+    return invalidAt(path, 2, `The front matter cannot be read (${reason(error)}).`, `Simplify the YAML in the front matter, then run /jobs-status again.`)
+  }
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return invalidAt(path, 2, `The front matter must be a YAML mapping of fields, found ${Array.isArray(value) ? "a list" : typeof value}.`, `Write the job's fields as "key: value" lines between the --- lines.`)
   }
@@ -218,9 +230,13 @@ async function readJobFile(path: string, context: ReadContext): Promise<Job | In
   }
 }
 
+/**
+ * One refused file. The path and the reason are a git checkout's content and a host's text, so both are made safe for
+ * a terminal, a session and the RPC: one line, no controls or bidi characters, and a bounded length (DR-8).
+ */
 const invalidAt = (path: string, line: number, what: string, nextStep: string, code = "JOBS_INVALID_FILE"): InvalidFile => ({
-  path,
-  message: errorText(code, `${path}:${line}: ${what}`, nextStep),
+  path: oneLine(path).slice(0, 300),
+  message: errorText(code, `${oneLine(path).slice(0, 300)}:${line}: ${oneLine(what).slice(0, 400)}`, oneLine(nextStep).slice(0, 300)),
 })
 
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))

@@ -24,6 +24,7 @@ import type { Clock } from "./clock.js"
 import { nextRun } from "./cron.js"
 import { jobFileSignature, readJobFiles, type AgentGuard, type JobFiles } from "./files.js"
 import type { Job } from "./model.js"
+import { cut, oneLine } from "../redact.js"
 import { jobOutput } from "./safety.js"
 import { readBeat, readJobs, readPauseAll, readRunner, readState, scanRuns, type RunRecord } from "./store.js"
 import type { FileWatch } from "./watch.js"
@@ -76,6 +77,8 @@ export interface JobView {
 export type RunViewWithSummary = RunView
 
 const RECENT = 10
+/** How many setup problems status prints: enough to act on, never a wall of a checkout's file names (DR-8). */
+const MAX_PROBLEMS = 20
 const NEXT = 5
 const TOP_FAILURES = 5
 
@@ -195,14 +198,17 @@ export function createReport(input: ReportInput): Report {
       failures: failuresOf(records, names),
       unguardedAgents: known ? unguardedAgents(agents, [...jobs.map((job) => job.agent), ...files.refused]) : [],
       ...(known ? {} : { agentsUnknown: true }),
-      problems: [...(input.problems ?? []), ...files.invalid.map((file) => file.message)],
+      problems: [...(input.problems ?? []), ...files.invalid.map((file) => file.message)].map((problem) => cut(oneLine(problem), 400)).slice(0, MAX_PROBLEMS),
     })
   }
 
   const list = async (filter: { readonly state?: JobView["state"]; readonly limit?: number } = {}): Promise<readonly JobView[]> => {
     const now = input.clock.now()
     const { jobs, files } = await source()
-    const invalid: JobView[] = files.invalid.map((file) => ({ id: file.path, name: file.path, source: "file", state: "invalid", message: file.message }))
+    const invalid: JobView[] = files.invalid.map((file) => {
+      const shown = cut(oneLine(file.path), 160)
+      return { id: shown, name: shown, source: "file", state: "invalid", message: cut(oneLine(file.message), 400) }
+    })
     const views = [...(await Promise.all(jobs.map((job) => jobView(job, now)))), ...invalid]
     const matching = filter.state === undefined ? views : views.filter((view) => view.state === filter.state)
     return matching.sort((left, right) => left.name.localeCompare(right.name)).slice(0, Math.max(1, Math.min(100, filter.limit ?? 100)))
@@ -253,7 +259,8 @@ function failuresOf(records: readonly RunRecord[], names: ReadonlyMap<string, st
   const counted = new Map<string, FailureView>()
   for (const record of records) {
     if (record.status !== "failed" && record.status !== "timed_out") continue
-    const code = record.error === undefined ? (record.status === "timed_out" ? "JOBS_TIMEOUT" : "JOBS_INVALID_JOB") : (record.error.split(":")[0] ?? record.status)
+    // A record's error is host text: its code is the first segment, made safe and bounded before it is shown (DR-8).
+    const code = cut(oneLine(record.error === undefined ? (record.status === "timed_out" ? "JOBS_TIMEOUT" : "JOBS_INVALID_JOB") : (record.error.split(":")[0] ?? record.status)), 160)
     const id = `${record.job}\u0000${code}`
     const found = counted.get(id)
     const name = names.get(record.job) ?? record.job

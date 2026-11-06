@@ -1,5 +1,6 @@
-// The TUI part: one palette command that opens the dialog, `r` and `p` inside it, and the three states the dialog
-// renders. The render itself runs against the built bundle on OpenTUI 0.8's test renderer (test/tui-renderer.mjs).
+// The TUI part: one palette command that opens the dialog, `r` inside it, the palette's pause command, and the three
+// states the dialog renders. The render itself runs against the built bundle on OpenTUI 0.8's test renderer
+// (test/tui-renderer.mjs).
 import { beforeAll, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync, readdirSync } from "node:fs"
@@ -54,7 +55,7 @@ describe("the built TUI part", () => {
     expect(syntax.status, syntax.stderr).toBe(0)
   })
 
-  test("renders the empty, healthy and stopped states, and answers r, p and esc", () => {
+  test("renders the empty, healthy and stopped states, and answers r and esc", () => {
     const result = spawnSync("bun", ["--conditions=browser", "test/tui-renderer.mjs"], { cwd: ROOT, encoding: "utf8", timeout: 120_000 })
     expect(result.error, "Bun must be on PATH").toBeUndefined()
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)

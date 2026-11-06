@@ -109,10 +109,9 @@ the run would record `JOBS_UNATTENDED`. Leave the write out of the profile; a jo
 - **A job whose agent does not deny by default is refused**, at create and again when a slot starts, with
   `JOBS_AGENT_UNGUARDED`. Nothing runs. Status names the agent and prints the block to paste.
 - **A run never asks.** A tool the agent would ask about is denied inside the job's session with `JOBS_UNATTENDED`, and
-  the run carries on and records it. One `permission.hook("evaluate")` does this, matched to the sessions this plugin
-  created for runs (a registry of their ids) and to a script's call through the tools RPC, which is marked `script`
-  because no one can answer its prompt. It never turns an allow into a deny or a deny into an allow, and it never
-  touches a session a person opened.
+  the run carries on and records it. Two `permission.hook("evaluate")` hooks exist: this one, matched to the sessions
+  this plugin created for runs (a registry of their ids), and the tools RPC's, matched to a script's own call in flight.
+  Neither turns an allow into a deny or a deny into an allow, and neither touches a session a person opened.
 - **Agents unknown.** If the host cannot list its agents, nothing runs: the slot is recorded `skipped` with
   `JOBS_AGENTS_UNKNOWN`, and status says the agent list could not be read. It never guesses a block to paste for an
   agent that may be fine.
@@ -139,12 +138,12 @@ Twelve tools, namespace `jobs_`. Reads are allowed by the default rules; every o
 | `jobs_create` | Creates a job: name, schedule, action, agent, and optionally target, allow, policy, ends, expiry and jitter. |
 | `jobs_update` | Replaces fields of a job a tool created. |
 | `jobs_delete` | Deletes a job a tool created; its run records stay for history. |
-| `jobs_run_now` | Makes a job's next slot this moment. |
+| `jobs_run_now` | Runs a job once, now, as a manual run with its own slot: the schedule is untouched. An expired job is refused with `JOBS_EXPIRED`. |
 | `jobs_resume` | Resumes a paused job, or every job with `{ "all": true }`. It asks. |
 | `jobs_extend` | Moves a job's expiry. |
 
-A tool job created by the model expires after seven days, and status counts it as expiring. `jobs_extend` is the
-deliberate act that keeps it.
+A job created with the tool — by the model or by a person — expires after seven days unless `expires` is set, and
+status counts it as expiring. `jobs_extend` is the deliberate act that keeps it.
 
 A job defined by a file cannot be changed or deleted by a tool: the file is its definition. It can be paused, and it
 never expires on its own.

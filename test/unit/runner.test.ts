@@ -464,3 +464,38 @@ describe("ends and expiry", () => {
     expect((await readState(storage.storage, "old")).done).toBe(true)
   })
 })
+
+describe("a manual run", () => {
+  test("runs once at its own slot and leaves the scheduled slot exactly where it was", async () => {
+    const storage = memoryStorage()
+    const clock = testClock(START, { instantBelow: 0 })
+    const runs = immediate("succeeded")
+    // An hourly job anchored half an hour before now: its next grid slot is in the future, so run-now must not wait.
+    const job = parseJob(
+      { name: "Hourly", schedule: { every: "1 hour", anchor: new Date(START - 30 * MINUTE).toISOString() }, action: { type: "prompt", text: "go" }, agent: "jobs" },
+      { now: START, timezone: "UTC", id: "hourly", source: "tool", createdBy: "user" },
+    )
+    const runner = new Runner({ storage: storage.storage, clock: clock.clock, jobs: async () => [job], execute: runs.make(storage), active: () => true, concurrency: 2, location: "/work" })
+    await runner.tick(START)
+    const scheduled = (await readState(storage.storage, "hourly")).nextDueAt!
+    await storage.storage.set("state/hourly", { ...(await readState(storage.storage, "hourly")), manual: { at: START + 5_000 } })
+    const tick = await runner.tick(START + 5_000)
+    await runner.settle()
+    expect(tick.started).toBe(1)
+    expect(runs.asked.map((run) => run.slot)).toEqual([START + 5_000])
+    expect((await readState(storage.storage, "hourly")).manual).toBeUndefined()
+    expect((await readState(storage.storage, "hourly")).nextDueAt).toBe(scheduled)
+  })
+
+  test("a computed wait of zero never spins the loop", async () => {
+    const storage = memoryStorage()
+    const clock = testClock(START, { instantBelow: 0 })
+    const runner = new Runner({ storage: storage.storage, clock: clock.clock, jobs: async () => [], execute: immediate().make(storage), active: () => true, concurrency: 2, location: "/work" })
+    runner.start()
+    await settle(12)
+    runner.stop()
+    await settle()
+    // Every loop sleep is the 30-second cap (or a due-slot wait), never a zero-length spin.
+    expect(clock.sleeps.filter((ms) => ms === 0)).toEqual([])
+  })
+})

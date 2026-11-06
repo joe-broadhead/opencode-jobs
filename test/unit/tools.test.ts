@@ -171,13 +171,23 @@ describe("the changes", () => {
     expect((await readState(setup.storage.storage, "job_update")).paused).toBeUndefined()
   })
 
-  test("jobs_run_now makes the next slot this moment, and refuses a paused job", async () => {
+  test("jobs_run_now queues a manual run with its own slot, without touching the schedule", async () => {
     const setup = harness()
     await store(setup, toolJob())
+    await setup.storage.storage.set("state/job_update", { job: "job_update", nextDueAt: NOW + 30 * 60_000, runCount: 0, consecutiveFailures: 0 })
     await call(setup, "run_now", { id: "job_update" })
-    expect((await readState(setup.storage.storage, "job_update")).nextDueAt).toBe(NOW)
+    const state = await readState(setup.storage.storage, "job_update")
+    // The manual slot is this moment, and the scheduled slot stays exactly where it was (DR-3).
+    expect(state.manual).toEqual({ at: NOW })
+    expect(state.nextDueAt).toBe(NOW + 30 * 60_000)
     await call(setup, "pause", { id: "job_update" })
     await expect(call(setup, "run_now", { id: "job_update" })).rejects.toThrow("JOBS_DISABLED")
+  })
+
+  test("jobs_run_now refuses a job whose time or end has passed, with the extend step", async () => {
+    const setup = harness()
+    await store(setup, toolJob("job_ended", { ends: { at: new Date(NOW - 1).toISOString() } }))
+    await expect(call(setup, "run_now", { id: "job_ended" })).rejects.toThrow("JOBS_EXPIRED")
   })
 
   test("jobs_extend moves an expiry and refuses one in the past", async () => {

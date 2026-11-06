@@ -13,8 +13,9 @@ import type { Plugin } from "@opencode/plugin"
 import type { Clock } from "./clock.js"
 import { nextRun } from "./cron.js"
 import { DEFAULTS, nextId, parseJob, serverTimezone, updateJob, type Job } from "./model.js"
+import { stopReason } from "./policy.js"
 import type { Source } from "./report.js"
-import { putJob, putState, readState, removeJob, setPauseAll, type PauseRecord } from "./store.js"
+import { getRun, putJob, putState, readState, removeJob, setPauseAll, slotISO, updateState, type PauseRecord } from "./store.js"
 
 export interface ActionInput {
   readonly storage: Pick<Plugin.Context["storage"], "get" | "set" | "remove" | "scan">
@@ -143,8 +144,9 @@ export async function extendJob(input: ActionInput, id: string, expires: number)
 }
 
 /**
- * Runs a job now: its next slot becomes this moment, and the runner picks it up within a tick. A paused job and a
- * paused runner are refused, because nothing would start.
+ * Runs a job now, as a manual run with its own slot key: the schedule is untouched, so no scheduled slot is consumed,
+ * skipped or collided with (DR-3). A paused job, an expired job and a job whose `at` has passed are refused with the
+ * reason and the next step, because nothing could start.
  */
 export async function runNow(input: ActionInput, id: string): Promise<Job> {
   ensureWritable(input)
@@ -153,8 +155,14 @@ export async function runNow(input: ActionInput, id: string): Promise<Job> {
   if (state.paused !== undefined) {
     throw jobsError("JOBS_DISABLED", `The job ${JSON.stringify(id)} is paused.`, `Resume it with the jobs_resume tool, then run it again.`)
   }
-  // A slot already due is kept: the run-now slot is this moment, and the pass still handles anything older.
-  await putState(input.storage, { ...state, done: undefined, nextDueAt: Math.min(state.nextDueAt ?? input.clock.now(), input.clock.now()) })
+  const stop = stopReason(job, state, input.clock.now())
+  if (stop === "expired" || stop === "ended") {
+    throw jobsError("JOBS_EXPIRED", `The job ${JSON.stringify(id)} has no slot left, so it cannot run now.`, `Extend it with the jobs_extend tool, or create a new job.`)
+  }
+  // Its own slot key, so it never lands on a scheduled slot's record.
+  let at = input.clock.now()
+  while ((await getRun(input.storage, job.id, slotISO(at))) !== undefined) at += 1
+  await updateState(input.storage, job.id, (current) => ({ ...current, manual: { at } }))
   input.wake()
   return job
 }

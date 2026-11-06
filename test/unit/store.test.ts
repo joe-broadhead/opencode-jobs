@@ -186,7 +186,7 @@ describe("retention", () => {
 
 describe("retention and its sessions", () => {
   const at = (daysAgo: number) => NOW - daysAgo * DAY
-  const record = (slot: string, status: RunRecord["status"], sessionID?: string) => ({ job: "five", slot, status, late: false, attempt: 1, ...(sessionID === undefined ? {} : { sessionID }) })
+  const record = (slot: string, status: RunRecord["status"], sessionID?: string) => ({ job: "five", slot, status, late: false, attempt: 1, ...(sessionID === undefined ? {} : { sessionID, sessionOwned: true }) })
 
   test("a pruned record's session goes with it, and a busy one stays", async () => {
     const storage = memoryStorage()
@@ -221,5 +221,32 @@ describe("retention and its sessions", () => {
     expect(report.removed).toHaveLength(1)
     expect(report.keptBusy).toEqual(["ses_busy"])
     expect(removed).toEqual([])
+  })
+})
+
+describe("retention never deletes a person's session", () => {
+  const at = (daysAgo: number) => NOW - daysAgo * DAY
+  test("a reminder's target record is pruned and the target session survives", async () => {
+    const storage = memoryStorage()
+    const old = new Date(at(31)).toISOString()
+    // A reminder run names the person's session but does not own it.
+    await putRun(storage.storage, { job: "remind", slot: old, status: "succeeded", late: false, attempt: 1, sessionID: "ses_person" })
+    await putRun(storage.storage, { job: "remind", slot: new Date(at(0)).toISOString(), status: "succeeded", late: false, attempt: 1, sessionID: "ses_person" })
+    const removed: string[] = []
+    const report = await pruneWithSessions(storage.storage, { get: async () => ({ outcome: "succeeded" }), remove: async ({ sessionID }) => void removed.push(sessionID) }, NOW)
+    expect(report.removed.map((record) => record.slot)).toEqual([old])
+    expect(report.sessions).toEqual([])
+    expect(removed).toEqual([])
+  })
+
+  test("a run session this plugin created is removed with its pruned record", async () => {
+    const storage = memoryStorage()
+    const old = new Date(at(31)).toISOString()
+    await putRun(storage.storage, { job: "run", slot: old, status: "succeeded", late: false, attempt: 1, sessionID: "ses_run", sessionOwned: true })
+    await putRun(storage.storage, { job: "run", slot: new Date(at(0)).toISOString(), status: "succeeded", late: false, attempt: 1, sessionID: "ses_new", sessionOwned: true })
+    const removed: string[] = []
+    const report = await pruneWithSessions(storage.storage, { get: async () => ({ outcome: "succeeded" }), remove: async ({ sessionID }) => void removed.push(sessionID) }, NOW)
+    expect(report.sessions).toEqual(["ses_run"])
+    expect(removed).toEqual(["ses_run"])
   })
 })

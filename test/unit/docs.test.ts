@@ -93,6 +93,12 @@ describe("docs", () => {
     for (const field of ["`version`", "`host`", "`state`", "`unguardedAgents`", "`nextStep`"]) expect(guide).toContain(field)
   })
 
+  test("the README names every code the plugin raises in its troubleshooting table, and no other", () => {
+    const readme = /## Troubleshooting\n([\s\S]*?)\n## /.exec(text("README.md"))?.[1] ?? ""
+    const rows = [...readme.matchAll(/\| `([A-Z][A-Z_]+)` \|/g)].map((match) => match[1]!)
+    expect([...new Set(rows)].sort()).toEqual(raised())
+  })
+
   test("the README's Uninstall removes the plugin, and its commands are the ones the plugin registers", () => {
     const uninstall = /## Uninstall\n([\s\S]*?)## Links/.exec(text("README.md"))?.[1] ?? ""
     expect(uninstall).toContain("opencode plugin remove @joe-broadhead/opencode-jobs")

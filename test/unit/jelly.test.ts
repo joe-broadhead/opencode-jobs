@@ -1,7 +1,7 @@
 // The Jelly declaration: the nine keys Jelly reads, the twelve tools with the action and effect each one has, and the
 // one skill. A declaration a reviewer can check against the live tool table without loading the plugin.
 import { describe, expect, test } from "bun:test"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { DEFAULT_RULES, evaluate } from "../../src/host/permissions.js"
 import { DESCRIPTIONS, SCHEMAS, toolId, type ToolName } from "../../src/jobs/tools.js"
 import { TUI_ID } from "../../src/constants.js"
@@ -51,8 +51,12 @@ describe("the jelly declaration", () => {
     }
   })
 
-  test("declares the one skill the repository ships, and the TUI part the package loads", () => {
-    expect(existsSync(new URL("../../skills/jobs/SKILL.md", import.meta.url))).toBe(true)
+  test("declares exactly the skills the package ships, and the TUI part the package loads", () => {
+    // `files` is what npm packs; every declared skill must live under it and exist on disk.
+    expect(pkg.files).toContain("skills")
+    const shipped = readdirSync(new URL("../../skills", import.meta.url), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+    expect(jelly.skills.slice().sort()).toEqual(shipped.sort())
+    for (const name of jelly.skills) expect(existsSync(new URL(`../../skills/${name}/SKILL.md`, import.meta.url))).toBe(true)
     expect(TUI_ID).toBe("jobs.scheduler.tui")
   })
 })

@@ -18,7 +18,8 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   another host version to the lockfile: the host stage installs the other tested SDKs into a temp folder.
 - **Ship prebuilt, one file per entry.** `scripts/build.mjs` bundles `src/index.ts` and `src/tui.ts` with esbuild into
   the self-contained `dist/index.js` and `dist/tui.js`: no chunks, no relative imports, and only host-provided modules
-  external. `tsc` only typechecks. No declaration files, `.tsx` or JSX.
+  external. `tsc` only typechecks. No declaration files, and no `.tsx` or JSX in `dist/`; the TUI source is `src/tui.tsx`, built
+  through Solid's Babel transform before esbuild.
 - **Default rules, never a grant.** The plugin inserts one block after each agent's base allow: `jobs_*` asks, and the
   four reads and the two pauses are allowed (S3). It grants nothing, weakens no deny, and inserts nothing into an agent
   without a base allow. A job runs as the agent it names, and that agent's own `permissions` are its profile; a run's

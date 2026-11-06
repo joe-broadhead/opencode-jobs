@@ -17,7 +17,9 @@ code comments carry the detail.
 | `src/jobs/actions.ts` | Every change: create, update, delete, pause, resume, extend, run now, pause all. |
 | `src/jobs/watch.ts` | The job-file watch: one mtime check a minute, a parse only when a file changed. |
 | `src/jobs/tools.ts` | The twelve tools and the four tools-RPC reads, over `actions.ts` and `report.ts`. |
-| `src/jobs/safety.ts` | The run session and the one evaluate hook. |
+| `src/host/tools-rpc.ts` | The shared tools-RPC module: the one file copied verbatim from the family's shared copy, with only its `PLUGIN-SPECIFIC` block edited. It holds the second evaluate hook. |
+| `src/options.ts` | The plugin options, parsed and validated once per setup. |
+| `src/jobs/safety.ts` | The run session and the run session's evaluate hook. |
 | `src/host/permissions.ts` | The default rules the plugin inserts, and the guarded-agent check. |
 | `src/status.ts` | The status model and its nine rows. |
 | `src/rpc.ts`, `src/commands.ts`, `src/tui.tsx` | The status RPC, the three commands, and the dialog. |
@@ -60,6 +62,20 @@ adoption registers an adopted session again — and it only ever tightens.
 
 The leader prunes on start and once an hour: the last 50 runs of each job and the last 30 days, whichever keeps less,
 never a `running` record and never a job's newest. A pruned record's session goes too, unless that session is still busy.
+
+## Reload and stall recovery
+
+The host runs `cleanup` and then `setup` when a plugin's files change, which is what `opencode plugin update` does. The
+host tests (`test/host/reload.test.ts`) prove, on every tested release:
+
+- **An overdue slot survives the reload.** The new leader's first pass runs the newest overdue slot once, records the
+  older ones in one collapsed `missed` record, and the following slots run on time.
+- **The old instance stops.** Its leader no longer leads, its runner and keep-alive are gone (their loops ended with
+  their abort signals), and it has no handle left to tick; five quick reloads leave one leader and no slot run twice.
+- **A stall recovers.** A clock jump past the lease and several slots wakes the loop, which re-leases and catches up in
+  one pass; it never needs a restart.
+- **The loop never spins.** A computed wait of zero with nothing started is slept as the 30-second cap instead, and a
+  finished run rings the doorbell, so a held slot is picked up the moment capacity frees.
 
 ## Liveness
 

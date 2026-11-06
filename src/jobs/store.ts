@@ -48,6 +48,8 @@ export interface JobState {
   readonly queuedSlot?: number
   /** A retry the policy scheduled for a failed slot: the slot, the attempt it will be, and when it may start. */
   readonly retry?: { readonly slot: number; readonly attempt: number; readonly at: number }
+  /** A manual run (`jobs_run_now`): its own slot key, which no scheduled slot consumes or collides with (DR-3). */
+  readonly manual?: { readonly at: number }
 }
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "interrupted" | "skipped" | "missed"
@@ -63,7 +65,13 @@ export interface RunRecord {
   readonly attempt: number
   /** The leader token that claimed the slot: a write that reads back another token did not win the slot. */
   readonly token?: string
+  /**
+   * The session the record names. A prompt or command run's own session is `sessionOwned`; a reminder's target is a
+   * person's session, which retention must never remove (DR-2).
+   */
   readonly sessionID?: string
+  /** True only when this plugin created the session for the run. Absent on old records and on a reminder's target. */
+  readonly sessionOwned?: boolean
   readonly startedAt?: number
   readonly endedAt?: number
   readonly outcome?: RunOutcome
@@ -180,12 +188,39 @@ export async function readState(storage: Storage, id: string): Promise<JobState>
     ...(isObject(value.retry) && typeof value.retry.slot === "number" && typeof value.retry.attempt === "number" && typeof value.retry.at === "number"
       ? { retry: { slot: value.retry.slot, attempt: value.retry.attempt, at: value.retry.at } }
       : {}),
+    ...(isObject(value.manual) && typeof value.manual.at === "number" ? { manual: { at: value.manual.at } } : {}),
     ...(pause === undefined ? {} : { paused: { at: pause.at as number, ...(typeof pause.reason === "string" ? { reason: pause.reason } : {}) } }),
   }
 }
 
 export async function putState(storage: Storage, state: JobState): Promise<void> {
   await storage.set(stateKey(state.job), state as unknown as Parameters<Storage["set"]>[1])
+}
+
+/** One promise chain per job: every state mutation is a read-modify-write inside it, whichever surface asks (DR-13). */
+const CHAINS = new Map<string, Promise<unknown>>()
+
+/**
+ * Changes a job's state atomically as far as one process can: the change runs after every earlier one for that job, on
+ * a fresh read. The runner, the tools and the commands all come through here, so a pause landing next to a run's finish
+ * cannot lose a counter, and a run-now cannot drop a queued slot.
+ */
+export function updateState(storage: Storage, id: string, change: (state: JobState) => JobState): Promise<JobState> {
+  const previous = CHAINS.get(id) ?? Promise.resolve()
+  const next = previous.then(
+    async () => {
+      const updated = change(await readState(storage, id))
+      await putState(storage, updated)
+      return updated
+    },
+    async () => {
+      const updated = change(await readState(storage, id))
+      await putState(storage, updated)
+      return updated
+    },
+  )
+  CHAINS.set(id, next.then(() => undefined, () => undefined))
+  return next
 }
 
 /** The canonical key time: an ISO instant in UTC, which also sorts chronologically. */
@@ -294,7 +329,9 @@ export async function pruneWithSessions(
   const sessions: string[] = []
   const keptBusy: string[] = []
   for (const record of pruned.remove) {
-    if (record.sessionID === undefined) continue
+    // Only a session this plugin created for the run may be removed: a reminder's target is a person's (DR-2), and an
+    // old record without the flag is treated as not owned.
+    if (record.sessionID === undefined || record.sessionOwned !== true) continue
     const info = await session.get({ sessionID: record.sessionID }).catch(() => undefined)
     if (info !== undefined && info.outcome === undefined) {
       keptBusy.push(record.sessionID)
