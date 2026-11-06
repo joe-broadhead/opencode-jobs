@@ -180,6 +180,8 @@ describe(`safety in OpenCode ${HOST_VERSION}`, () => {
       const worker = host.worker()
       const refused = jobFile(host, "nightly", ["name: Nightly", "every: 5 minutes", "agent: build"], "Summarise the day.")
       const widens = jobFile(host, "widens", ["name: Widens", "every: 5 minutes", "agent: jobs", "allow:", '  - action: edit', "    effect: allow"], "Edit the file.")
+      // The job folders are checked once a minute: move the clock past the watch's window.
+      manual.set(manual.now() + 61_000)
 
       // Create time: neither file becomes a job, and status names each with its code and path.
       const status = await statusOf(host)
