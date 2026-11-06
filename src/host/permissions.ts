@@ -155,12 +155,20 @@ export function refusalFor(agents: readonly AgentInfo[], id: string): AgentRefus
   return agentRefusal(`The agent ${JSON.stringify(id)} does not deny by default, so a job under it would ask on every write and be denied every time.`, nextStep(id))
 }
 
-/** True when the host says the thing looked up does not exist: its tagged not-found error, or an HTTP 404. */
+/**
+ * True when the host says the thing looked up does not exist: a tagged not-found error, an HTTP 404, or the SDK's plain
+ * `Agent not found: <id>` error, which carries neither a tag nor a status.
+ */
 function notFound(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false
-  const tagged = error as { _tag?: unknown; name?: unknown; status?: unknown; statusCode?: unknown }
-  const tag = tagged._tag ?? tagged.name
-  return (typeof tag === "string" && /not.?found/i.test(tag)) || tagged.status === 404 || tagged.statusCode === 404
+  const found = error as { _tag?: unknown; name?: unknown; status?: unknown; statusCode?: unknown; message?: unknown }
+  const tag = found._tag ?? found.name
+  return (
+    (typeof tag === "string" && /not.?found/i.test(tag)) ||
+    found.status === 404 ||
+    found.statusCode === 404 ||
+    (typeof found.message === "string" && /^(?:agent )?not found\b/i.test(found.message))
+  )
 }
 
 /**
