@@ -109,7 +109,7 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
   // The agent is the target directory's configuration. Only a job that targets another directory says so explicitly:
   // the leader's own location is what an omitted location resolves, and a host between reloads resolves it more reliably.
   const target = job.target.directory
-  const refusal = await guardAgent(input.agents, job.agent, target === undefined || target === input.location ? undefined : target)
+  const refusal = await guardAgent(input.agents, job.agent, target === undefined || target === input.location ? undefined : target, input.location)
   if (refusal !== undefined) {
     const record = await putRun(storage, {
       job: job.id,
