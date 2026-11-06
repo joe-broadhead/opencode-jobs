@@ -475,12 +475,12 @@ function parseAllow(value: unknown): DenyRule[] {
   })
 }
 
-function parseEnds(value: unknown, context: JobContext): JobEnds {
+function parseEnds(value: unknown, tz: string): JobEnds {
   if (value === undefined) return {}
   const input = object(value, "ends")
   keys(input, "ends", ["at", "times"])
   const ends: { at?: number; times?: number } = {}
-  if (input.at !== undefined) ends.at = parseInstant(input.at, "ends.at", context.timezone)
+  if (input.at !== undefined) ends.at = parseInstant(input.at, "ends.at", tz)
   if (input.times !== undefined) {
     if (typeof input.times !== "number" || !Number.isInteger(input.times) || input.times < 1) {
       fail("JOBS_INVALID_JOB", "ends.times", `"ends.times" must be a whole number of runs, at least 1, found ${describe(input.times)}.`, `Set "ends.times" to how many runs the job may make, or remove it.`)
@@ -514,6 +514,8 @@ export function parseJob(value: unknown, context: JobContext): Job {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(context.id)) throw new Error(`jobs: the id ${JSON.stringify(context.id)} is not a slug`)
 
   const schedule = parseSchedule(input.schedule, context)
+  // A deadline written as a wall clock belongs to the clock the job runs by.
+  const tz = schedule.kind === "every" ? context.timezone : schedule.tz
   const action = parseAction(input.action)
   const policy = parsePolicy(input.policy, action.type === "remind")
   const agent = string(input.agent, "agent", "JOBS_INVALID_JOB", `Name the agent that runs the job, then give that agent its own "permissions" in opencode.json.`)
@@ -522,7 +524,7 @@ export function parseJob(value: unknown, context: JobContext): Job {
   const createdBy = context.createdBy ?? (context.source === "file" ? "user" : "agent")
   // A recurring job the model created is not lasting consent (D4); a file job, or a person's tool job, keeps running.
   const expires = input.expires !== undefined
-    ? parseInstant(input.expires, "expires", context.timezone)
+    ? parseInstant(input.expires, "expires", tz)
     : createdBy === "agent" && schedule.kind !== "at"
       ? createdAt + DEFAULTS.expiryMs
       : undefined
@@ -545,7 +547,7 @@ export function parseJob(value: unknown, context: JobContext): Job {
     target: parseTarget(input.target, context),
     allow: parseAllow(input.allow),
     policy,
-    ends: parseEnds(input.ends, context),
+    ends: parseEnds(input.ends, tz),
     ...(expires === undefined ? {} : { expires }),
     ...(notify === undefined ? {} : { notify }),
     createdAt,

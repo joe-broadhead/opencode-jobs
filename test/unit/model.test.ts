@@ -83,6 +83,14 @@ describe("the job model", () => {
     expect(codeOf(() => parseInstant("2026-03-08T02:30", "at", "America/New_York"))).toBe("JOBS_INVALID_JOB")
     expect(codeOf(() => parseInstant("tomorrow", "at", "UTC"))).toBe("JOBS_INVALID_JOB")
   })
+
+  test("reads ends and expires by the clock the job runs by", () => {
+    const parsed = job({ schedule: { cron: "0 7 * * *", tz: "America/New_York" }, ends: { at: "2026-12-01T00:00" }, expires: "2026-12-02T00:00" }, { timezone: "UTC" })
+    expect(parsed.ends.at).toBe(Date.parse("2026-12-01T05:00:00Z"))
+    expect(parsed.expires).toBe(Date.parse("2026-12-02T05:00:00Z"))
+    // An interval has no zone of its own, so a deadline written as a wall clock uses the plugin's.
+    expect(job({ schedule: { every: "1h" }, ends: { at: "2026-12-01T00:00" } }, { timezone: "Europe/London" }).ends.at).toBe(Date.parse("2026-12-01T00:00:00Z"))
+  })
 })
 
 describe("the job rules", () => {

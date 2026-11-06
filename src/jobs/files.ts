@@ -7,7 +7,7 @@
  */
 import { readdir, readFile, stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { join, basename } from "node:path"
+import { basename, join } from "node:path"
 import { LineCounter, parseDocument } from "yaml"
 import { errorText } from "../constants.js"
 import { JobInputError, parseJob, slug, type Job } from "./model.js"
