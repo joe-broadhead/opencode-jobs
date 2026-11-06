@@ -155,7 +155,7 @@ Run `/jobs-status` first. Its last line is the next step.
 | The Runner row says it stopped | The location was unloaded, or the service restarted. Open a project to load it again: the missed slot runs once within the catch-up window. Set `experimental.location_idle_timeout` above `keepAliveMinutes` if it keeps happening. |
 | Agents without default rules | A job's agent does not deny by default. Paste the block `/jobs-status` prints for that agent. |
 | `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, or does not exist, so the job is refused rather than run into prompts. Paste the block `/jobs-status` prints. |
-| `JOBS_UNATTENDED` | A run tried a tool its agent asks about. Nothing waits: the call was denied. Add an `allow` rule for that tool to the job agent's own `permissions` if the job needs it. |
+| `JOBS_UNATTENDED` | A run tried a tool its agent asks about. Nothing waits: the call was denied. A read the job needs goes in its agent's own `permissions`; a write belongs with a person, not a run. |
 | `JOBS_ALLOW_WIDENS` | A job's `allow` list holds an `allow` entry. Move the grant to the job agent's own `permissions`. |
 | `JOBS_INVALID_SCHEDULE` | The schedule names two kinds or none, or the cron expression, interval or zone is wrong. The message names the field. |
 | `JOBS_INVALID_JOB` | A field other than the schedule is missing or wrong, or the job is defined by a file and a tool tried to change it. |
