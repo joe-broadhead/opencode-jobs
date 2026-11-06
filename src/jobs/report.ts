@@ -85,9 +85,12 @@ export interface AgentList {
   readonly known: boolean
 }
 
-/** The agents as the host reports them now. A host that cannot answer is `known: false`, never "no agents". */
-export async function readAgents(agent: Pick<Plugin.Context["agent"], "list">): Promise<AgentList> {
-  return agent.list().then(
+/**
+ * The agents as the host reports them for one directory: an agent is that directory's configuration, so the list is the
+ * one a run there would resolve. A host that cannot answer is `known: false`, never "no agents".
+ */
+export async function readAgents(agent: Pick<Plugin.Context["agent"], "list">, directory?: string): Promise<AgentList> {
+  return agent.list(directory === undefined ? undefined : { location: { directory } }).then(
     (found) => ({ agents: found.data, known: true }),
     () => ({ agents: [], known: false }),
   )
@@ -95,7 +98,7 @@ export async function readAgents(agent: Pick<Plugin.Context["agent"], "list">): 
 
 /** Every job this instance knows, read now: a refused file is reported, never thrown, and never becomes a job. */
 export async function readSource(input: Omit<ReportInput, "host" | "enabled" | "keepAliveMinutes">): Promise<Source> {
-  const listed = await readAgents(input.agent)
+  const listed = await readAgents(input.agent, input.location)
   const agents = listed.agents
   const guard = listed.known ? (id: string) => refusalFor(agents, id) : undefined
   const stored = await readJobs(input.storage).catch(() => [])

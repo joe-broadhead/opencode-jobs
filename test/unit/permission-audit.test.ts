@@ -31,6 +31,7 @@ function harness() {
     agent,
     clock: clock.clock,
     timezone: "UTC",
+    location: "/work",
     source: () => report.source(),
     wake: () => undefined,
     ready: true,

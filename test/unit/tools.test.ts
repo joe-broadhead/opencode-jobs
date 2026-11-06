@@ -22,6 +22,7 @@ function harness(options: { readonly unguarded?: readonly string[] } = {}) {
     agent,
     clock: clock.clock,
     timezone: "UTC",
+    location: "/work",
     source: () => report.source(),
     wake: () => void (woken += 1),
     ready: true,

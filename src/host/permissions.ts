@@ -164,11 +164,13 @@ function notFound(error: unknown): boolean {
 }
 
 /**
- * The refusal for one agent, read from the host now. A host that cannot answer at all is its own refusal, not a pass:
- * nothing runs while the agents are unknown, and the next step is a restart rather than a permissions change.
+ * The refusal for one agent, read from the host now, as it resolves in the directory the run happens in: an agent is a
+ * directory's configuration, and a name can mean different rules in two projects (DR-4). A host that cannot answer at
+ * all is its own refusal, not a pass: nothing runs while the agents are unknown, and the next step is a restart rather
+ * than a permissions change.
  */
-export async function guardAgent(agent: Pick<Plugin.Context["agent"], "get">, id: string): Promise<AgentRefusal | undefined> {
-  const info = await agent.get({ agentID: id }).then(
+export async function guardAgent(agent: Pick<Plugin.Context["agent"], "get">, id: string, directory?: string): Promise<AgentRefusal | undefined> {
+  const info = await agent.get({ agentID: id, ...(directory === undefined ? {} : { location: { directory } }) }).then(
     (found) => found.data,
     (error: unknown) => (notFound(error) ? null : undefined),
   )

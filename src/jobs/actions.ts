@@ -21,6 +21,8 @@ export interface ActionInput {
   readonly agent: Pick<Plugin.Context["agent"], "get">
   readonly clock: Clock
   readonly timezone: string
+  /** The leader's directory: an agent is resolved in the directory the run happens in. */
+  readonly location: string
   readonly source: () => Promise<Source>
   /** Rings the runner's doorbell, so a change starts within a tick rather than at the next cap. */
   readonly wake: () => void
@@ -77,7 +79,7 @@ export async function createJob(input: ActionInput, definition: CreateInput): Pr
   ensureWritable(input)
   const now = input.clock.now()
   const job = parseJob(definition, { now, timezone: input.timezone, id: nextId(now), source: "tool", createdBy: "agent" })
-  const refusal = await guardAgent(input.agent, job.agent)
+  const refusal = await guardAgent(input.agent, job.agent, job.target.directory ?? input.location)
   if (refusal !== undefined) refuseAgent(refusal)
   await putJob(input.storage, job)
   const state = await readState(input.storage, job.id)
@@ -92,7 +94,7 @@ export async function changeJob(input: ActionInput, id: string, patch: CreateInp
   const existing = mutable(await findJob(input, id), "change")
   const now = input.clock.now()
   const job = updateJob(existing, patch, { now, timezone: input.timezone, id: existing.id, source: existing.source, createdAt: existing.createdAt, createdBy: existing.createdBy })
-  const refusal = await guardAgent(input.agent, job.agent)
+  const refusal = await guardAgent(input.agent, job.agent, job.target.directory ?? input.location)
   if (refusal !== undefined) refuseAgent(refusal)
   await putJob(input.storage, job)
   // A changed schedule starts from now: the old slot belonged to the old schedule.

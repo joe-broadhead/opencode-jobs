@@ -105,7 +105,7 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
   // A run needs an agent that denies by default (D7). One that has become unguarded since the job was created is
   // refused per slot rather than run into a denial: the slot is recorded as skipped, with the code and the block to
   // paste, and the schedule moves on.
-  const refusal = await guardAgent(input.agents, job.agent)
+  const refusal = await guardAgent(input.agents, job.agent, job.target.directory ?? input.location)
   if (refusal !== undefined) {
     const record = await putRun(storage, {
       job: job.id,
