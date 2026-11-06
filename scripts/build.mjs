@@ -1,8 +1,9 @@
 // Bundles each entry the host loads into one self-contained file: src/index.ts to dist/index.js (the server part) and
-// src/tui.ts to dist/tui.js (the terminal UI part). Shared code, such as the status model and the RPC contract, is
+// src/tui.tsx to dist/tui.js (the terminal UI part). Shared code, such as the status model and the RPC contract, is
 // inlined into both. No chunks and no relative imports, because OpenCode reloads a plugin in place and reuses the
 // module records it already holds for unchanged paths: a new entry must never import an older sibling module.
 // Only the modules the host provides stay external. The build fails if an output imports anything else.
+import { transformAsync } from "@babel/core"
 import { build } from "esbuild"
 import { readdirSync, readFileSync, rmSync } from "node:fs"
 import { builtinModules } from "node:module"
@@ -23,6 +24,27 @@ const nodeBuiltins = {
   },
 }
 
+/** Solid's universal JSX transform for OpenTUI, after TypeScript stripping: esbuild alone would leave props static. */
+const solid = {
+  name: "solid",
+  setup(plugin) {
+    plugin.onLoad({ filter: /\.tsx$/ }, async ({ path }) => {
+      const result = await transformAsync(readFileSync(path, "utf8"), {
+        filename: path,
+        configFile: false,
+        babelrc: false,
+        sourceMaps: false,
+        presets: [
+          ["babel-preset-solid", { moduleName: "@opentui/solid", generate: "universal" }],
+          ["@babel/preset-typescript", { onlyRemoveTypeImports: false }],
+        ],
+      })
+      if (!result?.code) throw new Error(`build: Babel produced no output for ${path}`)
+      return { contents: result.code, loader: "js" }
+    })
+  },
+}
+
 /** The plugin's version, from package.json, as one string: the bundles carry nothing else of package.json. */
 const version = {
   name: "version",
@@ -37,7 +59,7 @@ const version = {
 rmSync(join(root, "dist"), { recursive: true, force: true })
 const result = await build({
   absWorkingDir: root,
-  entryPoints: { index: "src/index.ts", tui: "src/tui.ts" },
+  entryPoints: { index: "src/index.ts", tui: "src/tui.tsx" },
   outdir: "dist",
   bundle: true,
   splitting: false,
@@ -48,7 +70,7 @@ const result = await build({
   legalComments: "none",
   metafile: true,
   logLevel: "warning",
-  plugins: [nodeBuiltins, version],
+  plugins: [solid, nodeBuiltins, version],
 })
 
 const problems = Object.entries(result.metafile.outputs).flatMap(([file, output]) =>
