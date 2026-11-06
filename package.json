@@ -1,0 +1,72 @@
+{
+  "name": "@joe-broadhead/opencode-jobs",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Unofficial OpenCode plugin that runs agent prompts, slash commands and reminders on cron, interval and one-off schedules, inside OpenCode, with run history and unattended permissions",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "jobs"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joe-broadhead/opencode-jobs.git"
+  },
+  "homepage": "https://github.com/joe-broadhead/opencode-jobs#readme",
+  "bugs": {
+    "url": "https://github.com/joe-broadhead/opencode-jobs/issues"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./tui": "./dist/tui.js"
+  },
+  "files": [
+    "dist",
+    "assets/icon.svg",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "opencode": {
+    "host": ">=2.2.3 <2.3.0"
+  },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "typecheck": "node scripts/check.mjs typecheck",
+    "build": "node scripts/check.mjs build",
+    "test": "node scripts/check.mjs unit",
+    "test:host": "node scripts/check.mjs host",
+    "test:pack": "node scripts/check.mjs pack",
+    "lint": "node scripts/check.mjs forbidden"
+  },
+  "devDependencies": {
+    "@opencode/client": "2.2.3",
+    "@opencode/plugin": "2.2.3",
+    "@opencode/sdk": "2.2.3",
+    "@opentui/core": "0.8.0",
+    "@opentui/solid": "0.8.0",
+    "@types/bun": "1.4.4",
+    "@types/node": "24.19.2",
+    "esbuild": "0.28.2",
+    "solid-js": "1.9.17",
+    "typescript": "5.9.3"
+  },
+  "jelly": {
+    "title": "Jobs",
+    "summary": "Run prompts, slash commands and reminders on a schedule, inside OpenCode.",
+    "icon": "assets/icon.svg",
+    "tools": [],
+    "skills": [],
+    "rpc": [],
+    "views": [],
+    "signIns": [],
+    "contributes": {
+      "homeFeeds": [],
+      "homeWidgets": [],
+      "workKinds": [],
+      "settings": []
+    }
+  }
+}
