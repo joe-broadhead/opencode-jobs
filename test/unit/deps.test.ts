@@ -54,10 +54,11 @@ describe("bundled libraries", () => {
 })
 
 describe("the clock", () => {
-  test("is a parameter everywhere under src/jobs: nothing reads it directly", () => {
+  test("is a parameter everywhere under src/jobs: only clock.ts reads it, and only to provide the system clock", () => {
     for (const file of jobs) {
       const text = read(file)
-      expect({ file, now: /Date\.now\s*\(/.test(text) }).toEqual({ file, now: false })
+      const system = file === "src/jobs/clock.ts"
+      expect({ file, now: /Date\.now\s*\(/.test(text) }).toEqual({ file, now: system })
       expect({ file, now: /new Date\s*\(\s*\)/.test(text) }).toEqual({ file, now: false })
     }
   })

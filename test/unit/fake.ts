@@ -1,6 +1,8 @@
 // Narrow fakes of the public plugin context: only the members a test touches, typed with Pick<> so they
 // stay valid against later 2.2.x context shapes.
 import type { Plugin } from "@opencode/plugin"
+import type { Clock } from "../../src/jobs/clock.js"
+import type { Session } from "../../src/jobs/execute.js"
 import type { Storage } from "../../src/jobs/store.js"
 
 type Transform<Editor> = (callback: (editor: Editor) => void) => Promise<{ dispose: () => Promise<void> }>
@@ -98,4 +100,163 @@ export function memoryStorage(pageSize = 2) {
     },
   }
   return { storage, calls, keys: () => [...values.keys()].sort() }
+}
+
+/**
+ * A clock a test advances by hand. Sleeps at or below `instantBelow` resolve at once (a claim's settle delay), so only
+ * the waits a test cares about are the ones it must release; every requested delay is recorded.
+ */
+export function testClock(start: number, options: { instantBelow?: number } = {}) {
+  const instantBelow = options.instantBelow ?? 0
+  const sleeps: number[] = []
+  const pending: { at: number; done: () => void }[] = []
+  let now = start
+  const clock: Clock = {
+    now: () => now,
+    sleep: (ms, signal) => {
+      sleeps.push(ms)
+      if (signal?.aborted === true || ms <= instantBelow) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        const entry = {
+          at: now + ms,
+          done: () => {
+            signal?.removeEventListener("abort", entry.done)
+            pending.splice(pending.indexOf(entry), 1)
+            resolve()
+          },
+        }
+        pending.push(entry)
+        signal?.addEventListener("abort", entry.done, { once: true })
+      })
+    },
+  }
+  const fire = (all: boolean) => {
+    for (const entry of [...pending]) {
+      if (!all && entry.at > now) continue
+      entry.done()
+    }
+  }
+  return {
+    clock,
+    /** Every delay asked for, in order. */
+    sleeps,
+    now: () => now,
+    advance(by: number) {
+      now += by
+      fire(false)
+    },
+    /** Releases every pending sleep regardless of its deadline. */
+    flush() {
+      fire(true)
+    },
+    pending: () => pending.length,
+  }
+}
+
+/** Lets queued promise callbacks run, so a started loop has taken its first steps. */
+export const settle = async (turns = 8) => {
+  for (let index = 0; index < turns; index += 1) await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
+export interface SessionFakeOptions {
+  /** The outcome `get` reports once a turn has finished. */
+  readonly outcome?: "succeeded" | "failed" | "interrupted"
+  /** `wait` resolves at once instead of waiting for `release()`. */
+  readonly autoFinish?: boolean
+  /** Text of the last assistant message, which becomes the run's summary. */
+  readonly answer?: string
+  /** `get` throws, as it does for a session that has been removed. */
+  readonly gone?: boolean
+  /** Arrears: `create` and `prompt` throw, as a failed run does. */
+  readonly fail?: "create" | "prompt" | "command" | "synthetic"
+  /** A session this fake did not create, such as an adopted one, reports no outcome until `release()`. */
+  readonly startBusy?: boolean
+}
+
+/** The session API one run and one adoption pass use, recording what they asked for. */
+export function sessionFake(options: SessionFakeOptions = {}) {
+  const created: Record<string, unknown>[] = []
+  const prompts: Record<string, unknown>[] = []
+  const commands: Record<string, unknown>[] = []
+  const synthetics: Record<string, unknown>[] = []
+  const removed: string[] = []
+  const interrupted: string[] = []
+  const waiting: string[] = []
+  const releases: (() => void)[] = []
+  const busy = new Map<string, boolean>()
+
+  const finish = (sessionID: string) => {
+    busy.set(sessionID, false)
+    for (const release of releases.splice(0)) release()
+    void sessionID
+  }
+
+  const session: Session = {
+    create: async (input) => {
+      if (options.fail === "create") throw new Error("session.create failed")
+      const id = `ses_${created.length + 1}`
+      created.push(input as Record<string, unknown>)
+      busy.set(id, true)
+      return { id } as never
+    },
+    get: async ({ sessionID }) => {
+      if (options.gone === true) throw new Error("Session.NotFoundError")
+      const running = busy.get(sessionID) === true || (busy.get(sessionID) === undefined && options.startBusy === true)
+      return { id: sessionID, ...(running || options.outcome === undefined ? {} : { outcome: options.outcome }), cost: 0 } as never
+    },
+    remove: async ({ sessionID }) => {
+      removed.push(sessionID)
+      busy.delete(sessionID)
+    },
+    prompt: async (input) => {
+      if (options.fail === "prompt") throw new Error("session.prompt failed")
+      prompts.push(input as Record<string, unknown>)
+      if (options.autoFinish === true) finish(input.sessionID)
+      return { id: "msg_1", sessionID: input.sessionID } as never
+    },
+    command: async (input) => {
+      if (options.fail === "command") throw new Error("session.command failed")
+      commands.push(input as Record<string, unknown>)
+      if (options.autoFinish === true) finish(input.sessionID)
+    },
+    synthetic: async (input) => {
+      if (options.fail === "synthetic") throw new Error("session.synthetic failed")
+      synthetics.push(input as Record<string, unknown>)
+      if (options.autoFinish === true) finish(input.sessionID)
+      return { id: "msg_1" } as never
+    },
+    wait: ({ sessionID }) => {
+      waiting.push(sessionID)
+      if (busy.get(sessionID) === false) return Promise.resolve()
+      if (busy.get(sessionID) === undefined && options.startBusy !== true) return Promise.resolve()
+      busy.set(sessionID, true)
+      return new Promise<void>((resolve) => {
+        releases.push(() => {
+          busy.set(sessionID, false)
+          resolve()
+        })
+      })
+    },
+    interrupt: async ({ sessionID }) => {
+      interrupted.push(sessionID)
+      finish(sessionID)
+      return { interrupted: true } as never
+    },
+    context: async () => (options.answer === undefined ? [] : [{ type: "assistant", content: [{ type: "text", text: options.answer }] }]) as never,
+  }
+
+  return {
+    session,
+    created,
+    prompts,
+    commands,
+    synthetics,
+    removed,
+    interrupted,
+    waiting,
+    /** Finishes every busy session's current turn, as the model would. */
+    release: () => {
+      for (const id of [...busy.keys()]) finish(id)
+    },
+  }
 }
