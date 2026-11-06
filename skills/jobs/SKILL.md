@@ -31,7 +31,7 @@ Reach for something else when:
 ```
 jobs_create  { name, schedule: { cron, tz } | { every } | { at, tz }, action, agent, policy?, ends?, jitter? }
 jobs_update  { id, name?, schedule?, action?, agent?, policy?, ends? }
-jobs_pause   { id }        jobs_resume { id }        jobs_extend { id, expires }
+jobs_pause   { id }        jobs_resume { id | all: true }        jobs_extend { id, expires }
 jobs_delete  { id }        jobs_run_now { id }       jobs_pause_all {}
 jobs_status  {}            jobs_list { state?, limit? }     jobs_get { id }     jobs_history { id?, limit?, since? }
 ```
