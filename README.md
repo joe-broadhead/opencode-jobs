@@ -32,11 +32,13 @@ Run `opencode reload`, or restart OpenCode, then run `/jobs-status`.
 | `/jobs-status` | Posts the report: the runner, the jobs, the next five runs, the last ten runs, failures, the agents that need the block, and the next step. |
 | `/jobs-pause` | Pauses every job at once, or resumes them: nothing new starts and a run in flight is interrupted. |
 | `/jobs-run <id>` | Runs a job now, without waiting for its next slot. |
-| `/jobs`, or "Jobs: Status" in the command palette | Opens the same report in a dialog. `r` refreshes, `p` pauses or resumes every job, and `Esc` closes it. |
+| `/jobs`, or "Jobs: Status" in the command palette | Opens the same report in a dialog. `r` refreshes and `Esc` closes it. "Jobs: Pause or resume every job" in the palette stops or restarts every job, and asks first. |
 
 The model has twelve `jobs_*` tools: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history` read, `jobs_pause` and
 `jobs_pause_all` pause, and `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_run_now`, `jobs_resume` and
-`jobs_extend` change a job. Pausing is always allowed; every other change asks for approval, and the prompt is the yes.
+`jobs_extend` change a job. Pausing every job runs without asking, because it only stops work; every other change asks
+for approval, and the prompt is the yes. `jobs_history` is the only surface that returns what a run said. A failed run
+is retried for its slot by `policy.retries`, and `notify` posts a run's outcome into a session as job output.
 
 A job is one of three things:
 
@@ -124,7 +126,7 @@ Set options with the object form of the plugin entry. Every option is optional.
 
 `enabled` turns the runner off without unloading the plugin. `concurrency` bounds how many runs are in flight at once.
 `keepAliveMinutes` is how often the plugin touches its location to keep jobs running: it must stay below your
-`experimental.location_idle_timeout`, and 20 minutes is below the default of 60.
+`experimental.location_idle_timeout`, so it takes 1 to 59, and 20 minutes is below the default of 60.
 [docs/configuration.md](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/configuration.md) lists every
 option, the job file format and every error.
 
@@ -161,9 +163,11 @@ Run `/jobs-status` first. Its last line is the next step.
 | `JOBS_INVALID_JOB` | A field other than the schedule is missing or wrong, or the job is defined by a file and a tool tried to change it. |
 | `JOBS_INVALID_FILE` | A job file cannot be read or parsed. The message names the file and the line. |
 | `JOBS_TARGET_MISSING` | No job, session or agent with that id. Run `jobs_list` to see the jobs there are. |
-| `JOBS_DISABLED` | Every job is paused, or that job is. Resume it first. |
+| `JOBS_DISABLED` | The job is paused. Resume it with the `jobs_resume` tool, or resume every job with `/jobs-pause`. |
 | `JOBS_EXPIRED` | The job has no slot left. Extend it with `jobs_extend`, or create a new one. |
-| `JOBS_STORAGE_FULL` | OpenCode's storage refused a write. Free space, then retry. |
+| `JOBS_TIMEOUT` | A run took longer than its timeout and was interrupted. It counts toward the pause after five failures. |
+| `JOBS_AGENTS_UNKNOWN` | OpenCode could not list its agents, so nothing ran. Restart OpenCode, then run `/jobs-status`. |
+| `JOBS_STORAGE_VERSION` | The job store was written by a newer version of the plugin. Update the plugin, or clear its storage. |
 | OpenCode: untested | OpenCode is not 2.2.3, 2.2.4 or 2.2.5. Inside `>=2.2.3 <2.3.0` the plugin runs normally; outside it, it runs only because `allowUntestedHost` is set. |
 | `/jobs` is missing | The plugin did not start. Run `/plugins` to see the error. |
 | `OPTIONS_INVALID` | An option is unknown or has a wrong value. The message names the option and the accepted values. |

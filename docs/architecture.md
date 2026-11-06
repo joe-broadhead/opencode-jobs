@@ -15,6 +15,7 @@ code comments carry the detail.
 | `src/jobs/keepalive.ts` | An empty session created and removed every `keepAliveMinutes`, so the leader's location is never idle-unloaded. |
 | `src/jobs/report.ts` | Reads the store once for every surface: the status model, the jobs list and the run history. |
 | `src/jobs/actions.ts` | Every change: create, update, delete, pause, resume, extend, run now, pause all. |
+| `src/jobs/watch.ts` | The job-file watch: one mtime check a minute, a parse only when a file changed. |
 | `src/jobs/tools.ts` | The twelve tools and the four tools-RPC reads, over `actions.ts` and `report.ts`. |
 | `src/jobs/safety.ts` | The run session and the one evaluate hook. |
 | `src/host/permissions.ts` | The default rules the plugin inserts, and the guarded-agent check. |
@@ -42,6 +43,11 @@ rare, and the record decides the slot when it happens.
 
 A run that outlives its instance writes nothing: the next leader adopts the record and finalises it once.
 
+A failed run is retried for the same slot, with the next `attempt`, after `policy.retries.backoff`; the retry is a
+field on the job's state, so it survives a reload. A run's `notify` target gets its outcome as job output. Every state
+write goes through one promise chain per job: a second run finishing, or a schedule advance, can never erase a counter
+or the five-failure pause.
+
 ## Unattended safety
 
 A job runs as the agent it names, and that agent's `permissions` are the whole profile. Session rules only deny: the
@@ -50,9 +56,16 @@ job's own deny list plus the tools that would let a run create, change or run an
 process-wide registry of the sessions this plugin created for runs — `globalThis`, so a hot reload keeps it, and
 adoption registers an adopted session again — and it only ever tightens.
 
+## Retention
+
+The leader prunes on start and once an hour: the last 50 runs of each job and the last 30 days, whichever keeps less,
+never a `running` record and never a job's newest. A pruned record's session goes too, unless that session is still busy.
+
 ## Liveness
 
-`experimental.location_idle_timeout` (60 minutes by default) unloads a location that has done nothing. The keep-alive
+`experimental.location_idle_timeout` (60 minutes by default) unloads a location that has done nothing. The job folders
+are checked once a minute by their modification times, so a committed job appears within a minute without a reload. The
+keep-alive
 is the one workaround this design cannot do without: an empty `session.create` + `session.remove` counts as activity
 and costs no model call. It runs every `keepAliveMinutes`, capped at an hour, and the `Liveness` status row names the
 period and the last beat. If the location unloads anyway, the runner restarts when a client opens the project, and the
