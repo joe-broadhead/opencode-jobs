@@ -138,11 +138,13 @@ export class Runner {
       let state = await readState(this.storage, job.id)
       if (state.done === true || state.paused !== undefined) continue
 
-      // A `queue-one` slot is remembered while its job runs, so it is picked up before anything newer.
+      // A `queue-one` slot is remembered while its job runs, so it is picked up before anything newer. The schedule's
+      // position does not move back: the slots after it were decided while it waited, one skip each.
       const queued = state.queuedSlot
       if (queued !== undefined && queued <= now && this.inflightFor(job.id) === 0) {
         if ((await this.decide(job, queued, state, now)) === "run") {
-          state = await this.advance(job, { ...state, queuedSlot: undefined }, queued)
+          state = { ...state, queuedSlot: undefined }
+          await this.write(state)
           this.launch(job, queued, now)
           started += 1
         }
