@@ -272,3 +272,33 @@ describe("the agent a run needs", () => {
     expect(record?.error).toStartWith("JOBS_AGENTS_UNKNOWN: ")
   })
 })
+
+describe("a reminder that wakes the agent", () => {
+  test("times out without interrupting the person's session", async () => {
+    const storage = memoryStorage()
+    // A session this fake did not create, still busy: its wait only ends when the clock's timeout does.
+    const session = sessionFake({ startBusy: true })
+    const clock = testClock(START, { instantBelow: 100 })
+    const pending = execute({
+      storage: storage.storage,
+      session: session.session,
+      agents: agentsFake(),
+      clock: clock.clock,
+      location: "/work",
+      token: "leader-1",
+      job: job({ action: { type: "remind", sessionID: "ses_person", text: "stand up", wake: true }, policy: { timeout: "5m" } }),
+      slot: START,
+      attempt: 1,
+      late: false,
+      active: () => true,
+    })
+    await settle()
+    clock.advance(5 * 60_000)
+    await settle()
+    // The interrupt grace is a clock sleep too; nothing interrupted the session, so it must be released by hand.
+    clock.flush()
+    const result = await pending
+    expect(result.status).toBe("timed_out")
+    expect(session.interrupted).toEqual([])
+  })
+})
