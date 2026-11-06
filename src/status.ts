@@ -1,6 +1,8 @@
 import type { Plugin } from "@opencode/plugin"
 import { COMMAND_STEM, errorText, TESTED_HOSTS } from "./constants.js"
 import { isSupportedHost, type HostCheck } from "./host-version.js"
+import { AGENT_BLOCK, agentBlockJSON, type Rule } from "./host/permissions.js"
+import type { PauseRecord } from "./jobs/store.js"
 import { shortReason } from "./redact.js"
 import { VERSION } from "./version.js"
 
@@ -22,6 +24,8 @@ export interface StatusFacts {
   readonly jobs?: JobsCount
   /** Agents whose own rules would run a job tool without asking; empty when there are none. */
   readonly unguardedAgents?: readonly string[]
+  /** The kill switch, when every job is paused. */
+  readonly paused?: PauseRecord
   readonly problems?: readonly string[]
 }
 
@@ -37,6 +41,10 @@ export interface Status {
   readonly jobs: JobsCount
   /** Agents where a job tool would run without asking; empty when there are none. */
   readonly unguardedAgents: readonly string[]
+  /** Every job is paused, by the kill switch, since this time; absent when they are not. */
+  readonly paused?: PauseRecord
+  /** The read-only block, present with unguarded agents: the paste-ready profile for the agent named. */
+  readonly permissionsBlock?: readonly Rule[]
   readonly problems: readonly string[]
   /** The one next step: the `Next step` row, "Nothing to do." when nothing is needed. */
   readonly nextStep: string
@@ -46,14 +54,18 @@ export const NOTHING_TO_DO = "Nothing to do."
 const NO_JOBS: JobsCount = { total: 0, paused: 0, expiring: 0, invalidFiles: 0 }
 const TESTED_TEXT = `${TESTED_HOSTS.slice(0, -1).join(", ")} or ${TESTED_HOSTS.at(-1)}`
 const ENABLE = `Set the plugin option "enabled" to true, or remove it, then restart OpenCode.`
+const RESUME = `Run /${COMMAND_STEM}-pause again to resume every job.`
 
 export function buildStatus(facts: StatusFacts): Status {
+  const agents = facts.unguardedAgents ?? []
   const status = {
     version: VERSION,
     state: facts.enabled ? ("ready" as const) : ("disabled" as const),
     host: facts.host,
     jobs: facts.jobs ?? NO_JOBS,
-    unguardedAgents: facts.unguardedAgents ?? [],
+    unguardedAgents: agents,
+    ...(facts.paused === undefined ? {} : { paused: facts.paused }),
+    ...(agents.length === 0 ? {} : { permissionsBlock: AGENT_BLOCK.map((rule) => ({ ...rule })) }),
     problems: facts.problems ?? [],
   }
   return { ...status, nextStep: nextStepOf(status) }
@@ -61,9 +73,14 @@ export function buildStatus(facts: StatusFacts): Status {
 
 function nextStepOf(status: Omit<Status, "nextStep">): string {
   if (status.state === "disabled") return ENABLE
+  if (status.paused !== undefined) return RESUME
   // A problem reads `CODE: What happened. Next step: What to do.`; its own next step becomes the status's.
   const problem = status.problems[0]?.split(" Next step: ")[1]
   if (problem) return problem
+  const agent = status.unguardedAgents[0]
+  if (agent !== undefined) {
+    return `Give the agent ${JSON.stringify(agent)} the read-only block, starting with the blanket deny, or point its job at an agent that has it.`
+  }
   return NOTHING_TO_DO
 }
 
@@ -84,19 +101,34 @@ function hostText({ host, problems }: Status) {
 }
 
 export function formatStatus(status: Status) {
-  const { unguardedAgents: agents } = status
+  const { paused } = status
+  const since = paused === undefined ? "" : new Date(paused.at).toISOString()
   return [
     "Jobs status",
     `- Jobs: ${jobsText(status.jobs)}`,
+    ...(paused === undefined ? [] : [`- Paused: every job since ${since}. ${RESUME}`]),
     "- Next runs: none",
     "- Recent runs: none",
-    `- Agents without default rules: ${agents.length ? agents.join(", ") : "none"}`,
+    ...agentRows(status),
     `- OpenCode: ${hostText(status)}`,
     `- Next step: ${status.nextStep}`,
   ].join("\n")
 }
 
+/** The agents that need the block, and the block itself, which is the one place the full profile is printed. */
+function agentRows(status: Status): string[] {
+  const { unguardedAgents: agents, permissionsBlock: block } = status
+  const row = `- Agents without default rules: ${agents.length ? agents.join(", ") : "none"}`
+  if (agents.length === 0 || block === undefined) return [row]
+  return [row, ...agents.map((agent) => `  Paste this for ${JSON.stringify(agent)} into opencode.json:\n${agentBlockJSON(agent)}`)]
+}
+
 const strings = { type: "array", items: { type: "string" } }
+const rule = {
+  type: "object",
+  required: ["action", "resource", "effect"],
+  properties: { action: { type: "string" }, resource: { type: "string" }, effect: { enum: ["allow", "deny", "ask"] } },
+} as const
 
 /** The status RPC's output: the shared fields, with jobs' own beside them. */
 export const STATUS_OUTPUT = {
@@ -116,6 +148,12 @@ export const STATUS_OUTPUT = {
       properties: { total: { type: "integer", minimum: 0 }, paused: { type: "integer", minimum: 0 }, expiring: { type: "integer", minimum: 0 }, invalidFiles: { type: "integer", minimum: 0 } },
     },
     unguardedAgents: strings,
+    paused: {
+      type: "object",
+      required: ["at"],
+      properties: { at: { type: "integer" }, reason: { type: "string" } },
+    },
+    permissionsBlock: { type: "array", items: rule },
     problems: strings,
     nextStep: { type: "string" },
   },
@@ -143,4 +181,34 @@ export function registerStatusCommand(
     }),
   )
   return registration.then((registration) => registration.dispose)
+}
+
+/** What the kill-switch command did: the pause it left behind, or undefined when every job runs again. */
+export type PauseToggle = () => Promise<PauseRecord | undefined>
+
+/**
+ * `/jobs-pause`: the kill switch a person can reach. One press pauses every job — nothing new starts, and a run in
+ * flight is interrupted — and the next press resumes them. It reports what it did in the session it was run in, so the
+ * change is never silent. The tool of the same job (`jobs_pause_all`) and the dialog will call the same store state.
+ */
+export function registerPauseCommand(
+  ctx: { readonly command: Pick<Plugin.Context["command"], "transform">; readonly session: Pick<Plugin.Context["session"], "synthetic"> },
+  toggle: PauseToggle,
+) {
+  const registration = ctx.command.transform((editor) =>
+    editor.add({
+      name: `${COMMAND_STEM}-pause`,
+      description: "Pause every job at once, or resume them",
+      execute: async ({ sessionID }) => {
+        const text = await toggle().then(pausedText, (error: unknown) => unavailable(error).message)
+        await ctx.session.synthetic({ sessionID, text, description: "Jobs paused", resume: false })
+      },
+    }),
+  )
+  return registration.then((registration) => registration.dispose)
+}
+
+function pausedText(paused: PauseRecord | undefined): string {
+  if (paused === undefined) return "Every job runs to its schedule again."
+  return `Every job is paused since ${new Date(paused.at).toISOString()}. Nothing new starts until you run /${COMMAND_STEM}-pause again.`
 }

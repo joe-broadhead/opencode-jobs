@@ -50,7 +50,7 @@ export interface JobState {
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "interrupted" | "skipped" | "missed"
 export type RunOutcome = "succeeded" | "failed" | "interrupted"
-export type SkipReason = "overlap" | "paused" | "expired" | "ended"
+export type SkipReason = "overlap" | "paused" | "expired" | "ended" | "unguarded"
 
 /** One run, keyed by the job and the slot it belongs to. The slot is the planned time, before jitter. */
 export interface RunRecord {
@@ -291,4 +291,35 @@ export async function readRunner(storage: Storage): Promise<RunnerRecord | undef
 
 export async function putRunner(storage: Storage, record: RunnerRecord): Promise<void> {
   await storage.set(RUNNER_KEY, record as unknown as Parameters<Storage["set"]>[1])
+}
+
+/**
+ * The kill switch, as storage state: one record that stops every job at once, whichever leader is running and whether
+ * or not anyone has a tool at hand. Setting it interrupts what is in flight and starts nothing new; clearing it lets
+ * the schedule resume, with the usual catch-up for the slots that fell due while it was set.
+ */
+export interface PauseRecord {
+  /** When the pause was set. */
+  readonly at: number
+  /** Why, in one line; absent for the documented pause. */
+  readonly reason?: string
+}
+
+const PAUSE_KEY = "pause/all"
+
+export async function readPauseAll(storage: Storage): Promise<PauseRecord | undefined> {
+  const value = await storage.get(PAUSE_KEY)
+  if (!isObject(value) || typeof value.at !== "number") return undefined
+  return { at: value.at, ...(typeof value.reason === "string" ? { reason: value.reason } : {}) }
+}
+
+/** Sets or clears the pause, and returns what is stored afterwards. */
+export async function setPauseAll(storage: Storage, paused: boolean, at: number, reason?: string): Promise<PauseRecord | undefined> {
+  if (!paused) {
+    await storage.remove(PAUSE_KEY)
+    return undefined
+  }
+  const record: PauseRecord = { at, ...(reason === undefined ? {} : { reason }) }
+  await storage.set(PAUSE_KEY, record as unknown as Parameters<Storage["set"]>[1])
+  return record
 }

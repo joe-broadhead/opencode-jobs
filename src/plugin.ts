@@ -1,24 +1,21 @@
 import { Plugin } from "@opencode/plugin"
-import { PLUGIN_ID, errorText } from "./constants.js"
+import { PLUGIN_ID } from "./constants.js"
 import { checkHost } from "./host-version.js"
+import { refusalFor, unguardedAgents, type AgentInfo } from "./host/permissions.js"
 import { registerToolsRpc } from "./host/tools-rpc.js"
 import { adopt } from "./jobs/adopt.js"
 import { systemClock, type Clock } from "./jobs/clock.js"
 import { createExecutor } from "./jobs/execute.js"
-import { readJobFiles } from "./jobs/files.js"
+import { readJobFiles, type AgentGuard } from "./jobs/files.js"
 import { startKeepAlive, type KeepAlive } from "./jobs/keepalive.js"
 import { Leader } from "./jobs/leader.js"
 import { serverTimezone, type Job } from "./jobs/model.js"
+import { registerSafety } from "./jobs/safety.js"
 import { Runner } from "./jobs/runner.js"
-import { migrate, readJobs } from "./jobs/store.js"
+import { migrate, readJobs, readPauseAll, setPauseAll } from "./jobs/store.js"
 import { parseOptions } from "./options.js"
 import { registerStatusRpc } from "./rpc.js"
-import { buildStatus, registerStatusCommand, type JobsCount } from "./status.js"
-
-interface Facts {
-  readonly jobs: JobsCount
-  readonly problems: readonly string[]
-}
+import { buildStatus, registerPauseCommand, registerStatusCommand } from "./status.js"
 
 /** Injected by tests: a clock, and whether the loop ticks itself. Production passes nothing. */
 export interface JobsDeps {
@@ -43,14 +40,35 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
       const host = checkHost(ctx.app.version, options.allowUntestedHost)
       const timezone = options.timezone ?? serverTimezone()
       const clock = deps.clock ?? systemClock
-      const facts = await load(ctx, timezone, clock)
-      const read = async () => buildStatus({ host, enabled: options.enabled, jobs: facts.jobs, problems: facts.problems })
+      const problems = await openStore(ctx)
+      const read = async () => {
+        const check = await agentCheck(ctx)
+        const jobs = await known(ctx, timezone, clock, check.guard)
+        const paused = await readPauseAll(ctx.storage).catch(() => undefined)
+        return buildStatus({
+          host,
+          enabled: options.enabled,
+          jobs: { total: jobs.files.jobs.length, paused: 0, expiring: 0, invalidFiles: jobs.files.invalid.length },
+          // An agent nobody's job names is not jobs' business: the agents a job targets, refused ones included.
+          unguardedAgents: unguardedAgents(check.list, [...jobs.jobs.map((job) => job.agent), ...jobs.files.refused]),
+          ...(paused === undefined ? {} : { paused }),
+          problems: [...problems, ...jobs.files.invalid.map((file) => file.message)],
+        })
+      }
       // Transforms replay on every rebuild, so each registration is disposed on cleanup in reverse order.
       const stops = [
         await registerStatusCommand(ctx, read),
+        await registerPauseCommand(ctx, async () => {
+          const paused = await readPauseAll(ctx.storage)
+          const next = await setPauseAll(ctx.storage, paused === undefined, clock.now())
+          worker?.wake()
+          return next
+        }),
         await registerStatusRpc(ctx.rpc, read),
         // Scripts call the known reads with no model, as a session and its agent.
         await registerToolsRpc(ctx, { owned: [] }),
+        // The one evaluate hook: a run of ours never waits for an approval nobody can give.
+        await registerSafety(ctx.permission),
       ]
       const worker = options.enabled ? startWorker(ctx, { clock, timezone, concurrency: options.concurrency, loop: deps.loop !== false, deps }) : undefined
       return async () => {
@@ -59,6 +77,36 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
       }
     },
   })
+}
+
+/** The guarded-agent check for the host's agents now: no list means no check, and the evaluate hook is the backstop. */
+async function agentCheck(ctx: Pick<Plugin.Context, "agent">): Promise<{ readonly list: readonly AgentInfo[]; readonly guard?: AgentGuard }> {
+  const list = await ctx.agent.list().then(
+    (found) => found.data,
+    () => [],
+  )
+  if (list.length === 0) return { list }
+  return { list, guard: (agent: string) => refusalFor(list, agent) }
+}
+
+interface KnownJobs {
+  readonly files: Awaited<ReturnType<typeof readJobFiles>>
+  /** The store's tool jobs, with a file job of the same id winning, because the file is the definition a project commits. */
+  readonly jobs: readonly Job[]
+}
+
+/** Every job this instance knows, read now: a refused file is reported, never thrown, and never becomes a job. */
+async function known(ctx: Pick<Plugin.Context, "storage" | "location" | "agent">, timezone: string, clock: Clock, guard?: AgentGuard): Promise<KnownJobs> {
+  const stored = await readJobs(ctx.storage).catch(() => [])
+  const files = await readJobFiles({
+    now: clock.now(),
+    timezone,
+    projects: [ctx.location.directory],
+    ...(guard === undefined ? {} : { guard }),
+  }).catch(() => ({ jobs: [], invalid: [], refused: [] }))
+  const byId = new Map(files.jobs.map((job) => [job.id, job] as const))
+  for (const job of stored) if (!byId.has(job.id)) byId.set(job.id, job)
+  return { files, jobs: [...byId.values()] }
 }
 
 interface WorkerInput {
@@ -75,6 +123,8 @@ export interface Worker {
   readonly keepAlive: KeepAlive
   /** The plugin's own storage, which every job and run key lives in. */
   readonly storage: Plugin.Context["storage"]
+  /** Wakes the runner now, when this instance leads; safe when it does not. */
+  readonly wake: () => void
   readonly stop: () => Promise<void>
 }
 
@@ -98,20 +148,17 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
       return keepAlive
     },
     storage: ctx.storage,
+    wake: () => runner?.wake(),
     stop: async () => {
       await leader.release()
       stopped.abort()
     },
   }
 
-  // Every job this leader knows: the store's tool jobs, with a file job of the same id winning, because the file is the
-  // definition a project commits.
+  // Every job this leader knows, read the same way status reads them, so a refused file never becomes a job.
   const jobs = async (): Promise<readonly Job[]> => {
-    const stored = await readJobs(ctx.storage).catch(() => [])
-    const files = await readJobFiles({ now: input.clock.now(), timezone: input.timezone, projects: [ctx.location.directory] }).catch(() => ({ jobs: [], invalid: [] }))
-    const byId = new Map(files.jobs.map((job) => [job.id, job] as const))
-    for (const job of stored) if (!byId.has(job.id)) byId.set(job.id, job)
-    return [...byId.values()]
+    const check = await agentCheck(ctx)
+    return (await known(ctx, input.timezone, input.clock, check.guard)).jobs
   }
 
   leader = new Leader({
@@ -123,6 +170,7 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
       const execute = createExecutor({
         storage: ctx.storage,
         session: ctx.session,
+        agents: ctx.agent,
         clock: input.clock,
         location: ctx.location.directory,
         token: leader.token,
@@ -166,23 +214,13 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
   return worker
 }
 
-/** The store's schema is brought up to date once per setup; a file that cannot be read is a status problem, not a throw. */
-async function load(ctx: Pick<Plugin.Context, "storage" | "location">, timezone: string, clock: Clock): Promise<Facts> {
-  const problems: string[] = []
-  try {
-    await migrate(ctx.storage)
-  } catch (error) {
-    problems.push(error instanceof Error ? error.message : String(error))
-  }
-  const files = await readJobFiles({ now: clock.now(), timezone, projects: [ctx.location.directory] }).catch((error: unknown) => ({
-    jobs: [],
-    invalid: [{ path: ctx.location.directory, message: errorText("JOBS_INVALID_FILE", `The job files could not be read (${reasonOf(error)}).`, `Check that the job folders are readable, then restart OpenCode.`) }],
-  }))
-  return {
-    // Nothing can create or pause a job yet, so only the file counts are known here.
-    jobs: { total: files.jobs.length, paused: 0, expiring: 0, invalidFiles: files.invalid.length },
-    problems: [...problems, ...files.invalid.map((file) => file.message)],
-  }
+/**
+ * The store's schema is brought up to date once per setup, and a schema a newer build wrote is a status problem: the
+ * rest of the plugin still answers, and nothing runs on a store it does not understand.
+ */
+async function openStore(ctx: Pick<Plugin.Context, "storage">): Promise<string[]> {
+  return migrate(ctx.storage).then(
+    () => [],
+    (error: unknown) => [error instanceof Error ? error.message : String(error)],
+  )
 }
-
-const reasonOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
