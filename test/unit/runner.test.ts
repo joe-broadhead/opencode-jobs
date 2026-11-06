@@ -443,3 +443,24 @@ describe("a long gap", () => {
     expect(missed.reduce((sum, record) => sum + (record.count ?? 0), 0) + s.asked.length).toBe(360)
   })
 })
+
+describe("ends and expiry", () => {
+  test("an expired job records one skip and never runs", async () => {
+    const storage = memoryStorage()
+    const clock = testClock(START, { instantBelow: 0 })
+    const runs = immediate("succeeded")
+    const job = parseJob(
+      { name: "Old", schedule: { every: "1 minute" }, action: { type: "prompt", text: "go" }, agent: "jobs" },
+      { now: START - 10 * MINUTE, timezone: "UTC", id: "old", source: "tool", createdBy: "user" },
+    )
+    const expiring = { ...job, expires: START - MINUTE }
+    const runner = new Runner({ storage: storage.storage, clock: clock.clock, jobs: async () => [expiring], execute: runs.make(storage), active: () => true, concurrency: 2, location: "/work" })
+    await runner.tick(START - 2 * MINUTE)
+    await runner.tick(START)
+    await runner.settle()
+    expect(runs.asked).toHaveLength(0)
+    const records = await scanRuns(storage.storage)
+    expect(records.some((record) => record.status === "skipped" && record.reason === "expired")).toBe(true)
+    expect((await readState(storage.storage, "old")).done).toBe(true)
+  })
+})
