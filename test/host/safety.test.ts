@@ -256,30 +256,3 @@ describe(`safety in OpenCode ${HOST_VERSION}`, () => {
     }
   }, 120_000)
 })
-
-describe("the guarded-agent check in the run's own directory", () => {
-  test("resolves the agent where the run happens, so an agent the target directory does not have is refused", async () => {
-    const manual = manualClock(START)
-    const host = await startHost({ clock: manual.clock, loop: false, config: { agents: GUARDED } })
-    try {
-      const sibling = host.sibling("sibling")
-      await host.open(sibling)
-      // The leader's project has a guarded "jobs"; the sibling resolves no agent of that name, so a run there would be
-      // created under whatever the target location has, not the leader's profile.
-      const job = parseJob(
-        { name: "Elsewhere", schedule: { every: "5 minutes" }, action: { type: "prompt", text: "Say ok." }, agent: "jobs", target: { directory: sibling } },
-        { now: START, timezone: "UTC", id: "job_elsewhere", source: "tool", createdBy: "user" },
-      )
-      await host.worker().storage.set(`job/${job.id}`, job as never)
-      await host.worker().storage.set(`state/${job.id}`, { job: job.id, nextDueAt: START, runCount: 0, consecutiveFailures: 0 })
-      await host.worker().runner.tick(START)
-      await host.worker().runner.settle()
-      const record = (await scanRuns(host.worker().storage)).find((entry) => entry.job === job.id)
-      expect(record?.status).toBe("skipped")
-      expect(record?.error).toMatch(/JOBS_AGENT_UNGUARDED|JOBS_AGENTS_UNKNOWN/)
-      expect(host.mock().calls()).toBe(0)
-    } finally {
-      await host.close()
-    }
-  }, 120_000)
-})

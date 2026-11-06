@@ -171,7 +171,10 @@ describe(`reload and stall recovery in OpenCode ${HOST_VERSION}`, () => {
       // Let the loop plan and run 09:01 on its own timers.
       manual.set(START + 30_000)
       await until("the loop plans the first slot", async () => (await readState(first.storage, job.id)).nextDueAt === START + MINUTE, 30_000)
-      manual.set(START + MINUTE)
+      // Past the slot by half a minute: real time moves on, so the loop's capped sleep ends and the slot runs.
+      // The runner's own loop is asleep on its doorbell before the clock moves: no race with setup.
+      await until("the runner is asleep on its doorbell", async () => manual.pending() >= 3, 30_000)
+      manual.set(START + MINUTE + 31_000)
       await untilRuns(host, 1)
 
       const oldBeats = first.keepAlive.beats
@@ -187,9 +190,9 @@ describe(`reload and stall recovery in OpenCode ${HOST_VERSION}`, () => {
 
       // Two more slots elapse, one minute at a time: the new keep-alive beats, the old one is gone, and only the new
       // runner records runs.
-      manual.set(START + 2 * MINUTE)
+      manual.set(START + 2 * MINUTE + 31_000)
       await untilRuns(host, 2)
-      manual.set(START + 3 * MINUTE)
+      manual.set(START + 3 * MINUTE + 31_000)
       await untilRuns(host, 3)
       expect(second.keepAlive.beats).toBeGreaterThan(newBeats)
       const slots = (await runsOf(host)).map((record) => record.slot)

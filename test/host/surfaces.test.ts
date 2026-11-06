@@ -162,10 +162,12 @@ describe(`the surfaces in OpenCode ${HOST_VERSION}`, () => {
       await worker.storage.set(`job/${job.id}`, job as never)
       await worker.storage.set(`state/${job.id}`, { job: job.id, nextDueAt: START + 60 * MINUTE, runCount: 0, consecutiveFailures: 0 })
       await host.client.session.command({ sessionID: id, name: "jobs-run", text: job.id })
-      await until("the run is queued", async () => (await readState(worker.storage, job.id)).nextDueAt === manual.clock.now(), 30_000)
+      const queued = await until("the manual run is queued", async () => (await readState(worker.storage, job.id)).manual, 30_000)
+      // The schedule is untouched, and the manual run has its own slot key (DR-3).
+      expect((await readState(worker.storage, job.id)).nextDueAt).toBe(START + 60 * MINUTE)
       await worker.runner.tick(manual.clock.now())
       await worker.runner.settle()
-      expect(await getRun(worker.storage, job.id, new Date(manual.clock.now()).toISOString())).toMatchObject({ status: "succeeded" })
+      expect(await getRun(worker.storage, job.id, new Date(queued.at).toISOString())).toMatchObject({ status: "succeeded" })
     } finally {
       await host.close()
     }
