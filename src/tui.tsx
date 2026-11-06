@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui"
 import { TextAttributes } from "@opentui/core"
-import { Show, createSignal } from "solid-js"
+import { createSignal } from "solid-js"
 import { COMMAND_STEM, PLUGIN_ID, TUI_ID } from "./constants.js"
 import type { Status } from "./status.js"
 import { formatStatus, unavailable as unavailableError } from "./status.js"
@@ -25,9 +25,9 @@ export function viewOf(error: unknown): View {
   return { state: "unavailable", message, nextStep }
 }
 
-/** The keys the dialog answers: `p` is the kill switch, and its label says which way it will go. */
-export function keysLine(paused: boolean): string {
-  return `r refresh · p ${paused ? "resume" : "pause all"} · esc close`
+/** The keys the dialog answers, exactly as the standard writes them. The kill switch is a palette command that asks. */
+export function keysLine(): string {
+  return "r refresh · esc close"
 }
 
 /** The dialog's body, without its title: the report's rows, or why there is none. */
@@ -58,17 +58,14 @@ function StatusDialog(props: {
   readonly context: Plugin.Context
   readonly view: View
   readonly refreshing: boolean
-  readonly paused: boolean
-  readonly busy: boolean
   readonly refresh: () => void
-  readonly toggle: () => void
 }) {
-  // Created inside the dialog, so the host removes the layer when the dialog closes.
+  // Created inside the dialog, so the host removes the layer when the dialog closes. The dialog only reads: the kill
+  // switch is the palette command, which asks first.
   props.context.keymap.layer(() => ({
     mode: "modal",
     commands: [
       { id: `${PLUGIN_ID}.status.refresh`, title: "Refresh the job status", group: "Jobs", bind: "r", run: () => props.refresh() },
-      { id: `${PLUGIN_ID}.status.pause`, title: props.paused ? "Resume every job" : "Pause all jobs", group: "Jobs", bind: "p", enabled: () => !props.busy, run: () => props.toggle() },
       { title: "Close the job status", group: "Jobs", bind: "escape", run: () => props.context.ui.dialog.clear() },
     ],
   }))
@@ -79,14 +76,12 @@ function StatusDialog(props: {
         <text fg={theme().text.base} attributes={TextAttributes.BOLD}>
           {TITLE}
         </text>
-        <text fg={theme().text.muted}>{props.refreshing ? "refreshing…" : keysLine(props.paused)}</text>
+        <text fg={theme().text.muted}>{props.refreshing ? "refreshing…" : keysLine()}</text>
       </box>
       <text fg={theme().text.base} wrapMode="word">
         {dialogText(props.view)}
       </text>
-      <Show when={props.busy}>
-        <text fg={theme().text.muted}>{props.paused ? "Resuming every job…" : "Pausing every job…"}</text>
-      </Show>
+
     </box>
   )
 }
@@ -96,7 +91,6 @@ export default Plugin.define({
   setup(context) {
     const [view, setView] = createSignal<View>({ state: "loading" })
     const [refreshing, setRefreshing] = createSignal(false)
-    const [busy, setBusy] = createSignal(false)
     let controller: AbortController | undefined
     let disposed = false
     /** The open dialog, so showing another one closes this one. */
@@ -127,20 +121,25 @@ export default Plugin.define({
         })
     }
 
-    const toggle = () => {
-      if (disposed || busy()) return
-      setBusy(true)
-      void togglePause(context.client, context.location)
-        .then(
-          () => refresh(),
-          (error: unknown) => setView(viewOf(error)),
-        )
-        .finally(() => setBusy(false))
-    }
-
     const paused = () => {
       const current = view()
       return current.state === "ready" && current.status.paused !== undefined
+    }
+
+    /** The kill switch, from the palette: it asks first, because it stops every job at once. */
+    const toggle = async () => {
+      if (disposed) return
+      const pausing = !paused()
+      const confirmed = await context.ui.dialog.confirm({
+        title: "Jobs",
+        message: pausing ? "Pause every job? Nothing new starts, and a run in flight is interrupted." : "Resume every job? Their schedules run again.",
+        label: { confirm: pausing ? "Pause all" : "Resume all", cancel: "Cancel" },
+      }).catch(() => undefined)
+      if (confirmed !== true) return
+      await togglePause(context.client, context.location).then(
+        () => refresh(),
+        (error: unknown) => setView(viewOf(error)),
+      )
     }
 
     const show = () => {
@@ -148,7 +147,7 @@ export default Plugin.define({
       close()
       const token = {}
       context.ui.dialog.show(
-        () => <StatusDialog context={context} view={view()} refreshing={refreshing()} paused={paused()} busy={busy()} refresh={refresh} toggle={toggle} />,
+        () => <StatusDialog context={context} view={view()} refreshing={refreshing()} refresh={refresh} />,
         () => {
           if (open === token) close()
         },
@@ -169,11 +168,19 @@ export default Plugin.define({
         {
           id: `${PLUGIN_ID}.status`,
           title: "Jobs: Status",
-          description: "The runner, the jobs, the next runs and the next step; p pauses every job",
+          description: "The runner, the jobs, the next runs and the next step",
           group: "Jobs",
           palette: true,
           slash: { name: COMMAND_STEM },
           run: show,
+        },
+        {
+          id: `${PLUGIN_ID}.pause`,
+          title: "Jobs: Pause or resume every job",
+          description: "Pause every job at once, or resume them; it asks first",
+          group: "Jobs",
+          palette: true,
+          run: () => void toggle(),
         },
       ],
     }))

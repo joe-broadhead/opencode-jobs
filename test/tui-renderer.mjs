@@ -50,6 +50,7 @@ const removed = []
 const handlers = new Map()
 const layers = []
 let dialogSize
+const confirms = []
 const [dialog, setDialog] = createSignal()
 const theme = {
   text: { base: "#ffffff", muted: "#888888", faint: "#666666", feedback: { success: { base: "#00ff00" }, warning: { base: "#ffff00" }, error: { base: "#ff0000" } } },
@@ -88,6 +89,10 @@ const context = {
         before?.onClose?.()
       },
       set: (options) => (dialogSize = options.size),
+      confirm: async (options) => {
+        confirms.push(options)
+        return true
+      },
       clear: () => {
         const open = dialog()
         setDialog(undefined)
@@ -111,10 +116,11 @@ assert.equal(requests.length, 0)
 assert.equal(listeners(), 0)
 
 const palette = layers.flatMap((layer) => (layer.mode === "global" ? layer.commands : []))
-assert.equal(palette.length, 1)
+assert.equal(palette.length, 2)
 assert.equal(palette[0].title, "Jobs: Status")
 assert.equal(palette[0].palette, true)
 assert.deepEqual(palette[0].slash, { name: "jobs" })
+assert.equal(palette[1].title, "Jobs: Pause or resume every job")
 
 let view
 try {
@@ -140,7 +146,7 @@ try {
   assert.ok(shown.includes(squash("Jobs status")), "title")
   assert.ok(shown.includes(squash("- Runner: no leader yet")), "empty runner")
   assert.ok(shown.includes(squash("- Jobs: none yet")), "empty jobs")
-  assert.ok(shown.includes(squash("r refresh · p pause all · esc close")), "key hint")
+  assert.ok(shown.includes(squash("r refresh · esc close")), "key hint")
 
   // Healthy: the leader, the beat, the next run and the last run are the model's own rows.
   modal().find((command) => command.bind === "r").run()
@@ -162,12 +168,16 @@ try {
   assert.ok(shown.includes(squash("Agents without default rules: build")), "unguarded agent")
   assert.ok(shown.includes(squash('Paste this for "build" into opencode.json:')), "the block to paste")
   assert.ok(shown.includes(squash("Run /jobs-pause again to resume every job.")), "pause next step")
-  assert.ok(shown.includes(squash("r refresh · p resume · esc close")), "resume hint")
+  assert.ok(shown.includes(squash("r refresh · esc close")), "key hint")
 
-  // p runs the same /jobs-pause command a person types, in a session it makes and removes, then refreshes.
+  // The palette's kill switch asks first, then runs the same /jobs-pause command a person types, in a session it makes
+  // and removes, and refreshes. The dialog itself only reads.
   const before = requests.length
-  await modal().find((command) => command.bind === "p").run()
+  assert.deepEqual(modal().map((command) => command.bind), ["r", "escape"])
+  await palette[1].run()
   await settle()
+  assert.equal(confirms.length, 1)
+  assert.match(confirms[0].message, /every job/)
   assert.deepEqual(created[0], { location: context.location, title: "Jobs status" })
   assert.deepEqual(commands, [{ sessionID: "ses_tui_1", name: "jobs-pause", text: "" }])
   assert.deepEqual(removed, ["ses_tui_1"])

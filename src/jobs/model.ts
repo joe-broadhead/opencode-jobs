@@ -389,7 +389,8 @@ function parseSchedule(value: unknown, context: JobContext): JobSchedule {
   if (kind === "every") {
     const everyMs = duration(input.every, "schedule.every", "JOBS_INVALID_SCHEDULE", SCHEDULE_NEXT)
     if (everyMs < MIN_INTERVAL) fail("JOBS_INVALID_SCHEDULE", "schedule.every", `"schedule.every" must be at least one minute, found ${JSON.stringify(input.every)}.`, SCHEDULE_NEXT)
-    const anchorMs = input.anchor === undefined ? (context.createdAt ?? context.now) : parseInstant(input.anchor, "schedule.anchor", context.timezone, "JOBS_INVALID_SCHEDULE")
+    // A file's mtime is a float; a slot is a whole millisecond, so the anchor is floored like every other time here.
+    const anchorMs = input.anchor === undefined ? Math.floor(context.createdAt ?? context.now) : parseInstant(input.anchor, "schedule.anchor", context.timezone, "JOBS_INVALID_SCHEDULE")
     return { kind, everyMs, anchorMs }
   }
 

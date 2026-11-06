@@ -88,9 +88,12 @@ describe("the refusal a job gets", () => {
     expect(refusalFor([agent("jobs", [allow, ...AGENT_BLOCK])], "jobs")).toBeUndefined()
   })
 
-  test("is not raised when the agent lookup fails for a reason other than not-found", async () => {
+  test("is its own refusal when the host cannot answer at all: nothing runs while the agents are unknown", async () => {
     const failing = { get: async () => Promise.reject(new Error("the host is between reloads")) } as unknown as Pick<Plugin.Context["agent"], "get">
-    expect(await guardAgent(failing, "jobs")).toBeUndefined()
+    const refusal = await guardAgent(failing, "jobs")
+    expect(refusal?.code).toBe("JOBS_AGENTS_UNKNOWN")
+    expect(refusal?.nextStep).toStartWith("Restart OpenCode")
+    expect(refusal?.what).not.toContain("does not deny by default")
     const missing = { get: async () => Promise.reject(Object.assign(new Error("Agent not found"), { _tag: "Agent.NotFoundError" })) } as unknown as Pick<Plugin.Context["agent"], "get">
     expect((await guardAgent(missing, "jobs"))?.code).toBe("JOBS_AGENT_UNGUARDED")
     const guarded = { get: async () => ({ location: { directory: "/work" }, data: agent("jobs", [allow, ...AGENT_BLOCK]) }) } as unknown as Pick<Plugin.Context["agent"], "get">

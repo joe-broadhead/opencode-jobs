@@ -16,7 +16,7 @@ function report(overrides: Partial<Report> = {}): Report {
     compact: async () => ({ state: "ready", jobs: { total: 1, paused: 0, expiring: 0, invalidFiles: 0 }, paused: false, unguardedAgents: 0, nextStep: "Nothing to do." }),
     list: async () => [job],
     history: async () => [run],
-    source: async () => ({ files: { jobs: [], invalid: [], refused: [] }, jobs: [], agents: [] }),
+    source: async () => ({ files: { jobs: [], invalid: [], refused: [] }, jobs: [], agents: [], known: true }),
     ...overrides,
   }
 }

@@ -11,10 +11,11 @@
  * an `allow` into a deny or a `deny` into anything, never touches a session this plugin did not create for a run, and
  * is the only permission hook in `src/` besides the tools RPC's (which the scan allows exactly once, in that module).
  *
- * Which sessions are ours is kept in a process-wide registry, not read from the session on each check: the answer has
- * to be exact and cheap, and a hot reload keeps the registry because `globalThis` outlives it (V4). A session is
- * registered the moment it is created, and again when a new leader adopts it, so an adopted run is covered too. The
- * metadata written at creation records the same fact on the session itself, for anything that reads sessions.
+ * Which sessions are ours is decided by a process-wide registry of the ids this plugin created for runs: not by reading
+ * the session's metadata on each check, which would cost a round trip per permission prompt. The registry is exact and
+ * cheap, and a hot reload keeps it because `globalThis` outlives it (V4). A session is registered when it is created,
+ * again when a new leader adopts it after a restart, and forgotten when its run is finalised. The `metadata.jobs` the
+ * session carries at creation records the same fact for anything that reads sessions; the hook does not depend on it.
  */
 import type { Plugin } from "@opencode/plugin"
 import { errorText } from "../constants.js"
@@ -47,6 +48,11 @@ export function rememberJobSession(sessionID: string): void {
     if (oldest === undefined) break
     sessions.delete(oldest)
   }
+}
+
+/** Forgets a session whose run has finished, so the registry holds the runs that are still open and little else. */
+export function forgetJobSession(sessionID: string): void {
+  registry().delete(sessionID)
 }
 
 /** True only for a session this plugin created for a run: never gratuitous, never for a person's own session. */
@@ -110,9 +116,13 @@ export async function openJobSession(input: JobSessionInput): Promise<{ id: stri
 export interface Evaluation {
   readonly sessionID: string
   readonly action: string
+  readonly metadata?: Record<string, unknown>
   effect: "allow" | "deny" | "ask"
   message?: string
 }
+
+/** The metadata a script's permission request carries (from `tools.ts`): no message or call stands behind it. */
+const SCRIPT_MARK = "script"
 
 /** What a refused ask says: the code, the action, and where the grant belongs. */
 export function unattendedMessage(action: string): string {
@@ -120,13 +130,19 @@ export function unattendedMessage(action: string): string {
 }
 
 /**
- * The hook's whole decision: an `ask` on one of our run sessions becomes a `deny`. An `allow` and a `deny` are left
- * exactly as they are, so the hook can only ever tighten, and a session of anyone else is not touched at all.
+ * The hook's whole decision: an `ask` becomes a `deny` in the two places nobody can answer it — a session this plugin
+ * created for a run, and a script's call through the tools RPC, which is marked instead of sourced. An `allow` and a
+ * `deny` are left exactly as they are, so the hook can only ever tighten, and anything else is not touched.
  */
 export function tighten(evaluation: Evaluation): boolean {
-  if (evaluation.effect !== "ask" || !isJobSession(evaluation.sessionID)) return false
+  if (evaluation.effect !== "ask") return false
+  const ours = isJobSession(evaluation.sessionID)
+  if (!ours && evaluation.metadata?.[SCRIPT_MARK] !== true) return false
+  if (!ours && !evaluation.action.startsWith("jobs_")) return false
   evaluation.effect = "deny"
-  evaluation.message = unattendedMessage(evaluation.action)
+  evaluation.message = ours
+    ? unattendedMessage(evaluation.action)
+    : `JOBS_UNATTENDED: ${JSON.stringify(evaluation.action)} needs approval, and a script cannot answer a prompt. Add an allow rule for it to the session's agent.`
   return true
 }
 

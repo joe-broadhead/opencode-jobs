@@ -46,11 +46,13 @@ export interface JobState {
   readonly paused?: { readonly at: number; readonly reason?: string }
   /** The slot the `queue-one` overlap policy remembered. */
   readonly queuedSlot?: number
+  /** A retry the policy scheduled for a failed slot: the slot, the attempt it will be, and when it may start. */
+  readonly retry?: { readonly slot: number; readonly attempt: number; readonly at: number }
 }
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "interrupted" | "skipped" | "missed"
 export type RunOutcome = "succeeded" | "failed" | "interrupted"
-export type SkipReason = "overlap" | "paused" | "expired" | "ended" | "unguarded"
+export type SkipReason = "overlap" | "expired" | "ended" | "unguarded"
 
 /** One run, keyed by the job and the slot it belongs to. The slot is the planned time, before jitter. */
 export interface RunRecord {
@@ -175,6 +177,9 @@ export async function readState(storage: Storage, id: string): Promise<JobState>
     ...(typeof value.nextDueAt === "number" ? { nextDueAt: value.nextDueAt } : {}),
     ...(typeof value.lastRun === "string" ? { lastRun: value.lastRun } : {}),
     ...(typeof value.queuedSlot === "number" ? { queuedSlot: value.queuedSlot } : {}),
+    ...(isObject(value.retry) && typeof value.retry.slot === "number" && typeof value.retry.attempt === "number" && typeof value.retry.at === "number"
+      ? { retry: { slot: value.retry.slot, attempt: value.retry.attempt, at: value.retry.at } }
+      : {}),
     ...(pause === undefined ? {} : { paused: { at: pause.at as number, ...(typeof pause.reason === "string" ? { reason: pause.reason } : {}) } }),
   }
 }
@@ -266,6 +271,40 @@ export async function prune(storage: Storage, now: number): Promise<Pruned> {
   const pruned = pruneRuns(await scanRuns(storage), now)
   for (const record of pruned.remove) await removeRun(storage, record)
   return pruned
+}
+
+/** What retention removed in one pass: the run records, and the sessions that went with them. */
+export interface PruneReport {
+  readonly removed: readonly RunRecord[]
+  readonly sessions: readonly string[]
+  /** Sessions a removed record named but which are still busy, so they stay. */
+  readonly keptBusy: readonly string[]
+}
+
+/**
+ * Retention with its sessions (D9): a record retention drops loses its session too, unless that session is still busy.
+ * A session OpenCode no longer has is nothing to remove. Called by the leader on start and once an hour after.
+ */
+export async function pruneWithSessions(
+  storage: Storage,
+  session: { get: (input: { sessionID: string }) => Promise<{ outcome?: unknown }>; remove: (input: { sessionID: string }) => Promise<unknown> },
+  now: number,
+): Promise<PruneReport> {
+  const pruned = await prune(storage, now)
+  const sessions: string[] = []
+  const keptBusy: string[] = []
+  for (const record of pruned.remove) {
+    if (record.sessionID === undefined) continue
+    const info = await session.get({ sessionID: record.sessionID }).catch(() => undefined)
+    if (info !== undefined && info.outcome === undefined) {
+      keptBusy.push(record.sessionID)
+      continue
+    }
+    if (info === undefined) continue
+    await session.remove({ sessionID: record.sessionID }).catch(() => undefined)
+    sessions.push(record.sessionID)
+  }
+  return { removed: pruned.remove, sessions, keptBusy }
 }
 
 /** What the leader's loop last did: it is the status `Runner` row, and how a stop is told from a running runner. */

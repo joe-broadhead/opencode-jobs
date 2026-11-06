@@ -24,6 +24,14 @@ export interface ActionInput {
   readonly source: () => Promise<Source>
   /** Rings the runner's doorbell, so a change starts within a tick rather than at the next cap. */
   readonly wake: () => void
+  /** False when the store could not be brought to this build's schema: nothing is written to a store a newer build owns. */
+  readonly ready: boolean
+}
+
+/** Refuses any change to a store this build does not understand, so a downgrade never writes it (JR-2). */
+export function ensureWritable(input: Pick<ActionInput, "ready">): void {
+  if (input.ready) return
+  throw jobsError("JOBS_STORAGE_VERSION", `The job store could not be brought to this build's schema, so nothing was changed.`, `Update the plugin to the version that wrote the store, or clear its storage to start again.`)
 }
 
 /** The job with this id, or a refusal. A refused job file is reported by the reader and is not a job here. */
@@ -66,6 +74,7 @@ export interface CreateInput {
 
 /** Creates a job from the model's or a person's input: validated, guarded, and stored. */
 export async function createJob(input: ActionInput, definition: CreateInput): Promise<Job> {
+  ensureWritable(input)
   const now = input.clock.now()
   const job = parseJob(definition, { now, timezone: input.timezone, id: nextId(now), source: "tool", createdBy: "agent" })
   const refusal = await guardAgent(input.agent, job.agent)
@@ -79,6 +88,7 @@ export async function createJob(input: ActionInput, definition: CreateInput): Pr
 
 /** Replaces the fields a patch names, keeping the id, the source and who made it. */
 export async function changeJob(input: ActionInput, id: string, patch: CreateInput): Promise<Job> {
+  ensureWritable(input)
   const existing = mutable(await findJob(input, id), "change")
   const now = input.clock.now()
   const job = updateJob(existing, patch, { now, timezone: input.timezone, id: existing.id, source: existing.source, createdAt: existing.createdAt, createdBy: existing.createdBy })
@@ -93,6 +103,7 @@ export async function changeJob(input: ActionInput, id: string, patch: CreateInp
 }
 
 export async function deleteJob(input: ActionInput, id: string): Promise<Job> {
+  ensureWritable(input)
   const job = mutable(await findJob(input, id), "delete")
   await removeJob(input.storage, job.id)
   input.wake()
@@ -101,6 +112,7 @@ export async function deleteJob(input: ActionInput, id: string): Promise<Job> {
 
 /** Pauses one job, or resumes it: its runtime state, never its definition. */
 export async function pauseJob(input: ActionInput, id: string, paused: boolean): Promise<Job> {
+  ensureWritable(input)
   const job = await findJob(input, id)
   const state = await readState(input.storage, job.id)
   if (!paused) {
@@ -117,6 +129,7 @@ export async function pauseJob(input: ActionInput, id: string, paused: boolean):
 
 /** Sets a job's expiry: the deliberate act that moves it, and it asks like any other change. */
 export async function extendJob(input: ActionInput, id: string, expires: number): Promise<Job> {
+  ensureWritable(input)
   const existing = mutable(await findJob(input, id), "change")
   if (expires <= input.clock.now()) {
     throw jobsError("JOBS_INVALID_JOB", `The new expiry ${new Date(expires).toISOString()} is not in the future.`, `Give a time after now, such as tomorrow at 09:00.`)
@@ -132,18 +145,21 @@ export async function extendJob(input: ActionInput, id: string, expires: number)
  * paused runner are refused, because nothing would start.
  */
 export async function runNow(input: ActionInput, id: string): Promise<Job> {
+  ensureWritable(input)
   const job = await findJob(input, id)
   const state = await readState(input.storage, job.id)
   if (state.paused !== undefined) {
     throw jobsError("JOBS_DISABLED", `The job ${JSON.stringify(id)} is paused.`, `Resume it with the jobs_resume tool, then run it again.`)
   }
-  await putState(input.storage, { ...state, done: undefined, nextDueAt: input.clock.now() })
+  // A slot already due is kept: the run-now slot is this moment, and the pass still handles anything older.
+  await putState(input.storage, { ...state, done: undefined, nextDueAt: Math.min(state.nextDueAt ?? input.clock.now(), input.clock.now()) })
   input.wake()
   return job
 }
 
 /** The kill switch: every job at once, from any surface. The dialog, the tool and the command share this state. */
-export async function pauseEveryJob(input: Pick<ActionInput, "storage" | "clock" | "wake">, paused: boolean): Promise<PauseRecord | undefined> {
+export async function pauseEveryJob(input: Pick<ActionInput, "storage" | "clock" | "wake" | "ready">, paused: boolean): Promise<PauseRecord | undefined> {
+  ensureWritable(input)
   const next = await setPauseAll(input.storage, paused, input.clock.now())
   input.wake()
   return next

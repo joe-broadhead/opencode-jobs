@@ -14,7 +14,7 @@ import type { Plugin } from "@opencode/plugin"
 import { guardAgent } from "../host/permissions.js"
 import type { Clock } from "./clock.js"
 import type { Job, JobAction } from "./model.js"
-import { jobOutput, openJobSession } from "./safety.js"
+import { forgetJobSession, jobOutput, openJobSession } from "./safety.js"
 import { getRun, putRun, readPauseAll, slotISO, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
 
 /** The session members one run uses, and nothing else. */
@@ -90,7 +90,8 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
   const { job, slot, clock, storage } = input
   const key = slotISO(slot)
   const existing = await getRun(storage, job.id, key)
-  if (existing !== undefined && isTerminal(existing.status)) return { claimed: false, status: existing.status, record: existing }
+  // A terminal record ends the slot, unless this is a retry the policy scheduled: the same slot, a later attempt.
+  if (existing !== undefined && isTerminal(existing.status) && input.attempt <= (existing.attempt ?? 1)) return { claimed: false, status: existing.status, record: existing }
 
   const lost = await claimSlot(input, existing)
   if (lost !== undefined) return lost
@@ -134,9 +135,12 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
     const startedAt = clock.now()
     await putRun(storage, { job: job.id, slot: key, status: "running", late: input.late, attempt: input.attempt, token: input.token, sessionID, startedAt })
     input.onSession?.({ slot, sessionID, interrupt })
-    return await complete(input, key, startedAt, sessionID, await run(input, sessionID, action))
+    const finished = await run(input, sessionID, action)
+    await notifyRun(input, key, finished)
+    return await complete(input, key, startedAt, sessionID, finished)
   } catch (error) {
     // A run that cannot start is a failed run: the record says so, and the runner counts it.
+    if (sessionID !== undefined) forgetJobSession(sessionID)
     if (!input.active()) return { claimed: true, status: "running", ...(sessionID === undefined ? {} : { sessionID }), abandoned: true }
     const failed = await putRun(storage, {
       job: job.id,
@@ -157,6 +161,7 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
 /** Writes the final record, unless this instance stopped leading: then the new leader adopts the open one. */
 async function complete(input: ExecuteInput, key: string, startedAt: number, sessionID: string | undefined, result: Finished): Promise<RunResult> {
   const { job, clock, storage } = input
+  if (sessionID !== undefined) forgetJobSession(sessionID)
   if (!input.active()) return { claimed: true, status: result.status, ...(sessionID === undefined ? {} : { sessionID }), abandoned: true }
   const record = await putRun(storage, {
     job: job.id,
@@ -204,6 +209,17 @@ async function claimSlot(input: ExecuteInput, existing: RunRecord | undefined): 
   const back = await getRun(storage, job.id, key)
   if (back?.token !== input.token) return { claimed: false, status: back?.status ?? "queued", ...(back === undefined ? {} : { record: back }) }
   return undefined
+}
+
+/**
+ * A job's `notify` target: one post into that session, labelled as job output, after a prompt or command run. A notify
+ * that fails is not the run's failure: the record already says what happened.
+ */
+async function notifyRun(input: ExecuteInput, key: string, finished: Finished): Promise<void> {
+  const target = input.job.notify?.sessionID
+  if (target === undefined) return
+  const text = jobOutput(`${input.job.name} ${finished.status}.${finished.summary === undefined ? "" : `\n\n${finished.summary}`}`, { name: input.job.name, at: key })
+  await input.session.synthetic({ sessionID: target, text, resume: false }).catch(() => undefined)
 }
 
 /** A reminder: posted into its own session with no model turn, or awaited when `wake` asks the agent to answer. */

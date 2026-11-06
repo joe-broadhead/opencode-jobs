@@ -10,12 +10,13 @@ import { systemClock, type Clock } from "./jobs/clock.js"
 import { createExecutor } from "./jobs/execute.js"
 import { keepAlivePeriod, startKeepAlive, type KeepAlive } from "./jobs/keepalive.js"
 import { Leader } from "./jobs/leader.js"
-import { serverTimezone, type Job } from "./jobs/model.js"
+import { HOUR, serverTimezone, type Job } from "./jobs/model.js"
 import { createReport, readSource } from "./jobs/report.js"
 import { registerSafety } from "./jobs/safety.js"
 import { Runner } from "./jobs/runner.js"
-import { migrate, putBeat, readPauseAll } from "./jobs/store.js"
+import { migrate, pruneWithSessions, putBeat, readPauseAll } from "./jobs/store.js"
 import { ownedMethods, toolTransform, type ToolInput } from "./jobs/tools.js"
+import { createFileWatch, type FileWatch } from "./jobs/watch.js"
 import { parseOptions } from "./options.js"
 import { registerStatusRpc } from "./rpc.js"
 
@@ -43,6 +44,10 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
       const timezone = options.timezone ?? serverTimezone()
       const clock = deps.clock ?? systemClock
       const problems = await openStore(ctx)
+      // A store a newer build wrote is status-only: no worker, and every change refused.
+      const ready = problems.length === 0
+      // The job files are checked once a minute, and parsed again only when one changed.
+      const watch = createFileWatch(() => clock.now())
       const report = createReport({
         storage: ctx.storage,
         location: ctx.location.directory,
@@ -53,6 +58,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         enabled: options.enabled,
         keepAliveMinutes: options.keepAliveMinutes,
         problems,
+        watch,
       })
       const actions: ActionInput = {
         storage: ctx.storage,
@@ -61,6 +67,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         timezone,
         source: () => report.source(),
         wake: () => worker?.wake(),
+        ready,
       }
       const tools: ToolInput = { ...actions, report, assert: (check) => ctx.permission.assert(check) }
       // Transforms replay on every rebuild, so each registration is disposed on cleanup in reverse order.
@@ -82,12 +89,13 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         }).then((registration) => registration.dispose),
         await ctx.tool.transform(toolTransform(tools)).then((registration) => registration.dispose),
       ]
-      const worker = options.enabled
+      const worker = options.enabled && ready
         ? startWorker(ctx, {
             clock,
             timezone,
             concurrency: options.concurrency,
             keepAliveMs: keepAlivePeriod(options.keepAliveMinutes),
+            watch,
             loop: deps.loop !== false,
             deps,
           })
@@ -106,6 +114,8 @@ interface WorkerInput {
   readonly concurrency: number
   /** The keep-alive period, from the `keepAliveMinutes` option. */
   readonly keepAliveMs: number
+  /** The job-file watch the status surfaces share. */
+  readonly watch: FileWatch
   readonly loop: boolean
   readonly deps: JobsDeps
 }
@@ -149,7 +159,7 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
   }
 
   // Every job this leader knows, read the same way status reads them, so a refused file never becomes a job.
-  const jobs = async (): Promise<readonly Job[]> => (await readSource({ storage: ctx.storage, location: ctx.location.directory, timezone: input.timezone, clock: input.clock, agent: ctx.agent })).jobs
+  const jobs = async (): Promise<readonly Job[]> => (await readSource({ storage: ctx.storage, location: ctx.location.directory, timezone: input.timezone, clock: input.clock, agent: ctx.agent, watch: input.watch })).jobs
 
   leader = new Leader({
     storage: ctx.storage,
@@ -166,6 +176,13 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
         token: leader.token,
         signal: stopped.signal,
       })
+      // Retention runs when the leader starts and once an hour after: the records it drops lose their sessions too.
+      let prunedAt: number | undefined
+      const maintain = async (now: number) => {
+        if (prunedAt !== undefined && now - prunedAt < HOUR) return
+        prunedAt = now
+        await pruneWithSessions(ctx.storage, ctx.session, now)
+      }
       runner = new Runner({
         storage: ctx.storage,
         clock: input.clock,
@@ -174,6 +191,7 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
         active: () => leader.isLeader,
         concurrency: input.concurrency,
         location: ctx.location.directory,
+        maintain,
       })
       keepAlive = startKeepAlive({
         session: ctx.session,

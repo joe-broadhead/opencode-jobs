@@ -24,6 +24,7 @@ function harness(options: { readonly unguarded?: readonly string[] } = {}) {
     timezone: "UTC",
     source: () => report.source(),
     wake: () => void (woken += 1),
+    ready: true,
     report,
     assert: async () => undefined,
   }
@@ -41,7 +42,9 @@ const toolJob = (id = "job_update", overrides: Record<string, unknown> = {}): Jo
     { now: NOW, timezone: "UTC", id, source: "tool", createdBy: "user" },
   )
 
-const call = (setup: ReturnType<typeof harness>, name: ToolName, input: unknown = {}) => runJobTool(setup.input, name, input)
+// Every real call has a tool call behind it; the harness fakes one, so a write asserts as it would in a session.
+const CALL = { sessionID: "ses_1", agent: "build", messageID: "msg_1", id: "call_1" } as const
+const call = (setup: ReturnType<typeof harness>, name: ToolName, input: unknown = {}) => runJobTool(setup.input, name, input, CALL)
 
 describe("the tool table", () => {
   test("is the twelve tools of PLAN §3, each with a description, a schema and its own permission action", () => {
@@ -198,10 +201,24 @@ describe("the changes", () => {
     expect(asked).toEqual([
       { sessionID: "ses_1", agent: "build", action: "jobs_pause", resources: ["*"], source: { type: "tool", messageID: "msg_1", id: "call_1" } },
     ])
-    // The tools RPC's read passes no call, so a script never prompts.
+    // A script's read is a marked call: the assert runs, and the hook refuses an ask on the mark.
     asked.length = 0
-    await runJobTool(input, "status", {})
-    expect(asked).toEqual([])
+    await runJobTool(input, "status", {}, { sessionID: "ses_1", agent: "build", script: true })
+    expect(asked).toEqual([{ sessionID: "ses_1", agent: "build", action: "jobs_status", resources: ["*"], save: ["*"], metadata: { script: true } }])
+  })
+
+  test("a change with no call to check is refused, and a read without one still answers", async () => {
+    const setup = harness()
+    await expect(runJobTool(setup.input, "delete", { id: "x" })).rejects.toThrow("JOBS_UNCHECKED")
+    expect((await runJobTool(setup.input, "status", {})).output["state"]).toBe("ready")
+  })
+
+  test("a store this build does not understand refuses every change", async () => {
+    const setup = harness()
+    await store(setup, toolJob())
+    const input = { ...setup.input, ready: false }
+    await expect(runJobTool(input, "delete", { id: "job_update" }, { sessionID: "s", agent: "a", messageID: "m", id: "c" })).rejects.toThrow("JOBS_STORAGE_VERSION")
+    expect((await runJobTool(input, "status", {})).output["state"]).toBe("ready")
   })
 
   test("a refused assert changes nothing", async () => {
@@ -210,6 +227,15 @@ describe("the changes", () => {
     const input = { ...setup.input, assert: async () => Promise.reject(new Error("Permission denied: jobs_delete.")) }
     await expect(runJobTool(input, "delete", { id: "job_update" }, { sessionID: "ses_1", agent: "build", messageID: "m", id: "c" })).rejects.toThrow("Permission denied")
     expect((await setup.report.source()).jobs).toHaveLength(1)
+  })
+
+  test("jobs_resume with all clears the kill switch, and needs one of id or all", async () => {
+    const setup = harness()
+    await call(setup, "pause_all")
+    expect(await readPauseAll(setup.storage.storage)).toBeDefined()
+    await call(setup, "resume", { all: true })
+    expect(await readPauseAll(setup.storage.storage)).toBeUndefined()
+    await expect(call(setup, "resume", {})).rejects.toThrow("JOBS_TARGET_MISSING")
   })
 
   test("jobs_pause_all sets the same pause state the command toggles", async () => {
@@ -236,12 +262,12 @@ describe("a job defined by a file", () => {
     const setup = harness()
     const file = { ...toolJob("morning"), source: "file" as const }
     // The store holds tool jobs only; the file reader reads the real folder, so the file job is added to the source.
-    const source = async () => ({ files: { jobs: [file], invalid: [], refused: [] }, jobs: [file], agents: [] })
+    const source = async () => ({ files: { jobs: [file], invalid: [], refused: [] }, jobs: [file], agents: [], known: true })
     const input = { ...setup.input, source }
-    await expect(runJobTool(input, "update", { id: "morning", name: "Changed" })).rejects.toThrow("a file job cannot be changed by a tool")
-    await expect(runJobTool(input, "delete", { id: "morning" })).rejects.toThrow("a file job cannot be deleted by a tool")
+    await expect(runJobTool(input, "update", { id: "morning", name: "Changed" }, CALL)).rejects.toThrow("a file job cannot be changed by a tool")
+    await expect(runJobTool(input, "delete", { id: "morning" }, CALL)).rejects.toThrow("a file job cannot be deleted by a tool")
     await putState(setup.storage.storage, { job: "morning", runCount: 0, consecutiveFailures: 0 })
-    await runJobTool(input, "pause", { id: "morning" })
+    await runJobTool(input, "pause", { id: "morning" }, CALL)
     expect((await readState(setup.storage.storage, "morning")).paused).toMatchObject({ at: NOW })
   })
 })
