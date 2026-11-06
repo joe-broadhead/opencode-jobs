@@ -5,7 +5,7 @@
  * and it always denies the tools that would let a run multiply or extend itself. Nothing here can grant: session rules
  * are used only for denies, because a session `allow` would override the agent's deny (spike V3).
  *
- * A run never asks. The named agent's rules are the profile, and this file registers the repository's one documented
+ * A run never asks. The named agent's rules are the profile, and this file registers the job session's documented
  * `evaluate` hook as the backstop: for a session this plugin created for a run, a leftover `ask` becomes a `deny` with
  * `JOBS_UNATTENDED`, so no permission prompt is ever left waiting for someone who is not there. The hook never turns
  * an `allow` into a deny or a `deny` into anything, never touches a session this plugin did not create for a run, and
@@ -14,7 +14,7 @@
  * Which sessions are ours is kept in a process-wide registry, not read from the session on each check: the answer has
  * to be exact and cheap, and a hot reload keeps the registry because `globalThis` outlives it (V4). A session is
  * registered the moment it is created, and again when a new leader adopts it, so an adopted run is covered too. The
- * metadata written at creation is the same fact on the session itself.
+ * metadata written at creation records the same fact on the session itself, for anything that reads sessions.
  */
 import type { Plugin } from "@opencode/plugin"
 import { errorText } from "../constants.js"
