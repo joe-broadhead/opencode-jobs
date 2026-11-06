@@ -28,7 +28,9 @@ describe(`in OpenCode ${HOST_VERSION}`, () => {
         nextStep: NOTHING_TO_DO,
       })
       const text = formatStatus(status)
-      expect(text.split("\n").slice(0, 2)).toEqual(["Jobs status", "- Jobs: none yet"])
+      expect(text.split("\n")[0]).toBe("Jobs status")
+      expect(text).toContain(`- Runner: leader in ${host.location.directory} (pid `)
+      expect(text).toContain("- Jobs: none yet")
       expect(text).toContain(`- OpenCode: ${HOST_VERSION} (tested; supported range ${SUPPORTED_HOST})`)
 
       // `/jobs-status` is registered, and posts the same report into the session it is run in.
@@ -41,12 +43,12 @@ describe(`in OpenCode ${HOST_VERSION}`, () => {
       expect(await host.client.rpc(Jobs).list({}, { location: host.location })).toEqual({ jobs: [] })
       expect(await host.client.rpc(Jobs).history({}, { location: host.location })).toEqual({ runs: [] })
 
-      // The tools RPC is registered under the plugin's id, with no methods until a read tool exists.
+      // The tools RPC is registered under the plugin's id, and lists the four reads.
       const described = (await host.client
         .rpc({ id: TOOLS_RPC_ID, methods: { describe: { input: { type: "object" }, output: { type: "object" } } }, events: {} })
-        .describe({}, { location: host.location })) as { id: string; methods: unknown[] }
+        .describe({}, { location: host.location })) as { id: string; methods: { name: string }[] }
       expect(described.id).toBe(TOOLS_RPC_ID)
-      expect(described.methods).toEqual([])
+      expect(described.methods.map((method) => method.name)).toEqual(["jobs_status", "jobs_list", "jobs_get", "jobs_history"])
     } finally {
       await host.close()
     }

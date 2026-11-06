@@ -43,6 +43,62 @@ export const AGENT_BLOCK: readonly Rule[] = [
 /** The agent the documented block names, and the agent a job runs as when nothing else is set. */
 export const DEFAULT_AGENT: string = "jobs"
 
+/**
+ * The rules this plugin inserts into every agent after its base allow (S3): every `jobs_` tool asks, and the reads and
+ * the two pauses are allowed. Reads never change anything, and pausing is always safe; everything else is a change
+ * that a person approves. Inserted after the base `* * allow` and before the agent's own rules, so a later rule wins.
+ */
+export const DEFAULT_RULES: readonly Rule[] = [
+  { action: "jobs_*", resource: "*", effect: "ask" },
+  { action: "jobs_status", resource: "*", effect: "allow" },
+  { action: "jobs_list", resource: "*", effect: "allow" },
+  { action: "jobs_get", resource: "*", effect: "allow" },
+  { action: "jobs_history", resource: "*", effect: "allow" },
+  { action: "jobs_pause", resource: "*", effect: "allow" },
+  { action: "jobs_pause_all", resource: "*", effect: "allow" },
+]
+
+const BASE_ALLOW: Rule = { action: "*", resource: "*", effect: "allow" }
+
+const same = (left: Rule, right: Rule) => left.action === right.action && left.resource === right.resource && left.effect === right.effect
+
+/**
+ * True when the default rules appear as one contiguous block anywhere after the agent's first base allow. Other
+ * plugins insert their blocks at the same place, so the block need not come first.
+ */
+export function hasDefaultRules(rules: readonly Rule[]): boolean {
+  const base = rules.findIndex((rule) => same(rule, BASE_ALLOW))
+  if (base === -1) return false
+  return rules.some(
+    (_, start) =>
+      start > base &&
+      DEFAULT_RULES.every((rule, offset) => {
+        const candidate = rules[start + offset]
+        return candidate !== undefined && same(candidate, rule)
+      }),
+  )
+}
+
+/**
+ * Inserts the default rules right after the agent's first base allow, once. Every later rule still wins, because the
+ * last match wins, so no agent's own deny or allow is weakened. An agent without a base allow gets nothing: there,
+ * unlisted actions are not allowed anyway, and the block's asks would change a default deny into a prompt.
+ */
+export function insertDefaultRules(rules: Rule[]): void {
+  const base = rules.findIndex((rule) => same(rule, BASE_ALLOW))
+  if (base === -1 || hasDefaultRules(rules)) return
+  rules.splice(base + 1, 0, ...DEFAULT_RULES.map((rule) => ({ ...rule })))
+}
+
+/**
+ * An agent is unguarded when it has a base allow, lacks the default rules, and its own rules would let a `jobs_` tool
+ * run without asking. Jobs inserts the rules itself, so this is only for reporting: an agent whose rules already ask
+ * or deny for every jobs tool needs no fix.
+ */
+export function isUnguarded(rules: readonly Rule[]): boolean {
+  return rules.some((rule) => same(rule, BASE_ALLOW)) && !hasDefaultRules(rules) && evaluate(rules, UNNAMED_TOOL) === "allow"
+}
+
 /** The paste-ready config for one agent: the same block the docs show, for status and a refusal's next step. */
 export function agentBlock(agent: string): { readonly agents: Record<string, { readonly permissions: readonly Rule[] }> } {
   return { agents: { [agent]: { permissions: AGENT_BLOCK.map((rule) => ({ ...rule })) } } }

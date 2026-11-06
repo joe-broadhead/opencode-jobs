@@ -248,7 +248,7 @@ describe(`safety in OpenCode ${HOST_VERSION}`, () => {
       const status = await statusOf(host)
       expect(status.paused).toEqual({ at: pausedAt })
       expect(status.nextStep).toBe("Run /jobs-pause again to resume every job.")
-      expect(formatStatus(status)).toContain(`- Paused: every job since ${new Date(pausedAt).toISOString()}.`)
+      expect(formatStatus(status)).toContain(`- Runner: paused since ${new Date(pausedAt).toISOString()}`)
     } finally {
       await host.close()
     }

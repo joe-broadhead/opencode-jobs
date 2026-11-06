@@ -323,3 +323,21 @@ export async function setPauseAll(storage: Storage, paused: boolean, at: number,
   await storage.set(PAUSE_KEY, record as unknown as Parameters<Storage["set"]>[1])
   return record
 }
+
+/** The last keep-alive beat, so the `Liveness` row says whether the location is still being held open. */
+export interface BeatRecord {
+  readonly at: number
+  readonly ok: boolean
+}
+
+const BEAT_KEY = "keepalive"
+
+export async function readBeat(storage: Storage): Promise<BeatRecord | undefined> {
+  const value = await storage.get(BEAT_KEY)
+  if (!isObject(value) || typeof value.at !== "number") return undefined
+  return { at: value.at, ok: value.ok === true }
+}
+
+export async function putBeat(storage: Storage, beat: BeatRecord): Promise<void> {
+  await storage.set(BEAT_KEY, beat as unknown as Parameters<Storage["set"]>[1])
+}

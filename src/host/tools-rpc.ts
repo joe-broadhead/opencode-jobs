@@ -35,8 +35,8 @@ export const PLUGIN_ID = JOBS_PLUGIN_ID
 
 /**
  * Jobs has no MCP server, so no method comes from one: every method is one of the plugin's own read tools, listed as
- * an owned spec. Only reads belong here, never a change: `jobs_pause` and `jobs_pause_all` change state, and
- * `jobs_run_now` and the other writes need a person.
+ * an owned spec (`jobs_status`, `jobs_list`, `jobs_get` and `jobs_history`). Only reads are owned methods, never a
+ * change: `jobs_pause` and `jobs_pause_all` change state, and `jobs_run_now` and the other writes need a person.
  */
 export const KNOWN_READS: readonly string[] = []
 

@@ -554,3 +554,40 @@ export function parseJob(value: unknown, context: JobContext): Job {
     createdBy,
   }
 }
+
+/** The fields `jobs_update` may change: everything a definition has, except its id and who made it. */
+const UPDATABLE = ["name", "schedule", "action", "agent", "target", "allow", "policy", "ends", "expires", "notify", "jitter"] as const
+
+/**
+ * A job with some fields replaced, validated the same way a new one is. The id, the source and the creation stay: an
+ * update is a new definition of the same job, never a second one. A schedule is re-read against the same zone chain, so
+ * a partial patch cannot change a zone by accident.
+ */
+export function updateJob(job: Job, patch: unknown, context: JobContext): Job {
+  const input = object(patch, "")
+  keys(input, "", UPDATABLE)
+  if (Object.keys(input).length === 0) {
+    fail("JOBS_INVALID_JOB", "", `No field was given to change.`, `Give at least one field: ${UPDATABLE.join(", ")}.`)
+  }
+  const schedule = input.schedule === undefined ? job.schedule : parseSchedule(input.schedule, context)
+  // A deadline written as a wall clock belongs to the clock the job runs by.
+  const tz = schedule.kind === "every" ? context.timezone : schedule.tz
+  const action = input.action === undefined ? job.action : parseAction(input.action)
+  const policy = input.policy === undefined ? job.policy : parsePolicy(input.policy, action.type === "remind")
+  const agent = input.agent === undefined ? job.agent : string(input.agent, "agent", "JOBS_INVALID_JOB", `Name the agent that runs the job, then give that agent its own "permissions" in opencode.json.`)
+  const updated: Job = {
+    ...job,
+    name: input.name === undefined ? job.name : text(input.name, "name", 120),
+    schedule,
+    action,
+    agent,
+    target: input.target === undefined ? job.target : parseTarget(input.target, context),
+    allow: input.allow === undefined ? job.allow : parseAllow(input.allow),
+    policy,
+    ends: input.ends === undefined ? job.ends : parseEnds(input.ends, tz),
+    jitterMs: input.jitter === undefined ? job.jitterMs : duration(input.jitter, "jitter", "JOBS_INVALID_JOB", `Use a duration such as "30s", or remove "jitter".`),
+  }
+  const expires = input.expires === undefined ? job.expires : parseInstant(input.expires, "expires", tz)
+  const { expires: _dropped, ...rest } = updated
+  return { ...rest, ...(expires === undefined ? {} : { expires }) }
+}

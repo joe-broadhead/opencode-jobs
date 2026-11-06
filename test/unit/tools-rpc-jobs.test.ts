@@ -9,7 +9,7 @@ describe("the jobs block of the tools RPC", () => {
     expect(TOOLS_RPC_ID).toBe("jobs.scheduler.tools")
   })
 
-  test("has no MCP reads: jobs has no MCP server, and its read tools arrive as owned methods", () => {
+  test("has no MCP reads: jobs has no MCP server, and its four reads arrive as owned methods", () => {
     expect(KNOWN_READS).toEqual([])
   })
 
