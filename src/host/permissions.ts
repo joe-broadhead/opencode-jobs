@@ -169,14 +169,29 @@ function notFound(error: unknown): boolean {
  * all is its own refusal, not a pass: nothing runs while the agents are unknown, and the next step is a restart rather
  * than a permissions change.
  */
-export async function guardAgent(agent: Pick<Plugin.Context["agent"], "get">, id: string, directory?: string): Promise<AgentRefusal | undefined> {
-  const info = await agent.get({ agentID: id, ...(directory === undefined ? {} : { location: { directory } }) }).then(
-    (found) => found.data,
-    (error: unknown) => (notFound(error) ? null : undefined),
-  )
-  if (info === undefined) return agentRefusal(`The agents could not be read, so the job ${JSON.stringify(id)} was not checked and did not run.`, UNKNOWN_NEXT, "JOBS_AGENTS_UNKNOWN")
-  if (info === null) return agentRefusal(`There is no agent named ${JSON.stringify(id)}, so a job cannot run as it.`, nextStep(id))
-  return refusalFor([info], id)
+export async function guardAgent(agent: Pick<Plugin.Context["agent"], "get">, id: string, directory?: string, fallback?: string): Promise<AgentRefusal | undefined> {
+  // A job that targets another directory is resolved there and nowhere else (DR-4). A job that runs where the leader is
+  // asks for no location first, because that is what such a run resolves, and falls back to the leader's location: the
+  // two mean the same configuration, and a host between reloads resolves one more reliably than the other.
+  const attempts = directory !== undefined ? [directory] : [...new Set([undefined, fallback].filter((value): value is string | undefined => value === undefined || value !== ""))]
+  let last: AgentRefusal | undefined
+  for (const where of attempts) {
+    const info = await agent.get({ agentID: id, ...(where === undefined ? {} : { location: { directory: where } }) }).then(
+      (found) => found.data,
+      (error: unknown) => (notFound(error) ? null : undefined),
+    )
+    if (info === undefined) {
+      last = agentRefusal(`The agents could not be read, so the job ${JSON.stringify(id)} was not checked and did not run.`, UNKNOWN_NEXT, "JOBS_AGENTS_UNKNOWN")
+      continue
+    }
+    if (info === null) {
+      last = agentRefusal(`There is no agent named ${JSON.stringify(id)}, so a job cannot run as it.`, nextStep(id))
+      continue
+    }
+    if (directory === undefined) return refusalFor([info], id)
+    return refusalFor([info], id)
+  }
+  return last ?? agentRefusal(`There is no agent named ${JSON.stringify(id)}, so a job cannot run as it.`, nextStep(id))
 }
 
 /** The agents the job list names that are not guarded, in the order they are first named. */

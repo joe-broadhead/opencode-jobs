@@ -84,7 +84,7 @@ export async function createJob(input: ActionInput, definition: CreateInput): Pr
   ensureWritable(input)
   const now = input.clock.now()
   const job = parseJob(definition, { now, timezone: input.timezone, id: nextId(now), source: "tool", createdBy: "agent" })
-  const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input))
+  const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input), input.location)
   if (refusal !== undefined) refuseAgent(refusal)
   await putJob(input.storage, job)
   const state = await readState(input.storage, job.id)
@@ -99,7 +99,7 @@ export async function changeJob(input: ActionInput, id: string, patch: CreateInp
   const existing = mutable(await findJob(input, id), "change")
   const now = input.clock.now()
   const job = updateJob(existing, patch, { now, timezone: input.timezone, id: existing.id, source: existing.source, createdAt: existing.createdAt, createdBy: existing.createdBy })
-  const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input))
+  const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input), input.location)
   if (refusal !== undefined) refuseAgent(refusal)
   await putJob(input.storage, job)
   // A changed schedule starts from now: the old slot belonged to the old schedule.
