@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { adopt } from "../../src/jobs/adopt.js"
 import { parseJob, type Job } from "../../src/jobs/model.js"
 import { putRun, getRun, type RunRecord, type Storage } from "../../src/jobs/store.js"
+import { isJobSession } from "../../src/jobs/safety.js"
 import { memoryStorage, sessionFake, settle, testClock } from "./fake.js"
 
 const START = Date.UTC(2026, 11, 6, 9, 0, 0)
@@ -38,6 +39,8 @@ describe("adoption after a reload or a crash", () => {
     const pending = setup.run()
     await settle()
     expect(setup.session.waiting).toContain("ses_1")
+    // The adopted session is registered as a run session, so the evaluate hook covers it in this process too.
+    expect(isJobSession("ses_1")).toBe(true)
     setup.session.release()
     const adopted = await pending
     expect(adopted.reattached).toBe(1)

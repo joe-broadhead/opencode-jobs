@@ -14,6 +14,7 @@ import type { Clock } from "./clock.js"
 import { DEFAULTS, type Job } from "./model.js"
 import { getRun, putRun, scanRuns, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
 import { isTerminal, summaryOf, type Session } from "./execute.js"
+import { rememberJobSession } from "./safety.js"
 
 /** How long adoption waits for a busy run before its own interrupt, when the remaining timeout is spent. */
 const MIN_WAIT = 1_000
@@ -82,6 +83,9 @@ export async function adopt(input: AdoptInput): Promise<Adopted> {
 async function inspect(input: AdoptInput & { record: RunRecord }, reattach: () => void): Promise<Verdict | undefined> {
   const { record, session, clock } = input
   if (record.sessionID === undefined) return { status: "interrupted", error: GONE }
+  // An adopted run is still one of ours: after a restart the process-wide registry of run sessions is empty, so the
+  // session is registered here, before its turn is continued, and the evaluate hook covers it for the rest.
+  rememberJobSession(record.sessionID)
   const info = await session.get({ sessionID: record.sessionID }).catch(() => undefined)
   if (info === undefined) return { status: "interrupted", error: GONE }
 

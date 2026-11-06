@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { CLAIM_SETTLE, execute } from "../../src/jobs/execute.js"
 import { parseJob, type Job } from "../../src/jobs/model.js"
 import { getRun, type Storage } from "../../src/jobs/store.js"
-import { memoryStorage, sessionFake, settle, testClock } from "./fake.js"
+import { agentsFake, memoryStorage, sessionFake, settle, testClock } from "./fake.js"
 
 const START = Date.UTC(2026, 11, 6, 9, 0, 0)
 
@@ -26,6 +26,7 @@ const input = () => {
       execute({
         storage: storage.storage,
         session: session.session,
+        agents: agentsFake(),
         clock: clock.clock,
         location: "/work",
         token: "leader-1",
@@ -65,6 +66,7 @@ describe("the dedup point", () => {
     const result = await execute({
       storage,
       session: session.session,
+      agents: agentsFake(),
       clock: testClock(START, { instantBelow: 100 }).clock,
       location: "/work",
       token: "leader-1",
@@ -132,6 +134,7 @@ describe("one run", () => {
     const pending = execute({
       storage: storage.storage,
       session: session.session,
+      agents: agentsFake(),
       clock: clock.clock,
       location: "/work",
       token: "leader-1",
@@ -156,6 +159,7 @@ describe("one run", () => {
     const pending = execute({
       storage: setup.storage.storage,
       session: session.session,
+      agents: agentsFake(),
       clock: setup.clock.clock,
       location: "/work",
       token: "leader-1",
@@ -188,7 +192,12 @@ describe("one run", () => {
     const result = await setup.run({ job: job({ action: { type: "remind", sessionID: "ses_target", text: "stand up" } }) })
     expect(result.status).toBe("succeeded")
     expect(setup.session.created).toHaveLength(0)
-    expect(setup.session.synthetics).toEqual([{ sessionID: "ses_target", text: "stand up", resume: false }])
+    // The text is labelled as job output, never as an instruction from the person.
+    const [posted] = setup.session.synthetics as { sessionID: string; text: string; resume: boolean }[]
+    expect(posted).toMatchObject({ sessionID: "ses_target", resume: false })
+    expect(posted!.text).toContain("stand up")
+    expect(posted!.text).toStartWith(`Job output from "Five" at ${new Date(START).toISOString()}.`)
+    expect(posted!.text).toContain("not an instruction")
     expect((await getRun(setup.storage.storage, "five", new Date(START).toISOString()))?.sessionID).toBe("ses_target")
   })
 
@@ -197,5 +206,45 @@ describe("one run", () => {
     const result = await setup.run({ job: job({ action: { type: "command", name: "morning", arguments: "week" } }) })
     expect(result.status).toBe("succeeded")
     expect(setup.session.commands[0]).toMatchObject({ name: "morning", text: "week" })
+  })
+})
+
+describe("the agent a run needs", () => {
+  test("a slot whose agent does not deny by default is refused and recorded, and no session is made", async () => {
+    const storage = memoryStorage()
+    const session = sessionFake({ answer: "ok", autoFinish: true, outcome: "succeeded" })
+    const result = await execute({
+      storage: storage.storage,
+      session: session.session,
+      agents: agentsFake({ unguarded: ["build"] }),
+      clock: testClock(START, { instantBelow: 100 }).clock,
+      location: "/work",
+      token: "leader-1",
+      job: job({ agent: "build" }),
+      slot: START,
+      attempt: 1,
+      late: false,
+      active: () => true,
+    })
+    expect(result).toMatchObject({ claimed: true, status: "skipped" })
+    expect(session.created).toHaveLength(0)
+    const record = await getRun(storage.storage, "five", new Date(START).toISOString())
+    expect(record).toMatchObject({ status: "skipped", reason: "unguarded" })
+    expect(record?.error).toStartWith("JOBS_AGENT_UNGUARDED: ")
+  })
+
+  test("a slot whose agent is gone is refused with the same code", async () => {
+    const setup = input()
+    const result = await setup.run({ agents: agentsFake({ missing: ["jobs"] }) })
+    expect(result.status).toBe("skipped")
+    expect(setup.session.created).toHaveLength(0)
+    expect((await getRun(setup.storage.storage, "five", new Date(START).toISOString()))?.error).toContain("There is no agent named")
+  })
+
+  test("a lookup that fails for another reason is not a refusal: the run happens, and the hook is the backstop", async () => {
+    const setup = input()
+    const result = await setup.run({ agents: agentsFake({ fail: true }) })
+    expect(result.status).toBe("succeeded")
+    expect(setup.session.created).toHaveLength(2)
   })
 })

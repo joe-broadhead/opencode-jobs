@@ -11,9 +11,11 @@
  * next leader finalises it exactly once (`adopt.ts`).
  */
 import type { Plugin } from "@opencode/plugin"
+import { guardAgent } from "../host/permissions.js"
 import type { Clock } from "./clock.js"
 import type { Job, JobAction } from "./model.js"
-import { getRun, putRun, slotISO, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
+import { jobOutput, openJobSession } from "./safety.js"
+import { getRun, putRun, readPauseAll, slotISO, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
 
 /** The session members one run uses, and nothing else. */
 export type Session = Pick<Plugin.Context["session"], "create" | "get" | "remove" | "prompt" | "command" | "synthetic" | "wait" | "interrupt" | "context">
@@ -65,6 +67,8 @@ export type Executor = (request: RunRequest) => Promise<RunResult>
 export interface ExecutorInput {
   readonly storage: Storage
   readonly session: Session
+  /** The agents a run is checked against at the moment it starts: a job refused at create is refused here too. */
+  readonly agents: Pick<Plugin.Context["agent"], "get">
   readonly clock: Clock
   /** The directory a job without `target.directory` runs in: the leader's location. */
   readonly location: string
@@ -95,23 +99,34 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
   // A reminder posts into an existing session: no run session, no parked parent, and nothing to interrupt but the
   // target's own turn, which is the person's, so a replace never touches it.
   const action = job.action
-  if (action.type === "remind") return complete(input, key, clock.now(), action.sessionID, await remind(input, action))
+  if (action.type === "remind") return complete(input, key, clock.now(), action.sessionID, await remind(input, action, slotISO(slot)))
+
+  // A run needs an agent that denies by default (D7). One that has become unguarded since the job was created is
+  // refused per slot rather than run into a denial: the slot is recorded as skipped, with the code and the block to
+  // paste, and the schedule moves on.
+  const refusal = await guardAgent(input.agents, job.agent)
+  if (refusal !== undefined) {
+    const record = await putRun(storage, {
+      job: job.id,
+      slot: key,
+      status: "skipped",
+      reason: "unguarded",
+      late: input.late,
+      attempt: input.attempt,
+      token: input.token,
+      startedAt: clock.now(),
+      endedAt: clock.now(),
+      error: refusal.message,
+    })
+    return { claimed: true, status: "skipped", record }
+  }
 
   const directory = job.target.directory ?? input.location
   let sessionID: string | undefined
   let interrupt = async () => undefined
   try {
     const parentID = await jobsParent({ storage, session: input.session, directory })
-    const created = await input.session.create({
-      location: { directory },
-      parentID,
-      agent: job.agent,
-      ...(job.target.model === undefined ? {} : { model: job.target.model }),
-      title: `Job · ${job.name} · ${key}`,
-      // A job's list is deny-only (D7): a session rule that allows would be a grant that overrides the agent (V3).
-      permissions: job.allow,
-      metadata: { jobs: { job: job.id, run: key, slot } },
-    })
+    const created = await openJobSession({ session: input.session, job, directory, parentID, run: key, slot })
     sessionID = created.id
     interrupt = async () => {
       await input.session.interrupt({ sessionID: created.id }).catch(() => undefined)
@@ -192,8 +207,12 @@ async function claimSlot(input: ExecuteInput, existing: RunRecord | undefined): 
 }
 
 /** A reminder: posted into its own session with no model turn, or awaited when `wake` asks the agent to answer. */
-async function remind(input: ExecuteInput, action: Extract<JobAction, { type: "remind" }>): Promise<Finished> {
-  await input.session.synthetic({ sessionID: action.sessionID, text: action.text, resume: action.wake })
+async function remind(input: ExecuteInput, action: Extract<JobAction, { type: "remind" }>, at: string): Promise<Finished> {
+  await input.session.synthetic({
+    sessionID: action.sessionID,
+    text: jobOutput(action.text, { name: input.job.name, at }),
+    resume: action.wake,
+  })
   if (!action.wake) return { status: "succeeded" }
   const interrupt = async () => {
     await input.session.interrupt({ sessionID: action.sessionID }).catch(() => undefined)
@@ -205,8 +224,15 @@ async function remind(input: ExecuteInput, action: Extract<JobAction, { type: "r
 /** A prompt or a command, then the wait against the timeout, then the outcome and the summary. */
 async function run(input: ExecuteInput, sessionID: string, action: Exclude<JobAction, { type: "remind" }>): Promise<Finished> {
   const { job, clock, session } = input
+  // The kill switch can arrive between the slot being taken and the turn starting. Checking it here, before and after
+  // the turn is asked for, means a pause never pays for a model call it cannot stop (`bounded` covers the rest).
+  if (await paused(input)) return { status: "interrupted" }
   if (action.type === "prompt") await session.prompt({ sessionID, text: action.text })
   else await session.command({ sessionID, name: action.name, text: action.arguments ?? "" })
+  if (await paused(input)) {
+    await session.interrupt({ sessionID }).catch(() => undefined)
+    return { status: "interrupted" }
+  }
   const finished = await bounded({
     session,
     sessionID,
@@ -218,6 +244,14 @@ async function run(input: ExecuteInput, sessionID: string, action: Exclude<JobAc
     },
   })
   return outcomeOf(session, sessionID, finished, input.signal)
+}
+
+/** True while the kill switch is set. A storage failure is not a pause: the hook and the timeout still bound the run. */
+async function paused(input: Pick<ExecuteInput, "storage">): Promise<boolean> {
+  return readPauseAll(input.storage).then(
+    (record) => record !== undefined,
+    () => false,
+  )
 }
 
 /**

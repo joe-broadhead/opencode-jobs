@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { Executor, RunResult } from "../../src/jobs/execute.js"
 import { MINUTE, parseJob, type Job } from "../../src/jobs/model.js"
 import { Runner, SLEEP_CAP } from "../../src/jobs/runner.js"
-import { getRun, putRun, readState, scanRuns, type RunStatus } from "../../src/jobs/store.js"
+import { getRun, putRun, readPauseAll, readState, scanRuns, setPauseAll, type RunStatus } from "../../src/jobs/store.js"
 import { memoryStorage, settle, testClock } from "./fake.js"
 
 const START = Date.UTC(2026, 11, 6, 9, 0, 0)
@@ -27,14 +27,19 @@ function immediate(status: RunStatus = "succeeded") {
 /** An executor whose runs finish when the test releases them. */
 function deferred() {
   const asked: { job: string; slot: number }[] = []
+  const interrupted: string[] = []
   const releases: (() => void)[] = []
   const execute: Executor = (request) =>
     new Promise((resolve) => {
       asked.push({ job: request.job.id, slot: request.slot })
-      request.onSession?.({ slot: request.slot, sessionID: `ses_${asked.length}`, interrupt: async () => undefined })
+      request.onSession?.({
+        slot: request.slot,
+        sessionID: `ses_${asked.length}`,
+        interrupt: async () => void interrupted.push(request.job.id),
+      })
       releases.push(() => resolve({ claimed: true, status: "succeeded" }))
     })
-  return { execute, asked, release: () => releases.shift()?.() }
+  return { execute, asked, interrupted, release: () => releases.shift()?.() }
 }
 
 function setup(options: { jobs: readonly Job[]; concurrency?: number; status?: RunStatus; execute?: Executor }) {
@@ -261,6 +266,7 @@ describe("concurrency and the loop", () => {
     const active = { current: true }
     const runner = new Runner({ storage: storage.storage, clock: clock.clock, jobs: async () => [job()], execute: runs.execute, active: () => active.current, concurrency: 2, location: "/work" })
     await runner.tick(START)
+    await runner.tick(START)
     await runner.tick(START + 5 * MINUTE)
     expect(runs.asked).toHaveLength(1)
     active.current = false
@@ -269,5 +275,47 @@ describe("concurrency and the loop", () => {
     expect(runs.asked).toHaveLength(1)
     runs.release()
     await runner.settle()
+  })
+})
+
+describe("the kill switch", () => {
+  test("stops every slot and interrupts the run in flight, once", async () => {
+    const runs = deferred()
+    const storage = memoryStorage()
+    const clock = testClock(START, { instantBelow: 0 })
+    const runner = new Runner({ storage: storage.storage, clock: clock.clock, jobs: async () => [job()], execute: runs.execute, active: () => true, concurrency: 2, location: "/work" })
+    await runner.tick(START)
+    await runner.tick(START + 5 * MINUTE)
+    expect(runs.asked).toHaveLength(1)
+
+    await setPauseAll(storage.storage, true, START + 5 * MINUTE)
+    const paused = await runner.tick(START + 5 * MINUTE)
+    expect(paused).toEqual({ started: 0, nextDueAt: null })
+    expect(runs.interrupted).toEqual(["five"])
+    // The next slot is refused the same way, and the run already interrupted is not asked twice.
+    expect((await runner.tick(START + 10 * MINUTE)).started).toBe(0)
+    expect(runs.interrupted).toEqual(["five"])
+    expect(runs.asked).toHaveLength(1)
+
+    runs.release()
+    await runner.settle()
+  })
+
+  test("clearing it lets the next slot run, with one catch-up for the slots that fell due", async () => {
+    const s = setup({ jobs: [job()] })
+    await advance(s.runner, 0, 5)
+    expect(slots(s.asked)).toEqual([5])
+
+    await setPauseAll(s.storage.storage, true, START + 5 * MINUTE)
+    await advance(s.runner, 6, 15)
+    expect(slots(s.asked)).toEqual([5])
+
+    await setPauseAll(s.storage.storage, false, START + 15 * MINUTE)
+    await s.runner.tick(START + 17 * MINUTE)
+    await s.runner.settle()
+    // One run, for the newest missed slot, marked late: not ten.
+    expect(slots(s.asked)).toEqual([5, 15])
+    expect(s.asked[1]!.late).toBe(true)
+    expect(await readPauseAll(s.storage.storage)).toBeUndefined()
   })
 })

@@ -15,7 +15,7 @@ import { nextRun, slotsBetween } from "./cron.js"
 import type { Executor, RunHandle } from "./execute.js"
 import type { Job } from "./model.js"
 import { catchUp, isLate, overlapOf, shouldPause, startAt, stopReason } from "./policy.js"
-import { putRun, putRunner, readState, slotISO, type JobState, type RunStatus, type Storage } from "./store.js"
+import { putRun, putRunner, readPauseAll, readState, slotISO, type JobState, type RunStatus, type Storage } from "./store.js"
 
 /** The longest the loop sleeps: a clock jump, a changed job or a new file is noticed within this. */
 export const SLEEP_CAP = 30_000
@@ -49,6 +49,8 @@ interface Tracked {
   readonly slot: number
   sessionID?: string
   interrupt: () => Promise<void>
+  /** True once the kill switch or a `replace` has interrupted this run, so it is asked only once. */
+  halted?: boolean
   promise?: Promise<void>
 }
 
@@ -119,6 +121,13 @@ export class Runner {
   /** One pass, which `tick` runs once at a time: two passes would see the same slot as due. */
   private async pass(now: number): Promise<Tick> {
     if (!this.input.active()) return { started: 0, nextDueAt: null }
+    // The kill switch: nothing starts, and what is in flight is interrupted now. The schedule does not move, so
+    // clearing the pause resumes it with the usual catch-up for the slots that fell due meanwhile.
+    const paused = await readPauseAll(this.storage).catch(() => undefined)
+    if (paused !== undefined) {
+      await this.halt()
+      return { started: 0, nextDueAt: null }
+    }
     let jobs: readonly Job[]
     try {
       jobs = await this.input.jobs()
@@ -205,6 +214,18 @@ export class Runner {
     return { started, nextDueAt: next }
   }
 
+  /** Interrupts every run in flight, once each: the kill switch. A run whose session has not opened yet is caught as
+   * soon as it opens, so a pause the moment a slot starts still stops that slot. */
+  private async halt(): Promise<void> {
+    for (const tracked of this.runs.values()) {
+      for (const handle of tracked) {
+        if (handle.halted === true) continue
+        handle.halted = true
+        if (handle.sessionID !== undefined) await handle.interrupt()
+      }
+    }
+  }
+
   /**
    * What a due slot may do: run, be skipped, be remembered once, or wait for capacity. The overlap policies are the
    * table of DESIGN §6.4; `replace` interrupts the run in its way before the new one starts.
@@ -228,7 +249,10 @@ export class Runner {
       }
       if (action === "replace") {
         replacing = true
-        for (const handle of running) await handle.interrupt()
+        for (const handle of running) {
+          handle.halted = true
+          await handle.interrupt()
+        }
       }
     }
     // `replace` frees the slot it takes, so it may start even when the cap is reached.
@@ -254,6 +278,8 @@ export class Runner {
         onSession: (session: RunHandle) => {
           handle.sessionID = session.sessionID
           handle.interrupt = session.interrupt
+          // A pause, or a `replace`, that arrived before the session existed is honoured now.
+          if (handle.halted === true) void session.interrupt()
         },
       })
       .then((result) => this.finished(job, slot, result.status, result.claimed))
@@ -269,7 +295,8 @@ export class Runner {
 
   /** What a finished run does to the job's state: a count, the failure streak, and the pause after five failures. */
   private async finished(job: Job, slot: number, status: RunStatus, claimed: boolean): Promise<void> {
-    if (!claimed || !this.input.active()) return
+    // A slot refused before it ran (an agent that is not guarded) is recorded, but it is not a run: nothing counts.
+    if (!claimed || !this.input.active() || status === "skipped") return
     const state = await readState(this.storage, job.id)
     const failed = status === "failed"
     const consecutiveFailures = failed ? state.consecutiveFailures + 1 : 0

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
-import { formatStatus, buildStatus, NOTHING_TO_DO, unavailable, type StatusFacts } from "../../src/status.js"
+import { formatStatus, buildStatus, NOTHING_TO_DO, registerPauseCommand, unavailable, type StatusFacts } from "../../src/status.js"
+import { commandContext, commands, type CommandDefinition } from "./fake.js"
 
 const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string }
 const TESTED = { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }
@@ -36,6 +37,29 @@ describe("the status model", () => {
     const status = buildStatus(facts({ problems: ["SKILLS_INVALID: A skill file is broken. Next step: Reinstall the plugin."] }))
     expect(status.nextStep).toBe("Reinstall the plugin.")
   })
+
+  test("says every job is paused, since a time, and how to resume them", () => {
+    const paused = { at: Date.UTC(2026, 11, 6, 9, 0, 0) }
+    const status = buildStatus(facts({ paused }))
+    expect(status.paused).toEqual(paused)
+    expect(status.nextStep).toBe("Run /jobs-pause again to resume every job.")
+    expect(formatStatus(status)).toContain("- Paused: every job since 2026-12-06T09:00:00.000Z. Run /jobs-pause again to resume every job.")
+  })
+
+  test("names the block for an unguarded agent, and carries the paste-ready profile", () => {
+    const status = buildStatus(facts({ unguardedAgents: ["build"] }))
+    expect(status.nextStep).toBe('Give the agent "build" the read-only block, starting with the blanket deny, or point its job at an agent that has it.')
+    expect(status.permissionsBlock?.[0]).toEqual({ action: "*", resource: "*", effect: "deny" })
+    const text = formatStatus(status)
+    expect(text).toContain('- Agents without default rules: build')
+    expect(text).toContain('Paste this for "build" into opencode.json:\n{\n  "agents": {\n    "build": {')
+    expect(text).toContain('"action": "*"')
+  })
+
+  test("puts the pause before a problem, because nothing runs while it is set", () => {
+    const status = buildStatus(facts({ paused: { at: 0 }, problems: ["JOBS_INVALID_FILE: x. Next step: Fix x."] }))
+    expect(status.nextStep).toBe("Run /jobs-pause again to resume every job.")
+  })
 })
 
 describe("the status text", () => {
@@ -65,6 +89,33 @@ describe("the status text", () => {
     expect(formatStatus(buildStatus(facts({ host: { version: "2.3.0", range: ">=2.2.3 <2.3.0", tested: false } })))).toContain(
       "It is outside the supported range; the plugin runs because allowUntestedHost is true. If a job misbehaves, use OpenCode 2.2.3, 2.2.4 or 2.2.5.",
     )
+  })
+})
+
+describe("the pause command", () => {
+  test("pauses every job and says so, then reports that they run again", async () => {
+    const { ctx, editable, posted } = commandContext()
+    const at = Date.UTC(2026, 11, 6, 9, 0, 0)
+    let paused: { at: number } | undefined
+    await registerPauseCommand(ctx, async () => (paused = paused === undefined ? { at } : undefined))
+    const { editor, added } = commands()
+    editable.run(editor)
+    const command = added.find((definition) => definition.name === "jobs-pause")!
+    expect(command.description).toContain("Pause every job")
+    await command.execute({ sessionID: "ses_1" } as never)
+    expect(posted[0]).toMatchObject({ sessionID: "ses_1", resume: false })
+    expect(posted[0]!.text).toBe(`Every job is paused since ${new Date(at).toISOString()}. Nothing new starts until you run /jobs-pause again.`)
+    await command.execute({ sessionID: "ses_1" } as never)
+    expect(posted[1]!.text).toBe("Every job runs to its schedule again.")
+  })
+
+  test("says why when the switch cannot be set", async () => {
+    const { ctx, editable, posted } = commandContext()
+    const added: CommandDefinition[] = []
+    await registerPauseCommand(ctx, async () => Promise.reject(new Error("storage is full")))
+    editable.run({ add: (definition: CommandDefinition) => void added.push(definition) } as never)
+    await added[0]!.execute({ sessionID: "ses_1" } as never)
+    expect(posted[0]!.text).toStartWith("STATUS_UNAVAILABLE: ")
   })
 })
 
