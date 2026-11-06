@@ -13,9 +13,21 @@ const flat = (file: string) => text(file).replace(/\s+/g, " ")
 
 /** The codes `jobsError` and `errorText` are called with in src/: the plugin's own, by construction. */
 function raised(): string[] {
-  const sources = readdirSync(join(ROOT, "src")).filter((name) => name.endsWith(".ts"))
-  const found = sources.flatMap((name) => [...text(`src/${name}`).matchAll(/(?:jobsError|errorText)\(\s*"([A-Z][A-Z_]+)"/g)].map((match) => match[1]!))
+  const sources = files("src").filter((name) => name.endsWith(".ts"))
+  // The job model raises its codes through `fail`, which builds a JobInputError, so every JOBS_ literal it holds counts;
+  // the tools RPC has its own `fail` and its own codes, which scripting.md documents.
+  const job = /"(JOBS_[A-Z_]+)"/g
+  const shared = /(?:jobsError|errorText)\(\s*"([A-Z][A-Z_]+)"/g
+  const found = sources.flatMap((name) => [...text(name).matchAll(name.startsWith("src/jobs/") ? job : shared)].map((match) => match[1]!))
   return [...new Set(found)].sort()
+}
+
+/** Every file under a folder, relative to the repository. */
+function files(folder: string): string[] {
+  return readdirSync(join(ROOT, folder), { withFileTypes: true }).flatMap((entry) => {
+    const path = `${folder}/${entry.name}`
+    return entry.isDirectory() ? files(path) : [path]
+  })
 }
 
 const errorsSection = () => /## Errors\n([\s\S]*?)(?:\n## |\s*$)/.exec(text("docs/configuration.md"))?.[1] ?? ""

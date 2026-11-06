@@ -1,6 +1,7 @@
 // Narrow fakes of the public plugin context: only the members a test touches, typed with Pick<> so they
 // stay valid against later 2.2.x context shapes.
 import type { Plugin } from "@opencode/plugin"
+import type { Storage } from "../../src/jobs/store.js"
 
 type Transform<Editor> = (callback: (editor: Editor) => void) => Promise<{ dispose: () => Promise<void> }>
 
@@ -62,3 +63,39 @@ export const rpcContext = (): { readonly signal: AbortSignal; readonly error: (.
   signal: new AbortController().signal,
   error: (...args: unknown[]) => ({ type: args[0], message: args[1], data: args[2] }),
 })
+
+/**
+ * `ctx.storage` in memory, with the host's paged `scan`: a JSON value per key, at most `pageSize` entries a page, a
+ * cursor that is the last key of the page, and no compare-and-set (F3, V-5).
+ */
+export function memoryStorage(pageSize = 2) {
+  const values = new Map<string, string>()
+  const calls = { set: 0, remove: 0 }
+  const storage: Storage = {
+    get: async (key) => {
+      const raw = values.get(key)
+      return raw === undefined ? undefined : JSON.parse(raw)
+    },
+    set: async (key, value) => {
+      calls.set += 1
+      values.set(key, JSON.stringify(value))
+    },
+    remove: async (key) => {
+      calls.remove += 1
+      values.delete(key)
+    },
+    scan: async ({ prefix, after, limit }) => {
+      const keys = [...values.keys()].filter((key) => key.startsWith(prefix)).sort()
+      const start = after === undefined ? 0 : keys.findIndex((key) => key > after)
+      const from = start === -1 ? keys.length : start
+      const size = Math.min(limit ?? 100, pageSize)
+      const page = keys.slice(from, from + size)
+      const more = from + size < keys.length
+      return {
+        entries: page.map((key) => ({ key, value: JSON.parse(values.get(key)!) })),
+        ...(more && page.length > 0 ? { next: page[page.length - 1]! } : {}),
+      }
+    },
+  }
+  return { storage, calls, keys: () => [...values.keys()].sort() }
+}
