@@ -20,10 +20,18 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   the self-contained `dist/index.js` and `dist/tui.js`: no chunks, no relative imports, and only host-provided modules
   external. `tsc` only typechecks. No declaration files, `.tsx` or JSX.
 - **No permission rules.** This plugin inserts nothing into any agent and adds no default block. A job runs as the
-  agent it names, and that agent's own `permissions` are its profile. A run's session rules only ever narrow them.
-- **The permission hook.** The one allowed `permission.hook("evaluate")` is in `src/host/tools-rpc.ts`, and in the
-  bundle that inlines it, exactly once each. It turns an `ask` on one of the tools RPC's own script calls in flight
-  into a deny, because no one can answer it, and touches nothing else.
+  agent it names, and that agent's own `permissions` are its profile. A run's session rules only ever narrow them, and
+  a job whose agent does not deny by default is refused with `JOBS_AGENT_UNGUARDED` at create and again when a slot
+  starts, rather than run into a permission prompt nobody can answer.
+- **The permission hooks.** Two `permission.hook("evaluate")` calls are allowed, and only these: the one in
+  `src/host/tools-rpc.ts` turns an `ask` on one of the tools RPC's own script calls in flight into a deny, and the one
+  in `src/jobs/safety.ts` does the same for a session this plugin created for a run. Each file holds exactly one hook,
+  the bundle that inlines both holds two, and `scripts/check-forbidden.mjs` fails any other file, any extra hook, and
+  any hook that is not an `evaluate` one. Neither ever turns a deny into anything, and neither touches a session it did
+  not create.
+- **The kill switch.** `pause/all` in the plugin's storage stops every job at once: the runner starts nothing and
+  interrupts what is in flight, and `/jobs-pause` sets and clears it. `enabled: false` stops the runner at setup
+  instead, and status says which of the two is in force.
 - **Transforms are cheap, synchronous and never throw.** Record failures for status instead.
 - **Errors** read `CODE: What happened. Next step: What to do.`, built by `jobsError` or `errorText`. Codes have no
   service prefix; shared failures use the shared names (`HOST_UNTESTED`, `OPTIONS_INVALID`, `STATUS_UNAVAILABLE`).
@@ -64,9 +72,10 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   `permission.ask`;
 - the deprecated `ctx.generate.text` and `experimental.policies`;
 - importing `@opencode/ai`;
-- a permission hook, except the one `permission.hook("evaluate")` in `src/host/tools-rpc.ts` (and the bundle that
-  inlines it), exactly once each: it turns an `ask` on the tools RPC's own script calls in flight into a deny, because
-  no one can answer it, and touches nothing else;
+- a permission hook, except the two `permission.hook("evaluate")` calls, exactly one each: the tools RPC's, in
+  `src/host/tools-rpc.ts`, which turns an `ask` on its own script calls in flight into a deny, and the job session's, in
+  `src/jobs/safety.ts`, which does the same for a run nobody is watching; and except the bundle, `dist/index.js`, which
+  inlines both and must hold exactly two;
 - references to private host source or host checkouts;
 - machine-local home and temp paths;
 - `.tsx` or `.jsx` files in `dist/`.
