@@ -224,6 +224,21 @@ describe("the changes", () => {
     expect((await runJobTool(input, "status", {})).output["state"]).toBe("ready")
   })
 
+  test("a write reached from a script is marked, and the hook's deny stops it before it acts", async () => {
+    const setup = harness()
+    await store(setup, toolJob())
+    // The one evaluate hook denies an ask on a marked script call; the assert sees that deny and throws.
+    const input = {
+      ...setup.input,
+      assert: async (check: unknown) => {
+        const marked = (check as { metadata?: { script?: boolean } }).metadata?.script === true
+        if (marked) throw new Error("JOBS_UNATTENDED: a script cannot answer a prompt.")
+      },
+    }
+    await expect(runJobTool(input, "delete", { id: "job_update" }, { sessionID: "s", agent: "a", script: true })).rejects.toThrow("JOBS_UNATTENDED")
+    expect((await setup.report.source()).jobs).toHaveLength(1)
+  })
+
   test("a refused assert changes nothing", async () => {
     const setup = harness()
     await store(setup, toolJob())
