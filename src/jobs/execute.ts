@@ -230,10 +230,9 @@ async function remind(input: ExecuteInput, action: Extract<JobAction, { type: "r
     resume: action.wake,
   })
   if (!action.wake) return { status: "succeeded" }
-  const interrupt = async () => {
-    await input.session.interrupt({ sessionID: action.sessionID }).catch(() => undefined)
-  }
-  const finished = await bounded({ session: input.session, sessionID: action.sessionID, timeoutMs: input.job.policy.timeoutMs, clock: input.clock, signal: input.signal, interrupt })
+  // A reminder that asks the agent to answer waits, but its timeout never interrupts the person's own turn: the record
+  // says `timed_out` and the session is left exactly as it was.
+  const finished = await bounded({ session: input.session, sessionID: action.sessionID, timeoutMs: input.job.policy.timeoutMs, clock: input.clock, signal: input.signal, interrupt: async () => undefined })
   return outcomeOf(input.session, action.sessionID, finished, input.signal)
 }
 
