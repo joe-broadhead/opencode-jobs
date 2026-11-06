@@ -248,7 +248,7 @@ its code and shown in status; it is not thrown at you.
 | `JOBS_ALLOW_WIDENS` | A job's `allow` list holds an `allow` entry, and a job may only narrow its agent's rules. | Move the grant to the job agent's own `permissions` in opencode.json, and keep the job's list to deny rules. |
 | `JOBS_TARGET_MISSING` | A job, session or agent the call names does not exist. | Run `jobs_list` to see the jobs there are, and create the session before naming it. |
 | `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, or there is no such agent, so a job under it is refused instead of run into denied prompts. | Give the agent the read-only block, starting with the blanket deny, or point the job at an agent that has it; `/jobs-status` prints it. |
-| `JOBS_UNATTENDED` | A run called a tool its agent asks about. The call was denied, and the run continued. | Add an `allow` rule for that tool to the job agent's own `permissions`, and only if the job needs it. |
+| `JOBS_UNATTENDED` | A run called a tool its agent asks about. The call was denied, and the run continued. | Decide with the person whether that agent may have it. A read goes in the agent's own `permissions`; a write belongs with a person, not a run. |
 | `JOBS_DISABLED` | Every job is paused, or the job the call names is. | Resume with `/jobs-pause` or the `jobs_resume` tool, then retry. |
 | `JOBS_EXPIRED` | The job has no slot left: its `at` has passed, its `ends` was reached, or its expiry has passed. | Extend it with `jobs_extend`, or create a new job. |
 | `JOBS_TIMEOUT` | A run did not finish inside its `policy.timeout`, so it was interrupted. | Raise `timeout` for that job, or make its prompt do less. |

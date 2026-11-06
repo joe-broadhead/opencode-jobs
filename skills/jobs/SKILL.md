@@ -71,6 +71,6 @@ would run as that session's agent. No write, and no `jobs_run_now`, is a method:
   recent failures and the agents that need the block.
 - `JOBS_AGENT_UNGUARDED`: the job's agent does not deny by default. Paste the block status prints, or point the job at
   an agent that has it.
-- `JOBS_UNATTENDED`: a run called a tool its agent asks about, and the call was denied. Add the rule to the agent only
-  if the job truly needs it.
+- `JOBS_UNATTENDED`: a run called a tool its agent asks about, and the call was denied. A read the job needs can be
+  added to the agent's own permissions; a write belongs with a person, not a run.
 - `JOBS_DISABLED`: every job is paused, or that one is. `/jobs-pause` resumes every job.
