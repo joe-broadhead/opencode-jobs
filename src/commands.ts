@@ -6,7 +6,8 @@
  * tool asks instead, because there the prompt is the yes.
  */
 import type { Plugin } from "@opencode/plugin"
-import { COMMAND_STEM } from "./constants.js"
+import { COMMAND_STEM, jobsError } from "./constants.js"
+import { isJobSession } from "./jobs/safety.js"
 import type { Job } from "./jobs/model.js"
 import { formatStatus, unavailable, type Status } from "./status.js"
 import type { PauseRecord } from "./jobs/store.js"
@@ -41,7 +42,9 @@ export function registerCommands(ctx: CommandInput, hooks: CommandHooks): Promis
       name: `${COMMAND_STEM}-pause`,
       description: "Pause every job at once, or resume them",
       execute: async ({ sessionID }) => {
-        const text = await hooks.togglePause().then(pausedText, (error: unknown) => unavailable(error).message)
+        const text = isJobSession(sessionID)
+          ? refusal("the pause command")
+          : await hooks.togglePause().then(pausedText, (error: unknown) => unavailable(error).message)
         await post(sessionID, text, "Jobs paused")
       },
     })
@@ -50,12 +53,21 @@ export function registerCommands(ctx: CommandInput, hooks: CommandHooks): Promis
       description: "Run a job now, without waiting for its next slot",
       execute: async ({ sessionID, prompt }) => {
         const id = prompt.text.trim().split(/\s+/)[0] ?? ""
-        const text = id === "" ? await listIds(hooks) : await hooks.runNow(id).then(ranText, (error: unknown) => messageOf(error))
+        const text = isJobSession(sessionID)
+          ? refusal("the run command")
+          : id === ""
+            ? await listIds(hooks)
+            : await hooks.runNow(id).then(ranText, (error: unknown) => messageOf(error))
         await post(sessionID, text, "Jobs run")
       },
     })
   })
   return registration.then((registration) => registration.dispose)
+}
+
+/** A run may not start or pause jobs through a command: the session's own rules deny the tools for the same reason. */
+function refusal(what: string): string {
+  return jobsError("JOBS_UNATTENDED", `${what} cannot be used from a job's own session, because a run must not start or stop jobs.`, `Create or run jobs from your own session, where you answer the approval.`).message
 }
 
 function pausedText(paused: PauseRecord | undefined): string {

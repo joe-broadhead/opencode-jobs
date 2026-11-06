@@ -75,7 +75,7 @@ stops at a repository's root, so it never picks up your own agents or skills. Ea
 free port.
 
 The pack stage needs network access to the npm registry only when a binary is not set. It checks that the tarball
-contains exactly the `files` whitelist, with fewer than 30 entries and at most 100 KB; that `dist/` holds only
+contains exactly the `files` whitelist, with fewer than 30 entries and at most 128 KB, in fewer than 30 entries; that `dist/` holds only
 `index.js` and `tui.js`, with no relative import, dynamic `import()` or `require()`; and that they import only modules
 OpenCode provides. It installs the tarball next to the host packages that OpenCode 2.2.3 provides, imports both entry
 points under Bun, then installs the tarball alone and loads it with `opencode serve` from stock OpenCode 2.2.3, 2.2.4

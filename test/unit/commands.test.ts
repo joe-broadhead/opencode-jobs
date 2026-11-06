@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test"
 import { registerCommands, type CommandHooks } from "../../src/commands.js"
 import { parseJob, type Job } from "../../src/jobs/model.js"
 import { buildStatus } from "../../src/status.js"
+import { rememberJobSession } from "../../src/jobs/safety.js"
 import { commandContext, commands } from "./fake.js"
 
 const NOW = Date.UTC(2026, 11, 6, 9, 0, 0)
@@ -67,6 +68,16 @@ describe("the server commands", () => {
     await run("jobs-run")
     expect(posted[0]!.text).toContain("Name a job to run, for example /jobs-run job_run:")
     expect(posted[0]!.text).toContain("job_run Review")
+  })
+
+  test("a run session cannot use /jobs-run or /jobs-pause, because a run must not start or stop jobs", async () => {
+    const asked: string[] = []
+    const harness = await setup({ runNow: async (id: string) => (asked.push(id), job(id)), togglePause: async () => ({ at: NOW }) })
+    rememberJobSession("ses_run")
+    await harness.added.find((command) => command.name === "jobs-run")!.execute({ sessionID: "ses_run", prompt: { text: "job_run" } } as never)
+    await harness.added.find((command) => command.name === "jobs-pause")!.execute({ sessionID: "ses_run", prompt: { text: "" } } as never)
+    expect(harness.posted.every((entry) => String(entry.text).startsWith("JOBS_UNATTENDED: "))).toBe(true)
+    expect(asked).toEqual([])
   })
 
   test("a coded refusal reaches the session as its message, not a stack", async () => {

@@ -33,7 +33,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - The twelve `jobs_*` tools, with the default rules the plugin inserts after each agent's base allow: the reads and the
   two pauses are allowed, and every change asks.
 - `/jobs-run <id>`, which runs a job now, beside `/jobs-status` and `/jobs-pause`.
-- The job dialog (`/jobs`, "Jobs: Status"): `r` refreshes, `p` pauses or resumes every job, and `Esc` closes it.
+- The job dialog (`/jobs`, "Jobs: Status"): `r` refreshes and `Esc` closes it; the palette command "Jobs: Pause or
+  resume every job" stops or restarts every job, and asks first.
 - The full status model: the runner, the keep-alive and its last beat, the jobs, the next five runs, the last ten runs,
   the failures that need attention, the agents that need the block, the host check and one next step.
 - The `keepAliveMinutes` option, so the keep-alive can be lowered below a shorter `experimental.location_idle_timeout`.

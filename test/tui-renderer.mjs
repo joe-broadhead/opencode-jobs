@@ -2,7 +2,8 @@
 // test/unit/tui.test.ts builds the bundle and runs this:
 //   bun --conditions=browser test/tui-renderer.mjs
 // The browser condition loads Solid's reactive build, as the OpenCode TUI does. It covers the three states the exit
-// check names: empty, healthy and stopped, plus r, p, esc and the event subscription that lasts only while it is open.
+// check names: empty, healthy and stopped, plus r, esc, the palette's pause command and the event subscription that
+// lasts only while it is open.
 import assert from "node:assert/strict"
 
 const { createComponent, createSignal, Show } = await import("solid-js")

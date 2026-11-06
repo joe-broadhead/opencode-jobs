@@ -36,11 +36,12 @@ What a run can do is the agent's own `permissions`, and nothing else:
 2. **A job whose agent does not deny by default is refused**, at create and again when a slot starts, with
    `JOBS_AGENT_UNGUARDED` and the block to paste. It is not run into a prompt that would be denied every time, and it is
    not run at all.
-3. **A run never asks.** One `evaluate` hook turns an `ask` inside a session this plugin created for a run into a deny,
-   in the plugin's own words, so an unattended run cannot wait for an approval. The hook matches only those sessions,
-   considers only the permission checks for them, and only ever narrows: an allow stays an allow and a deny stays a
-   deny. It is a deliberate exception to the family's rule against permission hooks, matched by the repository's
-   forbidden-API scan to its one file and to the bundle that inlines it.
+3. **A run never asks.** Two `evaluate` hooks exist, and only these. One turns an `ask` inside a session this plugin
+   created for a run into a deny, in the plugin's own words, so an unattended run cannot wait for an approval; the other
+   turns an `ask` on one of the tools RPC's own script calls in flight into a deny, because no one can answer it. Each
+   matches only its own call or session, considers only those checks, and only ever narrows: an allow stays an allow and
+   a deny stays a deny. They are a deliberate exception to the family's rule against permission hooks, matched by the
+   repository's forbidden-API scan to their two files and to the bundle that inlines both.
 4. **A run cannot schedule.** Inside a job session, the session's own rules deny creating, updating, deleting,
    extending, resuming and running a job, so a prompt that asks for one cannot grow the schedule.
 5. **Changing a job needs a person.** Creating, updating, deleting, running and resuming a job ask for approval, and
@@ -58,7 +59,7 @@ reads with no model, and adds no authority:
 
 - A script names a session that names an agent, and runs as them, under that agent's rules and the session's own.
 - An ask on a script's call is denied, not prompted, because no one is there to answer it: the call is marked, and the
-  one permission hook turns its ask into a deny. The hook only ever tightens.
+  tools RPC's permission hook turns its ask into a deny. The hook only ever tightens.
 - The methods are `describe` and the four reads: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history`. No write, no
   pause and no run-now is a method, even with an allow rule.
 - The RPC is reachable only by callers of the OpenCode server API, who already hold the server's full authority. The

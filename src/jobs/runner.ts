@@ -15,7 +15,7 @@ import { nextRun, slotsBetween } from "./cron.js"
 import type { Executor, RunHandle } from "./execute.js"
 import type { Job } from "./model.js"
 import { catchUp, isLate, overlapOf, retryAfter, shouldPause, startAt, stopReason } from "./policy.js"
-import { putRun, putRunner, readPauseAll, readState, slotISO, type JobState, type RunStatus, type Storage } from "./store.js"
+import { putRun, putRunner, readPauseAll, readState, slotISO, updateState, type JobState, type RunStatus, type Storage } from "./store.js"
 
 /** The longest the loop sleeps: a clock jump, a changed job or a new file is noticed within this. */
 export const SLEEP_CAP = 30_000
@@ -63,8 +63,6 @@ export class Runner {
   private readonly storage: Storage
   private readonly door: ReturnType<typeof doorbell>
   private readonly runs = new Map<string, Set<Tracked>>()
-  /** One chain per job: every state write is a read-modify-write inside it, so none is lost (JR-3). */
-  private readonly chains = new Map<string, Promise<unknown>>()
   private inflight = 0
   private looping = false
   private ticking = false
@@ -160,6 +158,14 @@ export class Runner {
           this.launch(job, queued, now, 1)
           started += 1
         }
+      }
+
+      // A manual run from `jobs_run_now`: its own slot, launched once, with the schedule left exactly as it was (DR-3).
+      const manual = state.manual
+      if (manual !== undefined && manual.at <= now && this.inflightFor(job.id) === 0) {
+        state = await this.writeState(job.id, (current) => ({ ...current, manual: undefined }))
+        this.launch(job, manual.at, now, 1)
+        started += 1
       }
 
       // A failed run's retry, for the same slot, once its backoff has passed (JR-1). The slot record says which attempt
@@ -358,19 +364,7 @@ export class Runner {
    * five-failure pause (JR-3).
    */
   private writeState(job: string, change: (state: JobState) => JobState): Promise<JobState> {
-    return this.withState(job, async () => {
-      const next = change(await readState(this.storage, job))
-      await this.storage.set(`state/${job}`, next as unknown as Parameters<Storage["set"]>[1])
-      return next
-    })
-  }
-
-  /** Runs `work` after every earlier state change for the job, whatever its outcome. */
-  private withState<T>(job: string, work: () => Promise<T>): Promise<T> {
-    const previous = this.chains.get(job) ?? Promise.resolve()
-    const next = previous.then(work, work)
-    this.chains.set(job, next.then(() => undefined, () => undefined))
-    return next
+    return updateState(this.storage, job, change)
   }
 
   private inflightFor(job: string): number {
@@ -391,8 +385,11 @@ export class Runner {
       }
       if (!this.looping || !this.input.active()) break
       await this.input.maintain?.(this.clock.now()).catch(() => undefined)
-      const wait = result.nextDueAt === null ? SLEEP_CAP : Math.min(SLEEP_CAP, Math.max(0, result.nextDueAt - this.clock.now()))
-      await this.door.wait(wait)
+      // A computed wait of zero with nothing started would spin the loop: a slot due but held by the concurrency cap,
+      // or a schedule that cannot produce it. Sleep the cap instead; a finished run rings the doorbell and wakes us.
+      const due = result.nextDueAt
+      const wait = due === null ? SLEEP_CAP : Math.min(SLEEP_CAP, Math.max(0, due - this.clock.now()))
+      await this.door.wait(wait === 0 ? SLEEP_CAP : wait)
     }
     await this.recordRunner({ startedAt, stoppedAt: this.clock.now() })
   }

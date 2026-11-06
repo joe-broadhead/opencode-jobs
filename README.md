@@ -32,7 +32,7 @@ Run `opencode reload`, or restart OpenCode, then run `/jobs-status`.
 | `/jobs-status` | Posts the report: the runner, the jobs, the next five runs, the last ten runs, failures, the agents that need the block, and the next step. |
 | `/jobs-pause` | Pauses every job at once, or resumes them: nothing new starts and a run in flight is interrupted. |
 | `/jobs-run <id>` | Runs a job now, without waiting for its next slot. |
-| `/jobs`, or "Jobs: Status" in the command palette | Opens the same report in a dialog. `r` refreshes and `Esc` closes it. "Jobs: Pause or resume every job" in the palette stops or restarts every job, and asks first. |
+| `/jobs`, or "Jobs: Status" in the command palette | Opens the same report in a dialog. `r` refreshes and `Esc` closes it; the palette command "Jobs: Pause or resume every job" stops or restarts every job, and asks first. |
 
 The model has twelve `jobs_*` tools: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history` read, `jobs_pause` and
 `jobs_pause_all` pause, and `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_run_now`, `jobs_resume` and
@@ -107,8 +107,7 @@ A job whose agent does not deny by default is refused with `JOBS_AGENT_UNGUARDED
 to paste for that agent.
 
 A run never asks. If a tool the agent asks about is called inside a job's session, the plugin denies it with
-`JOBS_UNATTENDED` and the run carries on, so a job can never sit waiting for an approval nobody is there to give. That
-is the plugin's only permission hook, and it touches no session a person opened.
+`JOBS_UNATTENDED` and the run carries on, so a job can never sit waiting for an approval nobody is there to give. The plugin has **two** `evaluate` hooks: this one, on a session it created for a run, and the tools RPC's, on one of its own script calls in flight. Neither ever turns a deny into anything, and neither touches a session it did not create.
 
 A job may only narrow its agent's rules: its `allow` list holds deny rules, never a grant. A job that asks for one is
 refused with `JOBS_ALLOW_WIDENS`.
@@ -144,7 +143,7 @@ Put the plugin entry in the system config: `/Library/Application Support/opencod
 
 ```json
 {
-  "plugins": ["@joe-broadhead/opencode-jobs"],
+  "plugins": [{ "package": "@joe-broadhead/opencode-jobs", "options": { "concurrency": 2 } }],
   "experimental": { "location_idle_timeout": "60 minutes" }
 }
 ```
@@ -175,6 +174,7 @@ Run `/jobs-status` first. Its last line is the next step.
 | `JOBS_TIMEOUT` | A run took longer than its timeout and was interrupted. It counts toward the pause after five failures. |
 | `JOBS_AGENTS_UNKNOWN` | OpenCode could not list its agents, so nothing ran. Restart OpenCode, then run `/jobs-status`. |
 | `JOBS_STORAGE_VERSION` | The job store was written by a newer version of the plugin. Update the plugin, or clear its storage. |
+| `JOBS_UNCHECKED` | A tool that changes something was called with no tool call behind it. Call it from a session, never from a script. |
 | OpenCode: untested | OpenCode is not 2.2.3, 2.2.4 or 2.2.5. Inside `>=2.2.3 <2.3.0` the plugin runs normally; outside it, it runs only because `allowUntestedHost` is set. |
 | `/jobs` is missing | The plugin did not start. Run `/plugins` to see the error. |
 | `OPTIONS_INVALID` | An option is unknown or has a wrong value. The message names the option and the accepted values. |
@@ -183,8 +183,8 @@ Run `/jobs-status` first. Its last line is the next step.
 
 ## What this is not
 
-- **Not a shell or cron replacement.** Core's schedules run a shell command; a job runs an agent under that agent's
-  permissions.
+- **Not a shell or cron replacement.** Core is adding shell schedules; when they land, use those for a shell command. A
+  job runs an agent under that agent's permissions.
 - **Not an OS scheduler.** Nothing runs while OpenCode is closed.
 - **Not a workflow engine.** A job may start a durable, multi-step `wfl` workflow; it does not implement one.
 - **Not a timer.** Utilities' project timers are polled with `utilities_timer_check`; a job happens by itself.
