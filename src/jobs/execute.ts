@@ -106,7 +106,10 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
   // A run needs an agent that denies by default (D7). One that has become unguarded since the job was created is
   // refused per slot rather than run into a denial: the slot is recorded as skipped, with the code and the block to
   // paste, and the schedule moves on.
-  const refusal = await guardAgent(input.agents, job.agent, job.target.directory ?? input.location)
+  // The agent is the target directory's configuration. Only a job that targets another directory says so explicitly:
+  // the leader's own location is what an omitted location resolves, and a host between reloads resolves it more reliably.
+  const target = job.target.directory
+  const refusal = await guardAgent(input.agents, job.agent, target === undefined || target === input.location ? undefined : target)
   if (refusal !== undefined) {
     const record = await putRun(storage, {
       job: job.id,

@@ -31,6 +31,10 @@ export interface ActionInput {
   readonly ready: boolean
 }
 
+/** The directory an agent resolves in, when the job targets one other than the leader's own; undefined otherwise. */
+const elsewhere = (job: Job, input: Pick<ActionInput, "location">) =>
+  job.target.directory === undefined || job.target.directory === input.location ? undefined : job.target.directory
+
 /** Refuses any change to a store this build does not understand, so a downgrade never writes it (JR-2). */
 export function ensureWritable(input: Pick<ActionInput, "ready">): void {
   if (input.ready) return
@@ -80,7 +84,7 @@ export async function createJob(input: ActionInput, definition: CreateInput): Pr
   ensureWritable(input)
   const now = input.clock.now()
   const job = parseJob(definition, { now, timezone: input.timezone, id: nextId(now), source: "tool", createdBy: "agent" })
-  const refusal = await guardAgent(input.agent, job.agent, job.target.directory ?? input.location)
+  const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input))
   if (refusal !== undefined) refuseAgent(refusal)
   await putJob(input.storage, job)
   const state = await readState(input.storage, job.id)
@@ -95,7 +99,7 @@ export async function changeJob(input: ActionInput, id: string, patch: CreateInp
   const existing = mutable(await findJob(input, id), "change")
   const now = input.clock.now()
   const job = updateJob(existing, patch, { now, timezone: input.timezone, id: existing.id, source: existing.source, createdAt: existing.createdAt, createdBy: existing.createdBy })
-  const refusal = await guardAgent(input.agent, job.agent, job.target.directory ?? input.location)
+  const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input))
   if (refusal !== undefined) refuseAgent(refusal)
   await putJob(input.storage, job)
   // A changed schedule starts from now: the old slot belonged to the old schedule.
