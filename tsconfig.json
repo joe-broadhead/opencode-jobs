@@ -12,10 +12,12 @@
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
     "resolveJsonModule": true,
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
     "allowJs": true,
     "skipLibCheck": true,
     "types": ["node", "bun"],
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts"]
 }
