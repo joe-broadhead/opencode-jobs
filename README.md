@@ -96,6 +96,13 @@ The first rule denies everything, because an agent's own rules are applied after
 everything, and the later rule wins. The rules after it are the profile: reading, searching and the plugin's own reads,
 and nothing that writes. Add a rule only when a job needs it, and add it to that agent alone.
 
+| What | Default rule |
+| --- | --- |
+| `jobs_status`, `jobs_list`, `jobs_get`, `jobs_history` | allowed |
+| `jobs_pause`, `jobs_pause_all` | allowed: pausing only stops work |
+| `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_run_now`, `jobs_resume`, `jobs_extend` | **ask**, and the prompt is the yes |
+| anything a job's own run does | the agent's rules; a run never asks |
+
 A job whose agent does not deny by default is refused with `JOBS_AGENT_UNGUARDED`, and `/jobs-status` prints the block
 to paste for that agent.
 
