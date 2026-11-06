@@ -14,7 +14,7 @@ import type { Clock } from "./clock.js"
 import { DEFAULTS, type Job } from "./model.js"
 import { getRun, putRun, scanRuns, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
 import { isTerminal, summaryOf, type Session } from "./execute.js"
-import { rememberJobSession } from "./safety.js"
+import { forgetJobSession, rememberJobSession } from "./safety.js"
 
 /** How long adoption waits for a busy run before its own interrupt, when the remaining timeout is spent. */
 const MIN_WAIT = 1_000
@@ -64,6 +64,7 @@ export async function adopt(input: AdoptInput): Promise<Adopted> {
     const before = await getRun(storage, current.job, current.slot)
     if (before === undefined || isTerminal(before.status)) continue
     const outcome = outcomeOf(verdict.status)
+    if (current.sessionID !== undefined) forgetJobSession(current.sessionID)
     finalised.push(
       await putRun(storage, {
         ...before,

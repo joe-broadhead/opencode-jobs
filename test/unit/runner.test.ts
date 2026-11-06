@@ -319,3 +319,127 @@ describe("the kill switch", () => {
     expect(await readPauseAll(s.storage.storage)).toBeUndefined()
   })
 })
+
+describe("retries and the pause", () => {
+  /** An executor that fails its first N attempts of a slot, then succeeds, recording the attempt it was asked for. */
+  function flaky(failures: number) {
+    const seen: { slot: number; attempt: number }[] = []
+    const make = (storage: ReturnType<typeof memoryStorage>): Executor => async (request) => {
+      seen.push({ slot: request.slot, attempt: request.attempt })
+      const status: RunStatus = seen.length <= failures ? "failed" : "succeeded"
+      await putRun(storage.storage, { job: request.job.id, slot: new Date(request.slot).toISOString(), status, late: request.late, attempt: request.attempt })
+      return { claimed: true, status } satisfies RunResult
+    }
+    return { seen, make }
+  }
+
+  test("a failed run is retried for the same slot, with the next attempt, after its backoff", async () => {
+    const storage = memoryStorage()
+    const clock = testClock(START, { instantBelow: 0 })
+    const runs = flaky(1)
+    const job = parseJob(
+      { name: "Flaky", schedule: { every: "5 minutes" }, action: { type: "prompt", text: "go" }, agent: "jobs", policy: { retries: { max: 1, backoff: "1m" } } },
+      { now: START, timezone: "UTC", id: "flaky", source: "tool", createdBy: "user" },
+    )
+    const runner = new Runner({ storage: storage.storage, clock: clock.clock, jobs: async () => [job], execute: runs.make(storage), active: () => true, concurrency: 2, location: "/work" })
+    await runner.tick(START)
+    clock.advance(5 * MINUTE)
+    await runner.tick(clock.now())
+    await runner.settle()
+    expect(runs.seen).toEqual([{ slot: START + 5 * MINUTE, attempt: 1 }])
+    expect((await readState(storage.storage, "flaky")).retry).toMatchObject({ slot: START + 5 * MINUTE, attempt: 2, at: START + 6 * MINUTE })
+
+    // The backoff has not passed yet: nothing runs.
+    clock.advance(30_000)
+    await runner.tick(clock.now())
+    await runner.settle()
+    expect(runs.seen).toHaveLength(1)
+
+    clock.advance(30_000)
+    await runner.tick(clock.now())
+    await runner.settle()
+    expect(runs.seen).toEqual([
+      { slot: START + 5 * MINUTE, attempt: 1 },
+      { slot: START + 5 * MINUTE, attempt: 2 },
+    ])
+    expect((await readState(storage.storage, "flaky")).retry).toBeUndefined()
+    // The retry's record is the same slot, at attempt 2, and no third run follows.
+    const records = (await scanRuns(storage.storage)).filter((record) => record.job === "flaky")
+    expect(records).toHaveLength(1)
+    expect(records[0]!.attempt).toBe(2)
+    expect(records[0]!.status).toBe("succeeded")
+  })
+
+  test("five timed-out runs in a row pause the job, and five interruptions do not", async () => {
+    const storage = memoryStorage()
+    const clock = testClock(START, { instantBelow: 0 })
+    const runs = immediate("timed_out")
+    const job = parseJob(
+      { name: "Slow", schedule: { every: "1 minute" }, action: { type: "prompt", text: "go" }, agent: "jobs" },
+      { now: START, timezone: "UTC", id: "slow", source: "tool", createdBy: "user" },
+    )
+    const runner = new Runner({ storage: storage.storage, clock: clock.clock, jobs: async () => [job], execute: runs.make(storage), active: () => true, concurrency: 2, location: "/work" })
+    for (let minute = 0; minute <= 5; minute += 1) {
+      await runner.tick(START + minute * MINUTE)
+      await runner.settle()
+    }
+    const paused = await readState(storage.storage, "slow")
+    expect(paused.consecutiveFailures).toBe(5)
+    expect(paused.paused?.reason).toBe("Five runs in a row failed.")
+    expect(paused.runCount).toBe(5)
+  })
+
+  test("runs that finish together all count, and the fifth failure pauses once", async () => {
+    const storage = memoryStorage()
+    const clock = testClock(START, { instantBelow: 0 })
+    const pending: (() => void)[] = []
+    const execute: Executor = (request) =>
+      new Promise((resolve) => {
+        request.onSession?.({ slot: request.slot, sessionID: `ses_${pending.length + 1}`, interrupt: async () => undefined })
+        pending.push(() => resolve({ claimed: true, status: "failed" }))
+        void putRun(storage.storage, { job: request.job.id, slot: new Date(request.slot).toISOString(), status: "failed", late: false, attempt: 1 })
+      })
+    const job = parseJob(
+      { name: "Burst", schedule: { every: "1 minute" }, action: { type: "prompt", text: "go" }, agent: "jobs", policy: { overlap: "allow" } },
+      { now: START, timezone: "UTC", id: "burst", source: "tool", createdBy: "user" },
+    )
+    const runner = new Runner({ storage: storage.storage, clock: clock.clock, jobs: async () => [job], execute, active: () => true, concurrency: 8, location: "/work" })
+    for (let minute = 0; minute <= 5; minute += 1) await runner.tick(START + minute * MINUTE)
+    // Five runs were started across five slots, and all finish in the same turn.
+    expect(pending).toHaveLength(5)
+    for (const release of pending.splice(0)) release()
+    await runner.settle()
+    const state = await readState(storage.storage, "burst")
+    expect(state.runCount).toBe(5)
+    expect(state.consecutiveFailures).toBe(5)
+    expect(state.paused).toMatchObject({ reason: "Five runs in a row failed." })
+  })
+})
+
+describe("a long gap", () => {
+  test("takes one pass per MAX_SLOTS slots, records each pass's gap once, and runs one late slot at the end", async () => {
+    const s = setup({ jobs: [job({ schedule: { every: "1 minute" } })] })
+    // Six hours away: 360 slots missed, more than one pass can hold (MAX_SLOTS is 100).
+    await s.runner.tick(START)
+    await s.runner.tick(START + 360 * MINUTE)
+    await s.runner.settle()
+    const first = (await scanRuns(s.storage.storage)).filter((record) => record.status === "missed")
+    // The whole first pass is older than maxLate, so it is recorded once, not run and not 100 records.
+    expect(first).toHaveLength(1)
+    expect(first[0]).toMatchObject({ status: "missed", count: 100 })
+    expect(s.asked).toHaveLength(0)
+
+    // Each further pass handles the next MAX_SLOTS, until the newest slots are within maxLate: one late run.
+    for (let pass = 0; pass < 4; pass += 1) {
+      await s.runner.tick(START + 360 * MINUTE)
+      await s.runner.settle()
+    }
+    expect(s.asked.length).toBeGreaterThanOrEqual(1)
+    // The run is the newest slot within maxLate, which is at or just before now.
+    expect(START + 360 * MINUTE - s.asked[0]!.slot).toBeLessThanOrEqual(60 * MINUTE)
+    const missed = (await scanRuns(s.storage.storage)).filter((record) => record.status === "missed")
+    expect(missed.length).toBeGreaterThan(1)
+    // Every slot of the gap is either run or counted in one collapsed record; none is replayed.
+    expect(missed.reduce((sum, record) => sum + (record.count ?? 0), 0) + s.asked.length).toBe(360)
+  })
+})

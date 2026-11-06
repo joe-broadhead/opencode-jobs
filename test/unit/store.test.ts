@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { parseJob } from "../../src/jobs/model.js"
+import { DAY, parseJob } from "../../src/jobs/model.js"
 import {
   MAX_RUNS,
   RETENTION_MS,
@@ -9,6 +9,7 @@ import {
   migrate,
   prune,
   pruneRuns,
+  pruneWithSessions,
   putJob,
   putRun,
   putState,
@@ -180,5 +181,45 @@ describe("retention", () => {
     expect(pruned.remove).toHaveLength(55)
     expect(await scanRuns(storage)).toHaveLength(1)
     expect(keys().filter((key) => key.startsWith("run/"))).toHaveLength(1)
+  })
+})
+
+describe("retention and its sessions", () => {
+  const at = (daysAgo: number) => NOW - daysAgo * DAY
+  const record = (slot: string, status: RunRecord["status"], sessionID?: string) => ({ job: "five", slot, status, late: false, attempt: 1, ...(sessionID === undefined ? {} : { sessionID }) })
+
+  test("a pruned record's session goes with it, and a busy one stays", async () => {
+    const storage = memoryStorage()
+    const old = new Date(at(31)).toISOString()
+    const newest = new Date(at(0)).toISOString()
+    const running = new Date(at(40)).toISOString()
+    await putRun(storage.storage, record(old, "succeeded", "ses_old"))
+    await putRun(storage.storage, record(newest, "succeeded", "ses_new"))
+    await putRun(storage.storage, record(running, "running", "ses_running"))
+    const removed: string[] = []
+    const session = {
+      get: async ({ sessionID }: { sessionID: string }) => (sessionID === "ses_running" ? { outcome: undefined } : { outcome: "succeeded" }),
+      remove: async ({ sessionID }: { sessionID: string }) => void removed.push(sessionID),
+    }
+    const report = await pruneWithSessions(storage.storage, session, NOW)
+    expect(report.removed.map((entry) => entry.slot)).toEqual([old])
+    expect(report.sessions).toEqual(["ses_old"])
+    expect(report.keptBusy).toEqual([])
+    expect(removed).toEqual(["ses_old"])
+    // The running record and the newest one are kept, as D9 says.
+    expect((await scanRuns(storage.storage)).map((entry) => entry.slot).sort()).toEqual([running, newest].sort())
+  })
+
+  test("a busy session named by a pruned record is left alone", async () => {
+    const storage = memoryStorage()
+    const old = new Date(at(31)).toISOString()
+    await putRun(storage.storage, record(old, "succeeded", "ses_busy"))
+    // A newer record, so the old one is not the job's newest, which retention always keeps.
+    await putRun(storage.storage, record(new Date(at(0)).toISOString(), "succeeded"))
+    const removed: string[] = []
+    const report = await pruneWithSessions(storage.storage, { get: async () => ({ outcome: undefined }), remove: async ({ sessionID }) => void removed.push(sessionID) }, NOW)
+    expect(report.removed).toHaveLength(1)
+    expect(report.keptBusy).toEqual(["ses_busy"])
+    expect(removed).toEqual([])
   })
 })

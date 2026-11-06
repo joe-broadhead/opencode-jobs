@@ -14,7 +14,7 @@ import { doorbell } from "./clock.js"
 import { nextRun, slotsBetween } from "./cron.js"
 import type { Executor, RunHandle } from "./execute.js"
 import type { Job } from "./model.js"
-import { catchUp, isLate, overlapOf, shouldPause, startAt, stopReason } from "./policy.js"
+import { catchUp, isLate, overlapOf, retryAfter, shouldPause, startAt, stopReason } from "./policy.js"
 import { putRun, putRunner, readPauseAll, readState, slotISO, type JobState, type RunStatus, type Storage } from "./store.js"
 
 /** The longest the loop sleeps: a clock jump, a changed job or a new file is noticed within this. */
@@ -36,6 +36,8 @@ export interface RunnerInput {
   readonly location: string
   /** Called after a state change, so a surface can refresh without polling. */
   readonly onChange?: () => void
+  /** Retention and its sessions, run on start and (throttled by the caller) once a pass. */
+  readonly maintain?: (now: number) => Promise<void>
 }
 
 export interface Tick {
@@ -61,6 +63,8 @@ export class Runner {
   private readonly storage: Storage
   private readonly door: ReturnType<typeof doorbell>
   private readonly runs = new Map<string, Set<Tracked>>()
+  /** One chain per job: every state write is a read-modify-write inside it, so none is lost (JR-3). */
+  private readonly chains = new Map<string, Promise<unknown>>()
   private inflight = 0
   private looping = false
   private ticking = false
@@ -152,11 +156,19 @@ export class Runner {
       const queued = state.queuedSlot
       if (queued !== undefined && queued <= now && this.inflightFor(job.id) === 0) {
         if ((await this.decide(job, queued, state, now)) === "run") {
-          state = { ...state, queuedSlot: undefined }
-          await this.write(state)
-          this.launch(job, queued, now)
+          state = await this.writeState(job.id, (current) => ({ ...current, queuedSlot: undefined }))
+          this.launch(job, queued, now, 1)
           started += 1
         }
+      }
+
+      // A failed run's retry, for the same slot, once its backoff has passed (JR-1). The slot record says which attempt
+      // it is, so a retry can never be confused with the first run.
+      const retry = state.retry
+      if (retry !== undefined && retry.at <= now && this.inflightFor(job.id) === 0) {
+        state = await this.writeState(job.id, (current) => ({ ...current, retry: undefined }))
+        this.launch(job, retry.slot, now, retry.attempt)
+        started += 1
       }
 
       if (state.nextDueAt === undefined) {
@@ -165,8 +177,7 @@ export class Runner {
           await this.finishJob(state)
           continue
         }
-        state = { ...state, nextDueAt: first }
-        await this.write(state)
+        state = await this.writeState(job.id, (current) => ({ ...current, nextDueAt: first }))
       }
 
       const stop = stopReason(job, state, now)
@@ -183,7 +194,9 @@ export class Runner {
         continue
       }
 
-      // The slots this pass handles: the oldest unhandled one up to now. Catch-up keeps at most one and collapses the rest.
+      // The slots this pass handles: the oldest unhandled one up to now, at most MAX_SLOTS. Catch-up keeps at most one
+      // and collapses the rest of *this pass* into one record; a gap longer than MAX_SLOTS takes another pass, and
+      // therefore another record.
       const slots = slotsBetween(job.schedule, due - 1, now, MAX_SLOTS)
       if (slots.length === 0) {
         consider(due)
@@ -193,7 +206,7 @@ export class Runner {
       if (plan.gap !== null) await this.recordMissed(job, plan.gap)
 
       if (plan.run === null) {
-        state = await this.advance(job, state, slots[slots.length - 1]!)
+        state = await this.advance(job, slots[slots.length - 1]!)
         consider(state.nextDueAt)
       } else if (startAt(job, plan.run) > now) {
         // Jitter delays the start but never moves the slot.
@@ -201,7 +214,7 @@ export class Runner {
       } else {
         const decision = await this.decide(job, plan.run, state, now)
         if (decision !== "full") {
-          state = await this.advance(job, decision === "queue" ? { ...state, queuedSlot: plan.run } : state, plan.run)
+          state = await this.advance(job, plan.run, decision === "queue" ? { queuedSlot: plan.run } : {})
           consider(state.nextDueAt)
           if (decision === "run") {
             this.launch(job, plan.run, now)
@@ -260,8 +273,8 @@ export class Runner {
     return "run"
   }
 
-  /** Starts one run in the background and tracks it until it finishes. */
-  private launch(job: Job, slot: number, now: number): void {
+  /** Starts one run in the background and tracks it until it finishes. `attempt` is 1, or a retry's count. */
+  private launch(job: Job, slot: number, now: number, attempt = 1): void {
     const handle: Tracked = { slot, interrupt: async () => undefined }
     const tracked = this.runs.get(job.id) ?? new Set<Tracked>()
     tracked.add(handle)
@@ -272,7 +285,7 @@ export class Runner {
       .execute({
         job,
         slot,
-        attempt: 1,
+        attempt,
         late: isLate(slot, now),
         active: this.input.active,
         onSession: (session: RunHandle) => {
@@ -282,8 +295,8 @@ export class Runner {
           if (handle.halted === true) void session.interrupt()
         },
       })
-      .then((result) => this.finished(job, slot, result.status, result.claimed))
-      .catch(() => this.finished(job, slot, "failed", true))
+      .then((result) => this.finished(job, slot, result.status, result.claimed, attempt))
+      .catch(() => this.finished(job, slot, "failed", true, attempt))
       .finally(() => {
         tracked.delete(handle)
         if (tracked.size === 0) this.runs.delete(job.id)
@@ -293,40 +306,44 @@ export class Runner {
       })
   }
 
-  /** What a finished run does to the job's state: a count, the failure streak, and the pause after five failures. */
-  private async finished(job: Job, slot: number, status: RunStatus, claimed: boolean): Promise<void> {
+  /**
+   * What a finished run does to the job's state: a count, the failure streak, the pause after five failures, and the
+   * retry the policy allows. A timeout counts toward the pause, because a job that cannot finish is spending every slot;
+   * an interruption does not, because a `replace` or the kill switch produced it (JR-7).
+   */
+  private async finished(job: Job, slot: number, status: RunStatus, claimed: boolean, attempt: number): Promise<void> {
     // A slot refused before it ran (an agent that is not guarded) is recorded, but it is not a run: nothing counts.
     if (!claimed || !this.input.active() || status === "skipped") return
-    const state = await readState(this.storage, job.id)
-    const failed = status === "failed"
-    const consecutiveFailures = failed ? state.consecutiveFailures + 1 : 0
-    const paused = shouldPause(consecutiveFailures) ? { at: this.clock.now(), reason: "Five runs in a row failed." } : state.paused
-    await this.write({
-      ...state,
-      runCount: state.runCount + 1,
-      lastRun: slotISO(slot),
-      consecutiveFailures,
-      ...(paused === undefined ? {} : { paused }),
+    const failed = status === "failed" || status === "timed_out"
+    const outcome = status === "failed" || status === "timed_out" || status === "interrupted" ? status : "succeeded"
+    const retry = status === "failed" ? retryAfter(job, { attempt, outcome }) : null
+    await this.writeState(job.id, (state) => {
+      const consecutiveFailures = failed ? state.consecutiveFailures + 1 : 0
+      const paused = shouldPause(consecutiveFailures) ? { at: this.clock.now(), reason: "Five runs in a row failed." } : state.paused
+      return {
+        ...state,
+        runCount: state.runCount + 1,
+        lastRun: slotISO(slot),
+        consecutiveFailures,
+        ...(paused === undefined ? {} : { paused }),
+        ...(retry === null || paused !== undefined ? { retry: undefined } : { retry: { slot, attempt: retry.attempt, at: this.clock.now() + retry.delayMs } }),
+      }
     })
     this.input.onChange?.()
   }
 
-  /** Moves a job past a slot, or ends it when the schedule has no slot left. */
-  private async advance(job: Job, state: JobState, after: number): Promise<JobState> {
+  /** Moves a job past a slot, with a patch such as `queue-one`'s remembered slot, or ends it when no slot is left. */
+  private async advance(job: Job, after: number, patch: Partial<JobState> = {}): Promise<JobState> {
     const next = nextRun(job.schedule, after)
-    if (next === null) return this.finishJob(state)
-    const updated: JobState = { ...state, nextDueAt: next }
-    await this.write(updated)
-    return updated
+    if (next === null) return this.finishJob({ ...patch, job: job.id } as JobState)
+    return this.writeState(job.id, (current) => ({ ...current, ...patch, nextDueAt: next }))
   }
 
   private async finishJob(state: JobState): Promise<JobState> {
-    const updated: JobState = { ...state, done: true, nextDueAt: undefined }
-    await this.write(updated)
-    return updated
+    return this.writeState(state.job, (current) => ({ ...current, done: true, nextDueAt: undefined }))
   }
 
-  private async recordSkipped(job: Job, slot: number, reason: "overlap" | "paused" | "expired" | "ended", now: number): Promise<void> {
+  private async recordSkipped(job: Job, slot: number, reason: "overlap" | "expired" | "ended", now: number): Promise<void> {
     await putRun(this.storage, { job: job.id, slot: slotISO(slot), status: "skipped", reason, late: isLate(slot, now), attempt: 1 })
   }
 
@@ -335,8 +352,25 @@ export class Runner {
     await putRun(this.storage, { job: job.id, slot: slotISO(gap.to), status: "missed", late: true, attempt: 1, count: gap.count, from: slotISO(gap.from) })
   }
 
-  private async write(state: JobState): Promise<void> {
-    await this.storage.set(`state/${state.job}`, state as unknown as Parameters<Storage["set"]>[1])
+  /**
+   * Every state change goes through this: the job's own chain, then a fresh read, the change, and one write. Two runs of
+   * one job finishing together, or a finish racing a schedule advance, can no longer erase each other's counters or the
+   * five-failure pause (JR-3).
+   */
+  private writeState(job: string, change: (state: JobState) => JobState): Promise<JobState> {
+    return this.withState(job, async () => {
+      const next = change(await readState(this.storage, job))
+      await this.storage.set(`state/${job}`, next as unknown as Parameters<Storage["set"]>[1])
+      return next
+    })
+  }
+
+  /** Runs `work` after every earlier state change for the job, whatever its outcome. */
+  private withState<T>(job: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.chains.get(job) ?? Promise.resolve()
+    const next = previous.then(work, work)
+    this.chains.set(job, next.then(() => undefined, () => undefined))
+    return next
   }
 
   private inflightFor(job: string): number {
@@ -347,6 +381,7 @@ export class Runner {
   private async run(): Promise<void> {
     const startedAt = this.clock.now()
     await this.recordRunner({ startedAt })
+    await this.input.maintain?.(startedAt).catch(() => undefined)
     while (this.looping && this.input.active()) {
       let result: Tick
       try {
@@ -355,6 +390,7 @@ export class Runner {
         result = { started: 0, nextDueAt: null }
       }
       if (!this.looping || !this.input.active()) break
+      await this.input.maintain?.(this.clock.now()).catch(() => undefined)
       const wait = result.nextDueAt === null ? SLEEP_CAP : Math.min(SLEEP_CAP, Math.max(0, result.nextDueAt - this.clock.now()))
       await this.door.wait(wait)
     }

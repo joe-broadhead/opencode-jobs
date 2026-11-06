@@ -13,9 +13,9 @@ import type { Clock } from "./clock.js"
 import type { Session } from "./execute.js"
 import { MINUTE } from "./model.js"
 
-/** The period's range: the option is in minutes, and a beat is never closer than a minute or further than an hour. */
+/** The period's range: the option is in minutes and stays below a 60-minute idle timeout, so a beat is 1 to 59 minutes. */
 export const MIN_PERIOD = MINUTE
-export const MAX_PERIOD = 60 * MINUTE
+export const MAX_PERIOD = 59 * MINUTE
 
 /**
  * The period the `keepAliveMinutes` option asks for, in milliseconds (D2). It must stay below the user's

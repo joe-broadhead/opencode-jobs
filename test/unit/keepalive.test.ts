@@ -9,7 +9,8 @@ describe("the keep-alive period", () => {
   test.each([
     ["the documented 20 minutes", 20, 20 * MINUTE],
     ["the smallest option is a minute", 1, MINUTE],
-    ["the largest option is an hour", 60, MAX_PERIOD],
+    ["the largest option is 59 minutes", 59, 59 * MINUTE],
+    ["a value above the option range is capped", 60, 59 * MINUTE],
     ["a value below the range is a minute", 0, MIN_PERIOD],
     ["a value above it is an hour", 600, MAX_PERIOD],
     ["a fraction of a minute keeps its value", 1.5, 90_000],

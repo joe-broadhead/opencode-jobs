@@ -21,7 +21,7 @@ export const DEFAULT_OPTIONS: Options = { enabled: true, allowUntestedHost: fals
 export const MAX_CONCURRENCY = 8
 /** The keep-alive's range: at least a minute, and no more than an hour. */
 export const MIN_KEEPALIVE_MINUTES = 1
-export const MAX_KEEPALIVE_MINUTES = 60
+export const MAX_KEEPALIVE_MINUTES = 59
 
 const EXAMPLE = `"plugins": [{ "package": "@joe-broadhead/opencode-jobs", "options": { "enabled": true } }]`
 const ACCEPTED = {

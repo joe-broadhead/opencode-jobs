@@ -90,14 +90,7 @@ export function insertDefaultRules(rules: Rule[]): void {
   rules.splice(base + 1, 0, ...DEFAULT_RULES.map((rule) => ({ ...rule })))
 }
 
-/**
- * An agent is unguarded when it has a base allow, lacks the default rules, and its own rules would let a `jobs_` tool
- * run without asking. Jobs inserts the rules itself, so this is only for reporting: an agent whose rules already ask
- * or deny for every jobs tool needs no fix.
- */
-export function isUnguarded(rules: readonly Rule[]): boolean {
-  return rules.some((rule) => same(rule, BASE_ALLOW)) && !hasDefaultRules(rules) && evaluate(rules, UNNAMED_TOOL) === "allow"
-}
+
 
 /** The paste-ready config for one agent: the same block the docs show, for status and a refusal's next step. */
 export function agentBlock(agent: string): { readonly agents: Record<string, { readonly permissions: readonly Rule[] }> } {
@@ -129,19 +122,29 @@ export function isGuarded(rules: readonly Rule[]): boolean {
 
 /** Why a job could not run as an agent: what is wrong, without the code or the next step. */
 export interface AgentRefusal {
-  readonly code: "JOBS_AGENT_UNGUARDED"
+  /** Unguarded or missing: the job's agent needs the block. Agents unknown: the host could not be asked. */
+  readonly code: "JOBS_AGENT_UNGUARDED" | "JOBS_AGENTS_UNKNOWN"
   readonly what: string
   readonly nextStep: string
   /** The coded message, for a caller that has no path of its own. */
   readonly message: string
 }
 
+/** The next step when the host could not say which agents exist: not a configuration answer, a restart. */
+const UNKNOWN_NEXT = "Restart OpenCode, then run /jobs-status again. Nothing runs while the agents are unknown."
+
 const nextStep = (agent: string) =>
   `Give the agent ${JSON.stringify(agent)} the read-only block, starting with {"action":"*","resource":"*","effect":"deny"}, or point the job at an agent that has it. Run /jobs-status to print the block.`
 
 /** One refusal, with its code, so the message and the code cannot drift apart. */
-function agentRefusal(what: string, next: string): AgentRefusal {
-  return { code: "JOBS_AGENT_UNGUARDED", what, nextStep: next, message: errorText("JOBS_AGENT_UNGUARDED", what, next) }
+function agentRefusal(what: string, next: string, code: AgentRefusal["code"] = "JOBS_AGENT_UNGUARDED"): AgentRefusal {
+  return { code, what, nextStep: next, message: messageOf(code, what, next) }
+}
+
+/** The coded message, by hand for each code, because the code is part of the text and must be documented. */
+function messageOf(code: AgentRefusal["code"], what: string, next: string): string {
+  if (code === "JOBS_AGENTS_UNKNOWN") return errorText("JOBS_AGENTS_UNKNOWN", what, next)
+  return errorText("JOBS_AGENT_UNGUARDED", what, next)
 }
 
 /** The refusal for one agent id, or undefined when the agent exists and denies by default. */
@@ -161,16 +164,15 @@ function notFound(error: unknown): boolean {
 }
 
 /**
- * The refusal for one agent, read from the host now. A lookup that fails for another reason (a host between reloads, a
- * transient API error) is not a refusal: the evaluate hook is the backstop, and guessing here would stop a job for a
- * blip.
+ * The refusal for one agent, read from the host now. A host that cannot answer at all is its own refusal, not a pass:
+ * nothing runs while the agents are unknown, and the next step is a restart rather than a permissions change.
  */
 export async function guardAgent(agent: Pick<Plugin.Context["agent"], "get">, id: string): Promise<AgentRefusal | undefined> {
   const info = await agent.get({ agentID: id }).then(
     (found) => found.data,
     (error: unknown) => (notFound(error) ? null : undefined),
   )
-  if (info === undefined) return undefined
+  if (info === undefined) return agentRefusal(`The agents could not be read, so the job ${JSON.stringify(id)} was not checked and did not run.`, UNKNOWN_NEXT, "JOBS_AGENTS_UNKNOWN")
   if (info === null) return agentRefusal(`There is no agent named ${JSON.stringify(id)}, so a job cannot run as it.`, nextStep(id))
   return refusalFor([info], id)
 }

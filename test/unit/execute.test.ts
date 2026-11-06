@@ -209,6 +209,27 @@ describe("one run", () => {
   })
 })
 
+describe("a job's notify target", () => {
+  test("gets the run's outcome, labelled as job output, and a notify that fails does not fail the run", async () => {
+    const setup = input()
+    const result = await setup.run({
+      job: job({ action: { type: "prompt", text: "say ok" }, notify: { sessionID: "ses_notify" } }),
+    })
+    expect(result.status).toBe("succeeded")
+    const posted = setup.session.synthetics.find((entry) => (entry as { sessionID?: string }).sessionID === "ses_notify") as { text: string } | undefined
+    expect(posted?.text).toContain('Job output from "Five" at')
+    expect(posted?.text).toContain("succeeded")
+    expect(posted?.text).toContain("ok")
+
+    const failing = input()
+    failing.session.session.synthetic = async () => {
+      throw new Error("the notify session is gone")
+    }
+    const still = await failing.run({ job: job({ notify: { sessionID: "ses_gone" } }) })
+    expect(still.status).toBe("succeeded")
+  })
+})
+
 describe("the agent a run needs", () => {
   test("a slot whose agent does not deny by default is refused and recorded, and no session is made", async () => {
     const storage = memoryStorage()
@@ -241,10 +262,13 @@ describe("the agent a run needs", () => {
     expect((await getRun(setup.storage.storage, "five", new Date(START).toISOString()))?.error).toContain("There is no agent named")
   })
 
-  test("a lookup that fails for another reason is not a refusal: the run happens, and the hook is the backstop", async () => {
+  test("a lookup that fails for another reason refuses the slot: nothing runs while the agents are unknown", async () => {
     const setup = input()
     const result = await setup.run({ agents: agentsFake({ fail: true }) })
-    expect(result.status).toBe("succeeded")
-    expect(setup.session.created).toHaveLength(2)
+    expect(result.status).toBe("skipped")
+    expect(setup.session.created).toHaveLength(0)
+    const record = await getRun(setup.storage.storage, "five", new Date(START).toISOString())
+    expect(record).toMatchObject({ status: "skipped", reason: "unguarded" })
+    expect(record?.error).toStartWith("JOBS_AGENTS_UNKNOWN: ")
   })
 })

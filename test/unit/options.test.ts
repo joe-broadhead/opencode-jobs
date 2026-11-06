@@ -16,9 +16,9 @@ describe("parseOptions", () => {
 
   test.each([
     [{ maxRunsPerJob: 2 }, 'Unknown option "maxRunsPerJob". Accepted options: "enabled", "allowUntestedHost", "timezone", "concurrency", "keepAliveMinutes"'],
-    [{ keepAliveMinutes: 0 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 60 (20 by default), found 0. Keep it below experimental.location_idle_timeout'],
-    [{ keepAliveMinutes: 61 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 60 (20 by default), found 61. Keep it below experimental.location_idle_timeout'],
-    [{ keepAliveMinutes: 1.5 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 60 (20 by default), found 1.5. Keep it below experimental.location_idle_timeout'],
+    [{ keepAliveMinutes: 0 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 59 (20 by default), found 0. Keep it below experimental.location_idle_timeout'],
+    [{ keepAliveMinutes: 60 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 59 (20 by default), found 60. Keep it below experimental.location_idle_timeout'],
+    [{ keepAliveMinutes: 1.5 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 59 (20 by default), found 1.5. Keep it below experimental.location_idle_timeout'],
     [{ concurrency: 0 }, 'The option "concurrency" must be a whole number from 1 to 8 (2 by default), found 0'],
     [{ concurrency: 9 }, 'The option "concurrency" must be a whole number from 1 to 8 (2 by default), found 9'],
     [{ concurrency: 1.5 }, 'The option "concurrency" must be a whole number from 1 to 8 (2 by default), found 1.5'],

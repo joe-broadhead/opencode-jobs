@@ -8,10 +8,11 @@
  */
 import type { Plugin } from "@opencode/plugin"
 import { formatCompact, compactStatus } from "../status.js"
+import { jobsError } from "../constants.js"
 import { changeJob, createJob, deleteJob, extendJob, findJob, pauseEveryJob, pauseJob, runNow, type ActionInput } from "./actions.js"
 import { parseInstant, type Job } from "./model.js"
 import type { Report } from "./report.js"
-import { readPauseAll, readState, scanRuns } from "./store.js"
+import { readState, scanRuns } from "./store.js"
 import { runView } from "./report.js"
 
 /** What the tools and the tools RPC read and change. */
@@ -21,13 +22,14 @@ export interface ToolInput extends ActionInput {
   readonly assert: Plugin.Context["permission"]["assert"]
 }
 
-/** The tool call a permission check is made for: the host's own source, so an evaluate hook can tell the call apart. */
-export interface CallSource {
-  readonly sessionID: string
-  readonly agent: string
-  readonly messageID: string
-  readonly id: string
-}
+/**
+ * Who a permission check is made for. A tool call carries the host's own source, so an evaluate hook can tell the call
+ * apart. A script calling a read through the tools RPC has no tool call behind it: it is marked `script`, and the one
+ * evaluate hook turns an ask on that mark into a deny, because no one can answer it.
+ */
+export type CallSource =
+  | { readonly sessionID: string; readonly agent: string; readonly messageID: string; readonly id: string }
+  | { readonly sessionID: string; readonly agent: string; readonly script: true }
 
 /** One tool's answer: the JSON value and the text a model reads. */
 export interface ToolResult {
@@ -126,25 +128,32 @@ export const DESCRIPTIONS: Readonly<Record<ToolName, string>> = {
   update: "Replace fields of a job you created. A job defined by a file is edited in its file instead.",
   delete: "Delete a job you created. Its run records stay for history.",
   run_now: "Run a job now, without waiting for its next slot.",
-  resume: "Resume a paused job, so its schedule runs again.",
+  resume: "Resume a paused job, or every job with { all: true }, so the schedule runs again. Resuming asks.",
   extend: "Move a job's expiry, which is the deliberate act that keeps a model-created job alive.",
 }
 
 const compact = (value: unknown) => JSON.stringify(value)
 
+/** The metadata key a script's request carries, so the evaluate hook refuses its ask instead of leaving it waiting. */
+export const SCRIPT_MARK = "script"
+
 /**
  * Asks the host for one tool's action, as the call that is making it. OpenCode does not check a plugin tool's
  * `options.permission` before running it, so the tool asserts it itself; a saved approval or an allow rule passes, an
- * ask prompts, and a deny refuses. A script's method passes no call, because no one can answer a prompt there.
+ * ask prompts, and a deny refuses. A script call is marked instead of sourced, so the hook can deny its ask. A change
+ * with no call to check is refused: never a silent write.
  */
-async function authorize(input: ToolInput, name: ToolName, call?: CallSource): Promise<void> {
-  if (call === undefined) return
+async function authorize(input: ToolInput, name: ToolName, call: CallSource | undefined): Promise<void> {
+  if (call === undefined) {
+    if ((READ_TOOLS as readonly string[]).includes(name)) return
+    throw jobsError("JOBS_UNCHECKED", `The tool ${JSON.stringify(name)} changes something and was called with nothing to check its permission against.`, `Call it from a session, where its action can be checked, and never from a script.`)
+  }
   await input.assert({
     sessionID: call.sessionID,
     agent: call.agent,
     action: actionOf(name),
     resources: ["*"],
-    source: { type: "tool", messageID: call.messageID, id: call.id },
+    ...("script" in call ? { save: ["*"], metadata: { [SCRIPT_MARK]: true } } : { source: { type: "tool", messageID: call.messageID, id: call.id } }),
   })
 }
 
@@ -186,6 +195,7 @@ export async function runJobTool(input: ToolInput, name: ToolName, raw: unknown,
         ...(args["id"] === undefined ? {} : { id: String(args["id"]) }),
         ...(args["limit"] === undefined ? {} : { limit: Number(args["limit"]) }),
         ...(args["since"] === undefined ? {} : { since: String(args["since"]) }),
+        summaries: true,
       })
       return { output: { runs: [...runs] }, text: compact({ runs: runs.map((run) => `${run.name} ${run.status}${run.durationMs === undefined ? "" : ` ${run.durationMs}ms`}`) }) }
     }
@@ -215,6 +225,13 @@ export async function runJobTool(input: ToolInput, name: ToolName, raw: unknown,
       return { output: { id: job.id, name: job.name, queued: true }, text: `Queued ${job.name} to run now.` }
     }
     case "resume": {
+      if (args["all"] === true) {
+        const paused = await pauseEveryJob(input, false)
+        return { output: { paused: paused !== undefined }, text: "Every job runs to its schedule again." }
+      }
+      if (args["id"] === undefined) {
+        throw jobsError("JOBS_TARGET_MISSING", `jobs_resume was given neither a job id nor { "all": true }.`, `Give the job's id, or { "all": true } to resume every job.`)
+      }
       const job = await pauseJob(input, id(), false)
       return { output: { id: job.id, name: job.name, paused: false }, text: `Resumed ${job.name} (${job.id}).` }
     }
@@ -260,13 +277,6 @@ export function toolTransform(input: ToolInput) {
   }
 }
 
-/** Whether every job is paused now, which is what the dialog's label and the status row read. */
-export async function allPaused(input: Pick<ToolInput, "storage">): Promise<boolean> {
-  return readPauseAll(input.storage).then(
-    (record) => record !== undefined,
-    () => false,
-  )
-}
 
 /**
  * The four reads as the tools RPC's methods: the same schema, the same run and the same action as the tool, so a script
@@ -279,6 +289,7 @@ export function ownedMethods(input: ToolInput) {
     description: DESCRIPTIONS[name],
     input: SCHEMAS[name],
     output: { type: "object" } as const,
-    run: (value: unknown) => runJobTool(input, name, value).then((result) => result.output),
+    // A script call is marked, not sourced: the assert runs, and the one evaluate hook denies its ask.
+    run: (value: unknown, call: { sessionID: string; agent: string }) => runJobTool(input, name, value, { sessionID: call.sessionID, agent: call.agent, script: true }).then((result) => result.output),
   }))
 }

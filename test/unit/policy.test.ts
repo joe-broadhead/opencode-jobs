@@ -66,15 +66,13 @@ describe("the retry table", () => {
 })
 
 describe("the ends and expiry table", () => {
-  const state = (overrides: { runCount?: number; paused?: boolean } = {}) => ({
+  const state = (overrides: { runCount?: number } = {}) => ({
     job: "job_1",
     runCount: overrides.runCount ?? 0,
     consecutiveFailures: 0,
-    ...(overrides.paused === true ? { paused: { at: NOW - MINUTE } } : {}),
   })
 
   test.each([
-    ["a paused job does not run", { ends: {}, expires: undefined }, { paused: true }, "paused"],
     ["an expired job does not run", { ends: {}, expires: NOW - 1 }, {}, "expired"],
     ["a live job runs", { ends: {}, expires: NOW + 1 }, {}, null],
     ["ends.at at this instant has ended", { ends: { at: NOW }, expires: undefined }, {}, "ended"],

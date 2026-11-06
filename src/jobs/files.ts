@@ -45,6 +45,24 @@ export type AgentGuard = (agent: string) => { readonly code: string; readonly wh
 
 const FRONT_MATTER = "---"
 
+/**
+ * What the watch compares to decide whether to parse again: every job file's path, modification time and size, in the
+ * project folder and the global one. An unreadable folder counts as absent, so the next scan notices a file arriving.
+ */
+export async function jobFileSignature(sources: Pick<JobFileSources, "projects" | "global">): Promise<string> {
+  const global = sources.global ?? join(homedir(), ".config", "opencode", "jobs")
+  const folders = [...sources.projects.map((project) => join(project, ".opencode", "jobs")), global]
+  const parts: string[] = []
+  for (const folder of folders) {
+    const listed = await readdir(folder, { withFileTypes: true }).catch(() => [])
+    for (const entry of listed.filter((item) => item.isFile() && item.name.endsWith(".md") && !item.name.startsWith(".")).sort((left, right) => left.name.localeCompare(right.name))) {
+      const info = await stat(join(folder, entry.name)).catch(() => undefined)
+      if (info !== undefined) parts.push(`${join(folder, entry.name)}:${info.mtimeMs}:${info.size}`)
+    }
+  }
+  return parts.join("|")
+}
+
 /** Every job file of every known project and the global folder, parsed and validated. */
 export async function readJobFiles(sources: JobFileSources): Promise<JobFiles> {
   const invalid: InvalidFile[] = []

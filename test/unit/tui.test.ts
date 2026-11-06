@@ -28,9 +28,8 @@ describe("the dialog's text", () => {
     expect(dialogText({ state: "unavailable", message: "STATUS_UNAVAILABLE: no.", nextStep: "Restart OpenCode." })).toBe("STATUS_UNAVAILABLE: no.\n\nNext step: Restart OpenCode.")
   })
 
-  test("says p pauses, or resumes, every job", () => {
-    expect(keysLine(false)).toBe("r refresh · p pause all · esc close")
-    expect(keysLine(true)).toBe("r refresh · p resume · esc close")
+  test("names exactly the standard's keys, because the kill switch is a palette command that asks", () => {
+    expect(keysLine()).toBe("r refresh · esc close")
   })
 
   test("keeps the RPC's coded next step, and falls back to the restart step", () => {

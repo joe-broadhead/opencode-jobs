@@ -74,11 +74,10 @@ export function overlapOf(job: Pick<Job, "policy">, running: { readonly slot: nu
   }
 }
 
-export type StopReason = "paused" | "expired" | "ended"
+export type StopReason = "expired" | "ended"
 
-/** Why the job should not run this slot: it is paused, expired, or has ended. */
-export function stopReason(job: Pick<Job, "expires" | "ends">, state: Pick<JobState, "paused" | "runCount">, now: number): StopReason | null {
-  if (state.paused !== undefined) return "paused"
+/** Why the job should not run this slot: it has expired or ended. A paused job is skipped before this is asked. */
+export function stopReason(job: Pick<Job, "expires" | "ends">, state: Pick<JobState, "runCount">, now: number): StopReason | null {
   if (job.expires !== undefined && now >= job.expires) return "expired"
   if (job.ends.at !== undefined && now >= job.ends.at) return "ended"
   if (job.ends.times !== undefined && state.runCount >= job.ends.times) return "ended"

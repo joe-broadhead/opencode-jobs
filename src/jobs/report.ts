@@ -22,10 +22,11 @@ import {
 import type { HostCheck } from "../host-version.js"
 import type { Clock } from "./clock.js"
 import { nextRun } from "./cron.js"
-import { readJobFiles, type AgentGuard, type JobFiles } from "./files.js"
+import { jobFileSignature, readJobFiles, type AgentGuard, type JobFiles } from "./files.js"
 import type { Job } from "./model.js"
 import { jobOutput } from "./safety.js"
 import { readBeat, readJobs, readPauseAll, readRunner, readState, scanRuns, type RunRecord } from "./store.js"
+import type { FileWatch } from "./watch.js"
 
 /** What a report reads: the store, the location, the clock, and the agents the files are checked against. */
 export interface ReportInput {
@@ -39,6 +40,8 @@ export interface ReportInput {
   readonly keepAliveMinutes: number
   /** Setup problems that are not a file's, such as a store from a newer build. */
   readonly problems?: readonly string[]
+  /** The job-file watch: the folders are re-scanned at most once a minute, and re-parsed only when a file changed. */
+  readonly watch?: FileWatch
 }
 
 /** Every job this instance knows, and what the file reader refused. */
@@ -47,6 +50,8 @@ export interface Source {
   /** The store's tool jobs, with a file job of the same id winning, because the file is the definition a project commits. */
   readonly jobs: readonly Job[]
   readonly agents: readonly AgentInfo[]
+  /** False when the host could not say which agents exist: nothing is refused on a guess, and status says unknown. */
+  readonly known: boolean
   readonly guard?: AgentGuard
 }
 
@@ -74,34 +79,45 @@ const RECENT = 10
 const NEXT = 5
 const TOP_FAILURES = 5
 
-/** The agents as the host reports them now; an empty list means no check, and the evaluate hook is the backstop. */
-export async function readAgents(agent: Pick<Plugin.Context["agent"], "list">): Promise<readonly AgentInfo[]> {
+/** What the host says about its agents: the list, and whether it could answer at all. */
+export interface AgentList {
+  readonly agents: readonly AgentInfo[]
+  readonly known: boolean
+}
+
+/** The agents as the host reports them now. A host that cannot answer is `known: false`, never "no agents". */
+export async function readAgents(agent: Pick<Plugin.Context["agent"], "list">): Promise<AgentList> {
   return agent.list().then(
-    (found) => found.data,
-    () => [],
+    (found) => ({ agents: found.data, known: true }),
+    () => ({ agents: [], known: false }),
   )
 }
 
 /** Every job this instance knows, read now: a refused file is reported, never thrown, and never becomes a job. */
 export async function readSource(input: Omit<ReportInput, "host" | "enabled" | "keepAliveMinutes">): Promise<Source> {
-  const agents = await readAgents(input.agent)
-  const guard = agents.length === 0 ? undefined : (id: string) => refusalFor(agents, id)
+  const listed = await readAgents(input.agent)
+  const agents = listed.agents
+  const guard = listed.known ? (id: string) => refusalFor(agents, id) : undefined
   const stored = await readJobs(input.storage).catch(() => [])
-  const files = await readJobFiles({
+  const sources = {
     now: input.clock.now(),
     timezone: input.timezone,
     projects: [input.location],
     ...(guard === undefined ? {} : { guard }),
-  }).catch(() => ({ jobs: [], invalid: [], refused: [] }))
+  }
+  const scan = () => readJobFiles(sources).catch(() => ({ jobs: [], invalid: [], refused: [] }))
+  const files = input.watch === undefined ? await scan() : await input.watch.read(() => jobFileSignature(sources), scan)
   const byId = new Map(files.jobs.map((job) => [job.id, job] as const))
   for (const job of stored) if (!byId.has(job.id)) byId.set(job.id, job)
-  return { files, jobs: [...byId.values()], agents, ...(guard === undefined ? {} : { guard }) }
+  return { files, jobs: [...byId.values()], agents, known: listed.known, ...(guard === undefined ? {} : { guard }) }
 }
 
 export interface HistoryInput {
   readonly id?: string
   readonly limit?: number
   readonly since?: string
+  /** True only for the `jobs_history` tool: the status RPC and status carry no run output (JR-4). */
+  readonly summaries?: boolean
 }
 
 export interface Report {
@@ -137,7 +153,7 @@ export function createReport(input: ReportInput): Report {
 
   const status = async (): Promise<Status> => {
     const now = input.clock.now()
-    const { files, jobs, agents } = await source()
+    const { files, jobs, agents, known } = await source()
     const names = new Map(jobs.map((job) => [job.id, job.name] as const))
     const states = new Map(await Promise.all(jobs.map(async (job) => [job.id, await readState(input.storage, job.id)] as const)))
     const records = await scanRuns(input.storage).catch(() => [])
@@ -174,7 +190,8 @@ export function createReport(input: ReportInput): Report {
       nextRuns: nextRuns.slice(0, NEXT),
       recentRuns: records.slice(0, RECENT).map((record) => runView(record, names)),
       failures: failuresOf(records, names),
-      unguardedAgents: unguardedAgents(agents, [...jobs.map((job) => job.agent), ...files.refused]),
+      unguardedAgents: known ? unguardedAgents(agents, [...jobs.map((job) => job.agent), ...files.refused]) : [],
+      ...(known ? {} : { agentsUnknown: true }),
       problems: [...(input.problems ?? []), ...files.invalid.map((file) => file.message)],
     })
   }
@@ -193,7 +210,7 @@ export function createReport(input: ReportInput): Report {
     const names = new Map(jobs.map((job) => [job.id, job.name] as const))
     const since = filter.since === undefined ? undefined : Date.parse(filter.since)
     const records = (await scanRuns(input.storage, filter.id)).filter((record) => since === undefined || !Number.isFinite(since) || Date.parse(record.slot) >= since)
-    return records.slice(0, Math.max(1, Math.min(50, filter.limit ?? 20))).map((record) => runView(record, names))
+    return records.slice(0, Math.max(1, Math.min(50, filter.limit ?? 20))).map((record) => runView(record, names, filter.summaries === true))
   }
 
   return {
@@ -205,8 +222,12 @@ export function createReport(input: ReportInput): Report {
   }
 }
 
-/** One run, as the surfaces name it: its job's name now, or its id when the job is gone. */
-export function runView(record: RunRecord, names: ReadonlyMap<string, string>): RunView {
+/**
+ * One run, as the surfaces name it: its job's name now, or its id when the job is gone. A run's summary is job output
+ * and is returned only where the docs say it lives: the `jobs_history` tool. Status and its RPC name what a run did,
+ * never what was said in it.
+ */
+export function runView(record: RunRecord, names: ReadonlyMap<string, string>, summaries = false): RunView {
   const name = names.get(record.job) ?? record.job
   const durationMs = record.startedAt !== undefined && record.endedAt !== undefined ? Math.max(0, record.endedAt - record.startedAt) : undefined
   return {
@@ -220,7 +241,7 @@ export function runView(record: RunRecord, names: ReadonlyMap<string, string>): 
     attempt: record.attempt,
     ...(record.reason === undefined ? {} : { reason: record.reason }),
     ...(record.count === undefined ? {} : { count: record.count }),
-    ...(record.summary === undefined ? {} : { summary: jobOutput(record.summary, { name, at: record.slot }) }),
+    ...(summaries && record.summary !== undefined ? { summary: jobOutput(record.summary, { name, at: record.slot }) } : {}),
   }
 }
 

@@ -72,6 +72,8 @@ export interface StatusFacts {
   readonly liveness?: LivenessView
   /** Agents whose own rules would run a job tool without asking; empty when there are none. */
   readonly unguardedAgents?: readonly string[]
+  /** The host could not say which agents exist, so nothing ran and nothing can be said about them. */
+  readonly agentsUnknown?: boolean
   /** The kill switch, when every job is paused. */
   readonly paused?: PauseRecord
   readonly nextRuns?: readonly NextRunView[]
@@ -101,6 +103,8 @@ export interface Status {
   readonly failures: readonly FailureView[]
   /** Agents where a job tool would run without asking; empty when there are none. */
   readonly unguardedAgents: readonly string[]
+  /** True when the host's agent list could not be read: nothing runs, and the row says so. */
+  readonly agentsUnknown?: boolean
   /** The read-only block, present with unguarded agents: the paste-ready profile for the agent named. */
   readonly permissionsBlock?: readonly Rule[]
   readonly problems: readonly string[]
@@ -128,6 +132,7 @@ export function buildStatus(facts: StatusFacts): Status {
     recentRuns: facts.recentRuns ?? [],
     failures: facts.failures ?? [],
     unguardedAgents: agents,
+    ...(facts.agentsUnknown === true ? { agentsUnknown: true } : {}),
     ...(agents.length === 0 ? {} : { permissionsBlock: AGENT_BLOCK.map((rule) => ({ ...rule })) }),
     problems: facts.problems ?? [],
   }
@@ -140,6 +145,7 @@ function nextStepOf(status: Omit<Status, "nextStep">): string {
   // A problem reads `CODE: What happened. Next step: What to do.`; its own next step becomes the status's.
   const problem = status.problems[0]?.split(" Next step: ")[1]
   if (problem) return problem
+  if (status.agentsUnknown === true) return "Restart OpenCode, then run /jobs-status again. Nothing runs while the agents are unknown."
   const failure = status.failures[0]
   if (failure !== undefined) return `Run /${COMMAND_STEM}-status after its next slot, or pause it with the jobs_pause tool, and fix ${failure.code} in the run's session.`
   const agent = status.unguardedAgents[0]
@@ -233,6 +239,7 @@ export function formatStatus(status: Status) {
 /** The agents that need the block, and the block itself, which is the one place the full profile is printed. */
 function agentRows(status: Status): string[] {
   const { unguardedAgents: agents, permissionsBlock: block } = status
+  if (status.agentsUnknown === true) return ["- Agents without default rules: unknown; the agent list could not be read"]
   const row = `- Agents without default rules: ${agents.length ? agents.join(", ") : "none"}`
   if (agents.length === 0 || block === undefined) return [row]
   return [row, ...agents.map((agent) => `  Paste this for ${JSON.stringify(agent)} into opencode.json:\n${agentBlockJSON(agent)}`)]
@@ -245,6 +252,8 @@ export interface CompactStatus {
   readonly paused: boolean
   /** How many agents need the read-only block; the names and the block are in `/jobs-status`. */
   readonly unguardedAgents: number
+  /** The host could not say which agents exist; nothing runs until it can. */
+  readonly agentsUnknown?: boolean
   readonly nextStep: string
 }
 
@@ -254,6 +263,7 @@ export function compactStatus(status: Status): CompactStatus {
     jobs: status.jobs,
     paused: status.paused !== undefined,
     unguardedAgents: status.unguardedAgents.length,
+    ...(status.agentsUnknown === true ? { agentsUnknown: true } : {}),
     nextStep: status.nextStep,
   }
 }
@@ -289,7 +299,6 @@ const RUN = {
     reason: { type: "string" },
     attempt: { type: "integer", minimum: 1 },
     count: { type: "integer", minimum: 1 },
-    summary: { type: "string" },
   },
 } as const
 
@@ -331,6 +340,7 @@ export const STATUS_OUTPUT = {
       items: { type: "object", required: ["name", "code", "count"], properties: { name: { type: "string" }, code: { type: "string" }, count: { type: "integer", minimum: 1 } } },
     },
     unguardedAgents: strings,
+    agentsUnknown: { type: "boolean" },
     permissionsBlock: { type: "array", items: rule },
     problems: strings,
     nextStep: { type: "string" },
