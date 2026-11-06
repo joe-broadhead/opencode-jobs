@@ -21,6 +21,8 @@ export interface InvalidFile {
 export interface JobFiles {
   readonly jobs: readonly Job[]
   readonly invalid: readonly InvalidFile[]
+  /** The agents a job named that the guard refused, once each: status reports them with the block to paste. */
+  readonly refused: readonly string[]
 }
 
 export interface JobFileSources {
@@ -31,7 +33,15 @@ export interface JobFileSources {
   readonly projects: readonly string[]
   /** The global folder. `~/.config/opencode/jobs` when absent. */
   readonly global?: string
+  /**
+   * Why a job's agent cannot run it, when it cannot: the guarded-agent check at create (D7). A file whose agent is
+   * refused never becomes a job, so it is listed like any other invalid file, with the code and the line.
+   */
+  readonly guard?: AgentGuard
 }
+
+/** The guarded-agent check as a file read needs it: the refusal for one agent id, or undefined when it may run. */
+export type AgentGuard = (agent: string) => { readonly code: string; readonly what: string; readonly nextStep: string } | undefined
 
 const FRONT_MATTER = "---"
 
@@ -39,7 +49,18 @@ const FRONT_MATTER = "---"
 export async function readJobFiles(sources: JobFileSources): Promise<JobFiles> {
   const invalid: InvalidFile[] = []
   const jobs: Job[] = []
+  const refused: string[] = []
   const byId = new Map<string, string>()
+  // The guard is asked once per file, and its refusals are remembered for status, whichever files they came from.
+  const given = sources.guard
+  const guard: AgentGuard | undefined =
+    given === undefined
+      ? undefined
+      : (agent) => {
+          const refusal = given(agent)
+          if (refusal !== undefined && !refused.includes(agent)) refused.push(agent)
+          return refusal
+        }
   const global = sources.global ?? join(homedir(), ".config", "opencode", "jobs")
   const folders = [...sources.projects.map((project) => ({ folder: join(project, ".opencode", "jobs"), directory: project })), { folder: global, directory: undefined }]
 
@@ -47,7 +68,7 @@ export async function readJobFiles(sources: JobFileSources): Promise<JobFiles> {
     const listed = await markdown(folder)
     if (listed.problem !== undefined) invalid.push(listed.problem)
     for (const path of listed.paths) {
-      const parsed = await readJobFile(path, { now: sources.now, timezone: sources.timezone, directory })
+      const parsed = await readJobFile(path, { now: sources.now, timezone: sources.timezone, directory, ...(guard === undefined ? {} : { guard }) })
       if ("message" in parsed) {
         invalid.push(parsed)
         continue
@@ -61,7 +82,7 @@ export async function readJobFiles(sources: JobFileSources): Promise<JobFiles> {
       jobs.push(parsed)
     }
   }
-  return { jobs, invalid }
+  return { jobs, invalid, refused }
 }
 
 interface Listed {
@@ -88,6 +109,7 @@ interface ReadContext {
   readonly now: number
   readonly timezone: string
   readonly directory?: string
+  readonly guard?: AgentGuard
 }
 
 /** One file, as a job or as a refusal that names its path and the line at fault. */
@@ -158,7 +180,7 @@ async function readJobFile(path: string, context: ReadContext): Promise<Job | In
   }
 
   try {
-    return parseJob({ ...fields, action }, {
+    const job = parseJob({ ...fields, action }, {
       now: context.now,
       timezone: context.timezone,
       id: slug(basename(path, ".md")),
@@ -167,15 +189,20 @@ async function readJobFile(path: string, context: ReadContext): Promise<Job | In
       createdBy: "user",
       ...(context.directory === undefined ? {} : { directory: context.directory }),
     })
+    const refusal = context.guard?.(job.agent)
+    if (refusal !== undefined) return invalidAt(path, line("agent"), refusal.what, refusal.nextStep, refusal.code)
+    return job
   } catch (error) {
     if (!(error instanceof JobInputError)) throw error
-    return invalidAt(path, line(error.field), error.what, error.nextStep)
+    // A refused grant keeps its own code: it is not a malformed file, and its next step names the agent's file.
+    const code = error.code === "JOBS_ALLOW_WIDENS" ? error.code : "JOBS_INVALID_FILE"
+    return invalidAt(path, line(error.field), error.what, error.nextStep, code)
   }
 }
 
-const invalidAt = (path: string, line: number, what: string, nextStep: string): InvalidFile => ({
+const invalidAt = (path: string, line: number, what: string, nextStep: string, code = "JOBS_INVALID_FILE"): InvalidFile => ({
   path,
-  message: errorText("JOBS_INVALID_FILE", `${path}:${line}: ${what}`, nextStep),
+  message: errorText(code, `${path}:${line}: ${what}`, nextStep),
 })
 
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))

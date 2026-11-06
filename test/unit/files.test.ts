@@ -2,14 +2,21 @@ import { describe, expect, test } from "bun:test"
 import { statSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { readJobFiles } from "../../src/jobs/files.js"
+import { readJobFiles, type AgentGuard } from "../../src/jobs/files.js"
 
 const FIXTURES = fileURLToPath(new URL("../fixtures/jobs/", import.meta.url))
 const NOW = Date.UTC(2026, 11, 6, 12, 0, 0)
 const PROJECT = join(FIXTURES, "project")
 const GLOBAL = join(FIXTURES, "global")
-const read = (overrides: { projects?: string[]; global?: string; timezone?: string } = {}) =>
-  readJobFiles({ now: NOW, timezone: "UTC", projects: overrides.projects ?? [PROJECT], global: overrides.global ?? GLOBAL, ...(overrides.timezone === undefined ? {} : { timezone: overrides.timezone }) })
+const read = (overrides: { projects?: string[]; global?: string; timezone?: string; guard?: AgentGuard } = {}) =>
+  readJobFiles({
+    now: NOW,
+    timezone: "UTC",
+    projects: overrides.projects ?? [PROJECT],
+    global: overrides.global ?? GLOBAL,
+    ...(overrides.timezone === undefined ? {} : { timezone: overrides.timezone }),
+    ...(overrides.guard === undefined ? {} : { guard: overrides.guard }),
+  })
 
 describe("job files", () => {
   test("a project file's flat schedule, zone, agent and policy are read, and the body is the prompt", async () => {
@@ -67,6 +74,15 @@ describe("job files", () => {
     expect(invalid[0]!.path).toBe(join(GLOBAL, "notes.txt"))
     expect(invalid[0]!.message).toStartWith(`JOBS_INVALID_FILE: ${join(GLOBAL, "notes.txt")}:1: The job folder could not be read`)
   })
+
+  test("a job whose agent is not guarded is refused at create, with the code, its path and the agent's line", async () => {
+    const { jobs, invalid } = await read({
+      guard: (agent) => (agent === "jobs" ? { code: "JOBS_AGENT_UNGUARDED", what: `The agent "jobs" does not deny by default.`, nextStep: "Give it the read-only block." } : undefined),
+    })
+    expect(jobs.map((job) => job.id)).toEqual(["nightly"])
+    const refused = invalid.find((file) => file.path === join(PROJECT, ".opencode/jobs/morning.md"))
+    expect(refused!.message).toBe(`JOBS_AGENT_UNGUARDED: ${join(PROJECT, ".opencode/jobs/morning.md")}:5: The agent "jobs" does not deny by default. Next step: Give it the read-only block.`)
+  })
 })
 
 describe("invalid job files", () => {
@@ -81,11 +97,13 @@ describe("invalid job files", () => {
     ["unclosed.md", 1],
   ]
 
-  test.each(expected)("%s is refused with JOBS_INVALID_FILE, its path and line %i", async (name, line) => {
+  test.each(expected)("%s is refused with its code, path and line %i", async (name, line) => {
     const { invalid } = await read()
     const found = invalid.find((file) => file.path === join(GLOBAL, name))
     expect(found).toBeDefined()
-    expect(found!.message).toStartWith(`JOBS_INVALID_FILE: ${join(GLOBAL, name)}:${line}: `)
+    // A refused grant keeps its own code; every other malformed file is a JOBS_INVALID_FILE.
+    const code = name === "allow-widens.md" ? "JOBS_ALLOW_WIDENS" : "JOBS_INVALID_FILE"
+    expect(found!.message).toStartWith(`${code}: ${join(GLOBAL, name)}:${line}: `)
     expect(found!.message).toContain(" Next step: ")
     expect(found!.message.endsWith(".")).toBe(true)
   })
