@@ -38,9 +38,9 @@ npm run check
 
 | Stage | What it does |
 | --- | --- |
-| `typecheck` | `tsc --noEmit` over `src/` and `test/`, strict, with unused names as errors |
-| `unit` | `bun test ./test/unit`: every module in `src/`, the status model, both RPC contracts and the docs |
-| `build` | `node scripts/build.mjs`: deletes `dist/` and bundles `src/index.ts` and `src/tui.ts` with esbuild into the self-contained `dist/index.js` and `dist/tui.js`. Fails if a bundle imports anything the host does not provide |
+| `typecheck` | `tsc --noEmit` over `src/` (both `.ts` and the TUI's `.tsx`) and `test/`, strict, with unused names as errors |
+| `unit` | `bun test ./test/unit`: every module in `src/`, the twelve tools, the status model, both RPC contracts, the docs, and the built TUI under OpenTUI 0.8's test renderer |
+| `build` | `node scripts/build.mjs`: deletes `dist/` and bundles `src/index.ts` and `src/tui.tsx` with esbuild into the self-contained `dist/index.js` and `dist/tui.js`. The TUI goes through Solid's universal transform first, so its props stay reactive. Fails if a bundle imports anything the host does not provide |
 | `host` | `bun test ./test/host`: the plugin inside an embedded OpenCode host, once on each tested release (`@opencode/sdk` 2.2.3, 2.2.4 and 2.2.5) |
 | `pack` | `bun test ./test/pack`: builds, packs and installs the package, imports both entry points, and loads it in stock OpenCode 2.2.3, 2.2.4 and 2.2.5 |
 | `forbidden` | `node scripts/check-forbidden.mjs`: scans `src/`, `test/`, `scripts/` and `dist/` for forbidden APIs and machine-local paths |

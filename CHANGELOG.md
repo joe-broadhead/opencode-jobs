@@ -30,6 +30,14 @@ All notable changes to this project are documented here. The format follows [Kee
 - The kill switch: `/jobs-pause` pauses every job at once, interrupting what is in flight and starting nothing, and
   status says so until it is run again.
 - Job output framed as job output: a reminder posted into a session says what it is and where it came from.
+- The twelve `jobs_*` tools, with the default rules the plugin inserts after each agent's base allow: the reads and the
+  two pauses are allowed, and every change asks.
+- `/jobs-run <id>`, which runs a job now, beside `/jobs-status` and `/jobs-pause`.
+- The job dialog (`/jobs`, "Jobs: Status"): `r` refreshes, `p` pauses or resumes every job, and `Esc` closes it.
+- The full status model: the runner, the keep-alive and its last beat, the jobs, the next five runs, the last ten runs,
+  the failures that need attention, the agents that need the block, the host check and one next step.
+- The `keepAliveMinutes` option, so the keep-alive can be lowered below a shorter `experimental.location_idle_timeout`.
+- `docs/architecture.md`, the morning-brief example and the `jobs` skill.
 - The family icon kit's mark and its 128 and 256 pixel rasters, declared in `opencode.icons` and exported from the
   package, with the `jelly` declaration documented in `docs/jelly.md`. Jobs declares no vendor, and the package carries
   no vendor marks.

@@ -28,9 +28,10 @@ Vulnerabilities in OpenCode itself are out of scope. Report those to the OpenCod
 
 What a run can do is the agent's own `permissions`, and nothing else:
 
-1. **A job names one agent**, and that agent's rules are the run's profile. The plugin ships no rules, inserts none into
-   any agent, and never weakens a deny. The documented profile is read-only and starts with a blanket deny, because an
-   agent's own rules are applied after OpenCode's base rule that allows everything.
+1. **A job names one agent**, and that agent's rules are the run's profile. The plugin inserts one block of rules that
+   ask — `jobs_*` asks, and the four reads and the two pauses are allowed — after each agent's base rule, and it never
+   weakens a deny. The documented profile is read-only and starts with a blanket deny, because an agent's own rules are
+   applied after OpenCode's base rule that allows everything.
 2. **A job whose agent does not deny by default is refused**, at create and again when a slot starts, with
    `JOBS_AGENT_UNGUARDED` and the block to paste. It is not run into a prompt that would be denied every time, and it is
    not run at all.
@@ -57,6 +58,7 @@ reads with no model, and adds no authority:
 - A script names a session that names an agent, and runs as them, under that agent's rules and the session's own.
 - An ask on a script's call is denied, not prompted, because no one is there to answer it. The permission hook that
   does this touches only one of the RPC's own calls in flight, and only ever turns an ask into a deny.
-- Only reads are methods. No write and no run-now is a method, even with an allow rule.
+- The methods are `describe` and the four reads: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history`. No write, no
+  pause and no run-now is a method, even with an allow rule.
 - The RPC is reachable only by callers of the OpenCode server API, who already hold the server's full authority. The
   session is not a login: it scopes a script to what its agent may do.

@@ -29,14 +29,45 @@ Run `opencode reload`, or restart OpenCode, then run `/jobs-status`.
 
 | Command | What it does |
 | --- | --- |
-| `/jobs-status` | Posts the status report into the session: how many jobs there are, when they next run, the agents without the default rules, the OpenCode check and the next step. |
+| `/jobs-status` | Posts the report: the runner, the jobs, the next five runs, the last ten runs, failures, the agents that need the block, and the next step. |
 | `/jobs-pause` | Pauses every job at once, or resumes them: nothing new starts and a run in flight is interrupted. |
-| `/jobs`, or "Jobs: Status" in the command palette | Opens the same report in a dialog. Press `r` to refresh it and `Esc` to close it. |
+| `/jobs-run <id>` | Runs a job now, without waiting for its next slot. |
+| `/jobs`, or "Jobs: Status" in the command palette | Opens the same report in a dialog. `r` refreshes, `p` pauses or resumes every job, and `Esc` closes it. |
+
+The model has twelve `jobs_*` tools: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history` read, `jobs_pause` and
+`jobs_pause_all` pause, and `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_run_now`, `jobs_resume` and
+`jobs_extend` change a job. Pausing is always allowed; every other change asks for approval, and the prompt is the yes.
+
+A job is one of three things:
+
+- a **prompt** the job's agent runs in a fresh session;
+- a **command**, such as `/morning`, run in that session;
+- a **reminder**, posted into a session you name with no model turn.
+
+A job that belongs to a project is a Markdown file in `.opencode/jobs/`, so it is reviewed and committed like any other
+file:
+
+```markdown
+---
+name: Morning brief
+cron: "0 7 * * 1-5"
+tz: Europe/London
+agent: jobs
+---
+Summarise yesterday's work and today's calendar in five lines.
+```
+
+The body is the prompt. [Configuration](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/configuration.md)
+covers every field, and [the morning example](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/examples/morning.md)
+is a full file to copy.
 
 ## Permissions
 
-A job runs as the agent it names, and that agent's own `permissions` are its whole profile. Jobs ships no permission
-rules and changes none of yours. The profile to start from is read-only:
+This plugin ships no agent profile of its own and inserts no grant into any agent. It inserts one block of *rules that
+ask*: after each agent's base rule, `jobs_*` asks, and the four reads and the two pauses are allowed. Everything a job
+may actually do comes from the agent the job names.
+
+The read-only profile to start from, pasted into `opencode.json`:
 
 ```json
 {
@@ -70,19 +101,30 @@ A run never asks. If a tool the agent asks about is called inside a job's sessio
 `JOBS_UNATTENDED` and the run carries on, so a job can never sit waiting for an approval nobody is there to give. That
 is the plugin's only permission hook, and it touches no session a person opened.
 
+A job may only narrow its agent's rules: its `allow` list holds deny rules, never a grant. A job that asks for one is
+refused with `JOBS_ALLOW_WIDENS`.
+
 [Configuration](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/configuration.md#permissions) explains
-each rule and the recipes that widen one action.
+each rule and the recipes that add one action for one agent.
 
 ## Configure
 
-Set options with the object form of the plugin entry:
+Set options with the object form of the plugin entry. Every option is optional.
 
 ```json
 {
-  "plugins": [{ "package": "@joe-broadhead/opencode-jobs", "options": { "enabled": true } }]
+  "plugins": [
+    {
+      "package": "@joe-broadhead/opencode-jobs",
+      "options": { "enabled": true, "concurrency": 2, "keepAliveMinutes": 20 }
+    }
+  ]
 }
 ```
 
+`enabled` turns the runner off without unloading the plugin. `concurrency` bounds how many runs are in flight at once.
+`keepAliveMinutes` is how often the plugin touches its location to keep jobs running: it must stay below your
+`experimental.location_idle_timeout`, and 20 minutes is below the default of 60.
 [docs/configuration.md](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/configuration.md) lists every
 option, the job file format and every error.
 
@@ -93,7 +135,8 @@ Put the plugin entry in the system config: `/Library/Application Support/opencod
 
 ```json
 {
-  "plugins": ["@joe-broadhead/opencode-jobs"]
+  "plugins": ["@joe-broadhead/opencode-jobs"],
+  "experimental": { "location_idle_timeout": "60 minutes" }
 }
 ```
 
@@ -108,10 +151,19 @@ Run `/jobs-status` first. Its last line is the next step.
 | --- | --- |
 | Jobs: none yet | Nothing is scheduled. |
 | The status says the plugin is disabled | The option `enabled` is `false`. Set it to `true`, or remove it, then restart OpenCode. |
-| The status says every job is paused | `/jobs-pause` was run. Run it again to resume them; the slots that fell due meanwhile run once, as a late run, or are recorded as missed. |
-| Agents without default rules | Not a jobs error: the plugin adds no rules. Give the job's agent its own `permissions`, starting with the block in [Permissions](#permissions). |
-| `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, so the job is refused rather than run into prompts. Paste the block `/jobs-status` prints for that agent. |
+| The status says every job is paused | `/jobs-pause` or `jobs_pause_all` was used. Run `/jobs-pause` again; the slots that fell due meanwhile run once, as a late run, or are recorded as missed. |
+| The Runner row says it stopped | The location was unloaded, or the service restarted. Open a project to load it again: the missed slot runs once within the catch-up window. Set `experimental.location_idle_timeout` above `keepAliveMinutes` if it keeps happening. |
+| Agents without default rules | A job's agent does not deny by default. Paste the block `/jobs-status` prints for that agent. |
+| `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, or does not exist, so the job is refused rather than run into prompts. Paste the block `/jobs-status` prints. |
 | `JOBS_UNATTENDED` | A run tried a tool its agent asks about. Nothing waits: the call was denied. Add an `allow` rule for that tool to the job agent's own `permissions` if the job needs it. |
+| `JOBS_ALLOW_WIDENS` | A job's `allow` list holds an `allow` entry. Move the grant to the job agent's own `permissions`. |
+| `JOBS_INVALID_SCHEDULE` | The schedule names two kinds or none, or the cron expression, interval or zone is wrong. The message names the field. |
+| `JOBS_INVALID_JOB` | A field other than the schedule is missing or wrong, or the job is defined by a file and a tool tried to change it. |
+| `JOBS_INVALID_FILE` | A job file cannot be read or parsed. The message names the file and the line. |
+| `JOBS_TARGET_MISSING` | No job, session or agent with that id. Run `jobs_list` to see the jobs there are. |
+| `JOBS_DISABLED` | Every job is paused, or that job is. Resume it first. |
+| `JOBS_EXPIRED` | The job has no slot left. Extend it with `jobs_extend`, or create a new one. |
+| `JOBS_STORAGE_FULL` | OpenCode's storage refused a write. Free space, then retry. |
 | OpenCode: untested | OpenCode is not 2.2.3, 2.2.4 or 2.2.5. Inside `>=2.2.3 <2.3.0` the plugin runs normally; outside it, it runs only because `allowUntestedHost` is set. |
 | `/jobs` is missing | The plugin did not start. Run `/plugins` to see the error. |
 | `OPTIONS_INVALID` | An option is unknown or has a wrong value. The message names the option and the accepted values. |
@@ -128,13 +180,18 @@ Run `/jobs-status` first. Its last line is the next step.
 
 ## Uninstall
 
-1. Remove the plugin: `opencode plugin remove @joe-broadhead/opencode-jobs`, then `opencode reload`.
-2. Remove the agent block you copied into `opencode.json`, or the job agent's Markdown file.
+1. Pause first if a job is mid-run: `/jobs-pause`.
+2. Remove the plugin: `opencode plugin remove @joe-broadhead/opencode-jobs`, then `opencode reload`.
+3. Remove the agent block you copied into `opencode.json`, or the job agent's Markdown file.
+
+The plugin's storage stays in OpenCode's own database; removing the plugin does not delete it.
 
 ## Links
 
 - [Configuration](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/configuration.md)
+- [Architecture](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/architecture.md)
 - [Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md)
+- [Jelly](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/jelly.md)
 - [Contributing](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/CONTRIBUTING.md)
 - [Security](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/SECURITY.md)
 - [Changelog](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/CHANGELOG.md)
