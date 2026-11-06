@@ -78,6 +78,15 @@ describe("the dedup point", () => {
     expect(session.created).toHaveLength(0)
   })
 
+  test("a run that starts after a step down writes nothing at all, so the new leader owns the slot", async () => {
+    const setup = input()
+    setup.active.current = false
+    const result = await setup.run()
+    expect(result).toMatchObject({ claimed: false, abandoned: true })
+    expect(setup.session.created).toHaveLength(0)
+    expect(await getRun(setup.storage.storage, "five", new Date(START).toISOString())).toBeUndefined()
+  })
+
   test("a slot with a record already is never started again", async () => {
     const setup = input()
     await setup.storage.storage.set(`run/five/${new Date(START).toISOString()}`, { job: "five", slot: new Date(START).toISOString(), status: "succeeded", late: false, attempt: 1 })
@@ -172,6 +181,15 @@ describe("one run", () => {
     const result = await setup.run()
     expect(result).toMatchObject({ status: "failed", error: "no such agent" })
     expect((await getRun(setup.storage.storage, "five", new Date(START).toISOString()))?.status).toBe("failed")
+  })
+
+  test("a reminder posts into its own session, creates no run session and needs no model turn", async () => {
+    const setup = input()
+    const result = await setup.run({ job: job({ action: { type: "remind", sessionID: "ses_target", text: "stand up" } }) })
+    expect(result.status).toBe("succeeded")
+    expect(setup.session.created).toHaveLength(0)
+    expect(setup.session.synthetics).toEqual([{ sessionID: "ses_target", text: "stand up", resume: false }])
+    expect((await getRun(setup.storage.storage, "five", new Date(START).toISOString()))?.sessionID).toBe("ses_target")
   })
 
   test("a command action runs the command in the session", async () => {
