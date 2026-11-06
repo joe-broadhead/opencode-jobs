@@ -20,7 +20,8 @@ Vulnerabilities in OpenCode itself are out of scope. Report those to the OpenCod
   committed with a project lives in a Markdown file at `.opencode/jobs/<name>.md` in that project, where the
   repository's own review covers it.
 - Status names jobs, agents, times and outcomes. It shows no prompt and no transcript, and a failure's reason is cut to
-  one line with no URL credentials, query or token.
+  one line with no URL credentials, query or token. A run's summary is job output and is returned only by the
+  `jobs_history` tool, labelled as such; the status RPC's `status` and `history` carry none.
 - Nothing the plugin writes is a secret. Do not put a secret in a job prompt: a prompt is stored with the job and
   reaches the model.
 
@@ -56,8 +57,8 @@ The tools RPC (`jobs.scheduler.tools`, see
 reads with no model, and adds no authority:
 
 - A script names a session that names an agent, and runs as them, under that agent's rules and the session's own.
-- An ask on a script's call is denied, not prompted, because no one is there to answer it. The permission hook that
-  does this touches only one of the RPC's own calls in flight, and only ever turns an ask into a deny.
+- An ask on a script's call is denied, not prompted, because no one is there to answer it: the call is marked, and the
+  one permission hook turns its ask into a deny. The hook only ever tightens.
 - The methods are `describe` and the four reads: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history`. No write, no
   pause and no run-now is a method, even with an allow rule.
 - The RPC is reachable only by callers of the OpenCode server API, who already hold the server's full authority. The

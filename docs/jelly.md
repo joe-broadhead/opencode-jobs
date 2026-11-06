@@ -45,7 +45,9 @@ and whether it is read-only:
 | `jobs.extend` | `jobs_extend` | ask | no |
 
 The plugin inserts its default rules into every agent that has a base allow, so in Jelly these
-effects hold without a person pasting anything: reads and pauses run, and every change asks. A
+effects hold without a person pasting anything: reads and pauses run, and every change asks.
+Pausing every job is the one change that does not ask, because it only stops work; resuming
+asks. A
 *job* still runs as the agent it names, and only that agent's own `permissions` can grant a tool a
 job needs; a tool Jelly or a plugin adds later is asked about, and a write is included.
 

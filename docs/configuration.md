@@ -24,7 +24,7 @@ Set options with the object form of the plugin entry. Every option is optional.
 | `allowUntestedHost` | `true` or `false` | `false` | Starts on an OpenCode version outside `>=2.2.3 <2.3.0`, with the `OpenCode` status row saying it is outside the range. |
 | `timezone` | An IANA zone name, such as `Europe/London` | The server's zone | The zone a job that names none runs in. A job's own `tz` wins. |
 | `concurrency` | A whole number from 1 to 8 | `2` | How many runs may be in flight at once, across every job. It bounds cost and file contention, and a run that arrives while the cap is reached waits for the next free slot. |
-| `keepAliveMinutes` | A whole number of minutes from 1 to 60 | `20` | How often the plugin touches its location with an empty session, so the location is never idle-unloaded and the runner keeps running (D2). Keep it below `experimental.location_idle_timeout`; 20 is below the default 60. |
+| `keepAliveMinutes` | A whole number of minutes from 1 to 59 | `20` | How often the plugin touches its location with an empty session, so the location is never idle-unloaded and the runner keeps running (D2). Keep it below `experimental.location_idle_timeout`; 20 is below the default 60. |
 
 A wrong option fails setup with `OPTIONS_INVALID`, which names the option and the accepted values. Nothing runs until it
 is fixed.
@@ -48,8 +48,9 @@ The plugin inserts nothing that grants anything, and it never weakens a rule you
 
 Every later rule still wins, because the last match wins, so an agent's own `deny` or `allow` is untouched. An agent
 without a base allow gets nothing: there, unlisted tools are not allowed anyway, and the block's `ask` would turn a
-deny into a prompt. Pausing is allowed because it is always safe; creating, updating, deleting, running, resuming and
-extending ask, and the prompt is the yes.
+deny into a prompt. **Pausing every job runs without asking**, because it only stops work: it is the one documented
+exception to "a change asks", and it is the kill switch. Resuming asks, like every other change, and the prompt is the
+yes.
 
 A job runs as the agent it names, and that agent's own `permissions` are the whole profile. The read-only profile to
 start from, pasted into `opencode.json`:
@@ -109,12 +110,17 @@ the run would record `JOBS_UNATTENDED`. Leave the write out of the profile; a jo
   `JOBS_AGENT_UNGUARDED`. Nothing runs. Status names the agent and prints the block to paste.
 - **A run never asks.** A tool the agent would ask about is denied inside the job's session with `JOBS_UNATTENDED`, and
   the run carries on and records it. One `permission.hook("evaluate")` does this, matched to the sessions this plugin
-  created for runs. It never turns an allow into a deny or a deny into an allow, and it never touches a session a person
-  opened.
+  created for runs (a registry of their ids) and to a script's call through the tools RPC, which is marked `script`
+  because no one can answer its prompt. It never turns an allow into a deny or a deny into an allow, and it never
+  touches a session a person opened.
+- **Agents unknown.** If the host cannot list its agents, nothing runs: the slot is recorded `skipped` with
+  `JOBS_AGENTS_UNKNOWN`, and status says the agent list could not be read. It never guesses a block to paste for an
+  agent that may be fine.
 - **A run cannot schedule.** Inside a job session, the session's own rules deny `jobs_create`, `jobs_update`,
   `jobs_delete`, `jobs_resume`, `jobs_extend` and `jobs_run_now`.
-- **The kill switch.** `/jobs-pause`, the `jobs_pause_all` tool and the dialog's `p` all set one state: nothing new
-  starts, and a run in flight is interrupted. Run it again to resume; status says every job is paused and how to resume.
+- **The kill switch.** `/jobs-pause`, the `jobs_pause_all` tool and the palette's "Jobs: Pause or resume every job"
+  (which asks first) all set one state: nothing new starts, and a run in flight is interrupted. Resuming asks, and
+  `jobs_resume` with `{ "all": true }` is the tool for it. Status says every job is paused and how to resume.
 - **Job output is labelled.** A run's summary, a reminder and a notice are framed as output from a scheduled job, never
   as an instruction.
 
@@ -127,14 +133,14 @@ Twelve tools, namespace `jobs_`. Reads are allowed by the default rules; every o
 | `jobs_status` | The compact status: state, counts, how many agents need the block, and the one next step. |
 | `jobs_list` | The jobs there are: id, name, state, agent and next run. Filter by state, or cap the list. |
 | `jobs_get` | One job: its definition, its runtime state and its last three runs. |
-| `jobs_history` | Recent runs, with each summary labelled as job output. |
+| `jobs_history` | Recent runs, with each summary labelled as job output. This is the only surface that carries a run's output: status and its RPC name what a run did, never what was said in it. |
 | `jobs_pause` | Pauses one job. |
-| `jobs_pause_all` | Pauses every job at once: the kill switch. |
+| `jobs_pause_all` | Pauses every job at once: the kill switch. It runs without asking, because it only stops work. |
 | `jobs_create` | Creates a job: name, schedule, action, agent, and optionally target, allow, policy, ends, expiry and jitter. |
 | `jobs_update` | Replaces fields of a job a tool created. |
 | `jobs_delete` | Deletes a job a tool created; its run records stay for history. |
 | `jobs_run_now` | Makes a job's next slot this moment. |
-| `jobs_resume` | Resumes a paused job. |
+| `jobs_resume` | Resumes a paused job, or every job with `{ "all": true }`. It asks. |
 | `jobs_extend` | Moves a job's expiry. |
 
 A tool job created by the model expires after seven days, and status counts it as expiring. `jobs_extend` is the
@@ -154,7 +160,9 @@ never expires on its own.
 Typing a command is a person's own act. The model's `jobs_run_now` tool asks instead, because there the prompt is the
 yes.
 
-The `/jobs` dialog shows the same report, with `r` to refresh, `p` to pause or resume every job, and `Esc` to close.
+The `/jobs` dialog shows the same report with `r` to refresh and `Esc` to close; its hint reads exactly
+`r refresh · esc close`. It only reads: the kill switch is the palette command "Jobs: Pause or resume every job", which
+asks before it changes anything.
 
 ## Job files
 
@@ -180,14 +188,21 @@ The YAML front matter holds the job's fields, and the body is the prompt. The sc
 required: that agent's own `permissions` are the run's profile. `policy` takes `catchup` (`latest` or `none`),
 `maxLate` (one hour by default), `overlap` (`skip`, `queue-one`, `replace` or `allow`), `timeout` (30 minutes, or five
 for a reminder) and `retries` (`max` and `backoff`). `ends` takes `at` or `times`, and `jitter` delays the start of a
-run without moving its slot. `allow` holds deny rules only, and `expires` stops the job.
+run without moving its slot. `allow` holds deny rules only, and `expires` stops the job. `retries` takes `max` and
+`backoff`: a failed run is retried for the same slot, with the next `attempt`, after the backoff. `notify` takes a
+`sessionID`, and a run posts its outcome there as job output.
 
 A duration is a number and a unit: `30s`, `30m`, `24h` or `7d`. A project file runs in its project unless it sets
 `target.directory`; a global file runs wherever the leader is.
 
-The file is the definition, so tools never edit or delete one: pausing a file job stores runtime state only. A file
-that cannot be read, does not parse, names a field that is refused, or names an agent that does not deny by default is
-listed by `/jobs-status` with its path, the line at fault and its code, and every other file still loads.
+The file is the definition, so tools never edit or delete one: pausing a file job stores runtime state only. The job
+folders are checked once a minute, and a file is parsed again only when its modification time changed; a change is
+picked up within a minute. A file that cannot be read, does not parse, names a field that is refused, or names an agent
+that does not deny by default is listed by `/jobs-status` with its path, the line at fault and its code, and every other
+file still loads.
+
+Run records are kept for 50 runs per job and 30 days, whichever keeps less. Retention never removes a run that is still
+`running` or a job's newest run, and a removed record's session goes with it unless that session is busy.
 
 ## Status
 
@@ -216,7 +231,9 @@ Exactly one line is `Next step:`. It reads `Nothing to do.` when nothing needs y
 - `Jobs` counts the jobs, how many are paused, how many are expiring and how many files could not be read.
 - `Next runs` names the next five slots; `Recent runs` the last ten, with outcome, duration, late and skipped marks.
 - `Failures needing attention` names the jobs whose recent runs failed, with the code and how many times.
-- `Agents without default rules` names the job agents that do not deny by default, and prints the block to paste.
+- `Agents without default rules` names the job agents that do not deny by default, and prints the block to paste. When
+  the host cannot list its agents it reads `unknown; the agent list could not be read`, and nothing runs until a
+  restart answers.
 
 ## RPCs
 
@@ -251,7 +268,9 @@ its code and shown in status; it is not thrown at you.
 | `JOBS_UNATTENDED` | A run called a tool its agent asks about. The call was denied, and the run continued. | Decide with the person whether that agent may have it. A read goes in the agent's own `permissions`; a write belongs with a person, not a run. |
 | `JOBS_DISABLED` | Every job is paused, or the job the call names is. | Resume with `/jobs-pause` or the `jobs_resume` tool, then retry. |
 | `JOBS_EXPIRED` | The job has no slot left: its `at` has passed, its `ends` was reached, or its expiry has passed. | Extend it with `jobs_extend`, or create a new job. |
-| `JOBS_TIMEOUT` | A run did not finish inside its `policy.timeout`, so it was interrupted. | Raise `timeout` for that job, or make its prompt do less. |
+| `JOBS_TIMEOUT` | A run did not finish inside its `policy.timeout`, so it was interrupted. It counts toward the five-failure pause. | Raise `timeout` for that job, or make its prompt do less. |
+| `JOBS_AGENTS_UNKNOWN` | The host could not list its agents, so no job ran and no agent was judged. | Restart OpenCode, then run `/jobs-status` again. |
+| `JOBS_UNCHECKED` | A tool that changes something was called with no tool call to check its permission against. | Call it from a session, where its action is checked, and never from a script. |
 | `JOBS_STORAGE_VERSION` | The job store was written by a newer version of the plugin. | Update the plugin to the version that wrote the store, or clear its storage to start again. |
 
 The tools RPC's own codes are in [Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md#errors).

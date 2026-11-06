@@ -38,6 +38,16 @@ All notable changes to this project are documented here. The format follows [Kee
   the failures that need attention, the agents that need the block, the host check and one next step.
 - The `keepAliveMinutes` option, so the keep-alive can be lowered below a shorter `experimental.location_idle_timeout`.
 - `docs/architecture.md`, the morning-brief example and the `jobs` skill.
+- Retries: a failed run is retried for its slot, with the next attempt, after its backoff; five failed or timed-out runs
+  in a row pause the job.
+- `notify`: a run's outcome is posted into a session as job output.
+- Retention with its sessions: 50 runs and 30 days, never a running record or a job's newest.
+- The job-file watch: the folders are checked once a minute, and a file is parsed again only when it changed.
+- `jobs_resume` with `all` resumes every job and clears the kill switch; pausing every job is the one change that does
+  not ask.
+- The status RPC carries no run summary: run output lives in `jobs_history` only.
+- `JOBS_AGENTS_UNKNOWN` and `JOBS_UNCHECKED`: nothing runs while the agents are unknown, and a change with no tool call
+  to check is refused.
 - The family icon kit's mark and its 128 and 256 pixel rasters, declared in `opencode.icons` and exported from the
   package, with the `jelly` declaration documented in `docs/jelly.md`. Jobs declares no vendor, and the package carries
   no vendor marks.

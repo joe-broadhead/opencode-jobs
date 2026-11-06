@@ -26,10 +26,13 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   `JOBS_AGENT_UNGUARDED` at create and again when a slot starts, rather than run into a prompt nobody can answer.
 - **The permission hooks.** Two `permission.hook("evaluate")` calls are allowed, and only these: the one in
   `src/host/tools-rpc.ts` turns an `ask` on one of the tools RPC's own script calls in flight into a deny, and the one
-  in `src/jobs/safety.ts` does the same for a session this plugin created for a run. Each file holds exactly one hook,
-  the bundle that inlines both holds two, and `scripts/check-forbidden.mjs` fails any other file, any extra hook, and
-  any hook that is not an `evaluate` one. Neither ever turns a deny into anything, and neither touches a session it did
-  not create.
+  in `src/jobs/safety.ts` does the same for a session this plugin created for a run, and for a script's call, which is
+  marked `script` because no tool call stands behind it. Each file holds exactly one hook, the bundle that inlines both
+  holds two, and `scripts/check-forbidden.mjs` fails any other file, any extra hook, and any hook that is not an
+  `evaluate` one. Neither ever turns a deny into anything, and neither touches a session it did not create.
+- **Tools assert.** The host does not check a plugin tool's `options.permission` before running it, so every tool in
+  `src/jobs/tools.ts` asserts its own action before it acts; `test/unit/permission-audit.test.ts` fails any write that
+  does not, and lists `jobs_pause`/`jobs_pause_all` as the one no-ask exception.
 - **The kill switch.** `pause/all` in the plugin's storage stops every job at once: the runner starts nothing and
   interrupts what is in flight, and `/jobs-pause` sets and clears it. `enabled: false` stops the runner at setup
   instead, and status says which of the two is in force.
