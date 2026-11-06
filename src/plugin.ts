@@ -65,6 +65,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         agent: ctx.agent,
         clock,
         timezone,
+        location: ctx.location.directory,
         source: () => report.source(),
         wake: () => worker?.wake(),
         ready,
