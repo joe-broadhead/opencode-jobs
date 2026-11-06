@@ -5,12 +5,23 @@
 // Only the modules the host provides stay external. The build fails if an output imports anything else.
 import { build } from "esbuild"
 import { readdirSync, readFileSync, rmSync } from "node:fs"
+import { builtinModules } from "node:module"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = fileURLToPath(new URL("..", import.meta.url))
 const HOST = ["@opencode/plugin", "@opencode/plugin/*", "@opentui/*", "solid-js", "solid-js/*"]
 const provided = (path) => path.startsWith("node:") || HOST.some((name) => (name.endsWith("/*") ? path.startsWith(name.slice(0, -1)) : path === name))
+
+// A bundled library may ask for a Node built-in by its bare name (`process`, `buffer`). The host provides every one of
+// them, so it stays external, written the way the rest of the repository imports them: `node:<name>`.
+const BUILTINS = new Set(builtinModules)
+const nodeBuiltins = {
+  name: "node-builtins",
+  setup(plugin) {
+    plugin.onResolve({ filter: /^[a-z][\w/.-]*$/i }, (args) => (args.kind === "entry-point" || !BUILTINS.has(args.path) ? undefined : { path: `node:${args.path}`, external: true }))
+  },
+}
 
 /** The plugin's version, from package.json, as one string: the bundles carry nothing else of package.json. */
 const version = {
@@ -37,7 +48,7 @@ const result = await build({
   legalComments: "none",
   metafile: true,
   logLevel: "warning",
-  plugins: [version],
+  plugins: [nodeBuiltins, version],
 })
 
 const problems = Object.entries(result.metafile.outputs).flatMap(([file, output]) =>

@@ -30,6 +30,7 @@
     "assets/icon.svg",
     "assets/icon-128.png",
     "assets/icon-256.png",
+    "NOTICE",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -77,9 +78,11 @@
     "@opentui/solid": "0.8.0",
     "@types/bun": "1.4.4",
     "@types/node": "24.19.2",
+    "croner": "11.0.0",
     "esbuild": "0.28.2",
     "solid-js": "1.9.17",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "yaml": "2.9.1"
   },
   "jelly": {
     "title": "Jobs",
