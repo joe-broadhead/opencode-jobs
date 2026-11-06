@@ -1,0 +1,264 @@
+/**
+ * The job store: typed access to `ctx.storage`, with the keys of the design (§5.3), a schema version and its
+ * migrations, run records, and retention.
+ *
+ * Storage is shared by every instance and survives reloads and restarts, and has no compare-and-set (F3, V-5): one key
+ * per job, per state and per run, written only by the leader. `scan` is paged (`{ entries, next? }`), so every list here
+ * follows `next`.
+ *
+ * The cross-process lease (`lease/leader`) and the runner record (`runner`) belong to the runner and arrive with it.
+ */
+import type { Plugin } from "@opencode/plugin"
+import { jobsError } from "../constants.js"
+import { cut } from "../redact.js"
+import { DAY, type Job } from "./model.js"
+
+/** The schema this build writes. A store with a later one is refused, not overwritten. */
+export const SCHEMA_VERSION = 1
+
+/** Retention keeps the last 50 runs of a job and the last 30 days, whichever keeps less (D9). */
+export const MAX_RUNS = 50
+export const RETENTION_MS = 30 * DAY
+
+/** A run summary is job output and is capped before it is stored. */
+export const SUMMARY_LIMIT = 2048
+const ERROR_LIMIT = 500
+
+const SCHEMA_KEY = "meta/schema"
+const PAGE = 100
+const PAGES = 1000
+
+export type Storage = Pick<Plugin.Context["storage"], "get" | "set" | "remove" | "scan">
+
+/** What the store holds for a job between runs: all of it runtime state, so a file job's file stays the definition. */
+export interface JobState {
+  readonly job: string
+  /** The next slot, as an instant; absent while the schedule has no slot left. */
+  readonly nextDueAt?: number
+  /** Finished runs, which `ends.times` counts. */
+  readonly runCount: number
+  /** The slot of the last run that started, as an ISO time. */
+  readonly lastRun?: string
+  /** Consecutive slots whose run failed; five pause the job. */
+  readonly consecutiveFailures: number
+  readonly paused?: { readonly at: number; readonly reason?: string }
+  /** The slot the `queue-one` overlap policy remembered. */
+  readonly queuedSlot?: number
+}
+
+export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "interrupted" | "skipped" | "missed"
+export type RunOutcome = "succeeded" | "failed" | "interrupted"
+export type SkipReason = "overlap" | "paused" | "expired" | "ended"
+
+/** One run, keyed by the job and the slot it belongs to. The slot is the planned time, before jitter. */
+export interface RunRecord {
+  readonly job: string
+  readonly slot: string
+  readonly status: RunStatus
+  readonly late: boolean
+  readonly attempt: number
+  readonly sessionID?: string
+  readonly startedAt?: number
+  readonly endedAt?: number
+  readonly outcome?: RunOutcome
+  /** The last assistant text, capped, and job output rather than instructions. */
+  readonly summary?: string
+  readonly error?: string
+  readonly reason?: SkipReason
+  /** A collapsed `missed` record: how many slots it stands for. */
+  readonly count?: number
+  /** A collapsed `missed` record: its first slot. */
+  readonly from?: string
+  /** What the run cost, when the host reports it. */
+  readonly cost?: number
+}
+
+export interface Migration {
+  /** The schema the store is on now. */
+  readonly version: number
+  /** The schema it was on, or null when it had none. */
+  readonly previous: number | null
+}
+
+/**
+ * One step per schema version, from the previous one. Version 1 is the first: it only writes the version, so a store
+ * from before it (there is none) starts empty. A later version appends a step and raises `SCHEMA_VERSION`.
+ */
+const MIGRATIONS: Readonly<Record<number, (storage: Storage) => Promise<void>>> = {
+  1: async () => undefined,
+}
+
+/** Brings the store to the current schema, once. A store from a newer plugin is refused, never overwritten. */
+export async function migrate(storage: Storage): Promise<Migration> {
+  const stored = await storage.get(SCHEMA_KEY)
+  const previous = typeof stored === "number" && Number.isInteger(stored) && stored >= 0 ? stored : 0
+  if (previous > SCHEMA_VERSION) {
+    throw jobsError(
+      "JOBS_STORAGE_VERSION",
+      `The job store uses schema ${previous}, and this build understands schema ${SCHEMA_VERSION}.`,
+      `Update the plugin to the version that wrote this store, or clear the plugin's storage to start again.`,
+    )
+  }
+  if (previous === SCHEMA_VERSION) return { version: previous, previous }
+  for (let version = previous + 1; version <= SCHEMA_VERSION; version += 1) {
+    const step = MIGRATIONS[version]
+    if (step === undefined) throw new Error(`jobs: no migration to schema ${version}`)
+    await step(storage)
+  }
+  await storage.set(SCHEMA_KEY, SCHEMA_VERSION)
+  return { version: SCHEMA_VERSION, previous: previous === 0 ? null : previous }
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
+const jobKey = (id: string) => `job/${id}`
+const stateKey = (id: string) => `state/${id}`
+const runKey = (job: string, slot: string) => `run/${job}/${slot}`
+const runPrefix = (job?: string) => (job === undefined ? "run/" : `run/${job}/`)
+
+/** Every entry under a prefix, following the host's `next`; a host that repeats a cursor stops the loop. */
+async function scanAll(storage: Storage, prefix: string): Promise<{ key: string; value: unknown }[]> {
+  const entries: { key: string; value: unknown }[] = []
+  let after: string | undefined
+  for (let page = 0; page < PAGES; page += 1) {
+    const result = await storage.scan({ prefix, limit: PAGE, ...(after === undefined ? {} : { after }) })
+    entries.push(...result.entries.map((entry) => ({ key: entry.key, value: entry.value })))
+    if (result.next === undefined || result.next === after) break
+    after = result.next
+  }
+  return entries
+}
+
+/** The tool jobs the store holds, by id. A value the store did not write is skipped rather than thrown. */
+export async function readJobs(storage: Storage): Promise<Job[]> {
+  const entries = await scanAll(storage, "job/")
+  return entries.flatMap((entry) => (isJob(entry.value) ? [entry.value] : []))
+}
+
+/** Stores a job created through a tool. File jobs are never stored: their file is the definition. */
+export async function putJob(storage: Storage, job: Job): Promise<void> {
+  if (job.source !== "tool") throw new Error(`jobs: only a tool job is stored, and ${job.id} is a ${job.source} job`)
+  await storage.set(jobKey(job.id), job as unknown as Parameters<Storage["set"]>[1])
+}
+
+/** Removes a tool job and its runtime state. Its run records stay for history and retention. */
+export async function removeJob(storage: Storage, id: string): Promise<void> {
+  await storage.remove(jobKey(id))
+  await storage.remove(stateKey(id))
+}
+
+const isJob = (value: unknown): value is Job =>
+  isObject(value) &&
+  typeof value.id === "string" &&
+  typeof value.name === "string" &&
+  typeof value.agent === "string" &&
+  isObject(value.schedule) &&
+  typeof value.schedule.kind === "string" &&
+  isObject(value.action) &&
+  typeof value.action.type === "string"
+
+const NO_STATE = (job: string): JobState => ({ job, runCount: 0, consecutiveFailures: 0 })
+
+/** A job's runtime state, with the defaults a job that has never run has. */
+export async function readState(storage: Storage, id: string): Promise<JobState> {
+  const value = await storage.get(stateKey(id))
+  if (!isObject(value)) return NO_STATE(id)
+  const pause = isObject(value.paused) && typeof value.paused.at === "number" ? value.paused : undefined
+  return {
+    job: id,
+    runCount: typeof value.runCount === "number" ? value.runCount : 0,
+    consecutiveFailures: typeof value.consecutiveFailures === "number" ? value.consecutiveFailures : 0,
+    ...(typeof value.nextDueAt === "number" ? { nextDueAt: value.nextDueAt } : {}),
+    ...(typeof value.lastRun === "string" ? { lastRun: value.lastRun } : {}),
+    ...(typeof value.queuedSlot === "number" ? { queuedSlot: value.queuedSlot } : {}),
+    ...(pause === undefined ? {} : { paused: { at: pause.at as number, ...(typeof pause.reason === "string" ? { reason: pause.reason } : {}) } }),
+  }
+}
+
+export async function putState(storage: Storage, state: JobState): Promise<void> {
+  await storage.set(stateKey(state.job), state as unknown as Parameters<Storage["set"]>[1])
+}
+
+/** The canonical key time: an ISO instant in UTC, which also sorts chronologically. */
+export function slotISO(slot: number): string {
+  return new Date(slot).toISOString()
+}
+
+/** Writes a run record, with its slot canonicalised and its summary capped. */
+export async function putRun(storage: Storage, record: RunRecord): Promise<RunRecord> {
+  const at = Date.parse(record.slot)
+  if (!Number.isFinite(at)) throw new Error(`jobs: the run slot ${JSON.stringify(record.slot)} is not a time`)
+  const stored: RunRecord = {
+    ...record,
+    slot: slotISO(at),
+    ...(record.summary === undefined ? {} : { summary: cut(record.summary, SUMMARY_LIMIT) }),
+    ...(record.error === undefined ? {} : { error: cut(record.error, ERROR_LIMIT) }),
+  }
+  await storage.set(runKey(stored.job, stored.slot), stored as unknown as Parameters<Storage["set"]>[1])
+  return stored
+}
+
+export async function getRun(storage: Storage, job: string, slot: string): Promise<RunRecord | undefined> {
+  return asRun(await storage.get(runKey(job, slot)))
+}
+
+export async function removeRun(storage: Storage, record: Pick<RunRecord, "job" | "slot">): Promise<void> {
+  await storage.remove(runKey(record.job, record.slot))
+}
+
+/** One job's runs, or every job's, newest first. */
+export async function scanRuns(storage: Storage, job?: string): Promise<RunRecord[]> {
+  const entries = await scanAll(storage, runPrefix(job))
+  return entries
+    .flatMap((entry) => {
+      const record = asRun(entry.value)
+      return record === undefined ? [] : [record]
+    })
+    .sort((left, right) => Date.parse(right.slot) - Date.parse(left.slot))
+}
+
+function asRun(value: unknown): RunRecord | undefined {
+  if (!isObject(value) || typeof value.job !== "string" || typeof value.slot !== "string" || typeof value.status !== "string") return undefined
+  if (!Number.isFinite(Date.parse(value.slot))) return undefined
+  return value as unknown as RunRecord
+}
+
+export interface Pruned {
+  readonly keep: readonly RunRecord[]
+  readonly remove: readonly RunRecord[]
+}
+
+/**
+ * What retention keeps: the last `MAX_RUNS` runs of each job that are also within `RETENTION_MS`, plus a record that is
+ * `running` and the job's newest run, which `jobs_get` always has something to show for. Everything else is removed.
+ */
+export function pruneRuns(records: readonly RunRecord[], now: number): Pruned {
+  const cutoff = now - RETENTION_MS
+  const groups = new Map<string, RunRecord[]>()
+  for (const record of records) {
+    const group = groups.get(record.job)
+    if (group === undefined) groups.set(record.job, [record])
+    else group.push(record)
+  }
+  const keep = new Set<RunRecord>()
+  for (const group of groups.values()) {
+    const newestFirst = [...group].sort((left, right) => Date.parse(right.slot) - Date.parse(left.slot))
+    newestFirst.forEach((record, index) => {
+      if (index < MAX_RUNS && runTime(record) >= cutoff) keep.add(record)
+    })
+    keep.add(newestFirst[0]!)
+    for (const record of newestFirst) if (record.status === "running") keep.add(record)
+  }
+  return {
+    keep: records.filter((record) => keep.has(record)),
+    remove: records.filter((record) => !keep.has(record)),
+  }
+}
+
+const runTime = (record: RunRecord) => record.endedAt ?? record.startedAt ?? Date.parse(record.slot)
+
+/** Removes the records retention drops and returns them, so their sessions can go with them. */
+export async function prune(storage: Storage, now: number): Promise<Pruned> {
+  const pruned = pruneRuns(await scanRuns(storage), now)
+  for (const record of pruned.remove) await removeRun(storage, record)
+  return pruned
+}

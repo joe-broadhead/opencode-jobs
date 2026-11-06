@@ -16,6 +16,7 @@ Set options with the object form of the plugin entry. Every option is optional.
 | --- | --- | --- | --- |
 | `enabled` | `true` or `false` | `true` | `false` stops the runner and leaves the status command, the dialog and both RPCs working. |
 | `allowUntestedHost` | `true` or `false` | `false` | Starts on an OpenCode version outside `>=2.2.3 <2.3.0`, with the `OpenCode` status row saying it is outside the range. |
+| `timezone` | An IANA zone name, such as `Europe/London` | The server's zone | The zone a job that names none runs in. A job's own `tz` wins. |
 
 A wrong option fails setup with `OPTIONS_INVALID`, which names the option and the accepted values. Nothing runs until it
 is fixed.
@@ -54,6 +55,39 @@ it is the profile, and nothing that writes is in it.
 
 A job runs as one named agent, and that agent's rules are the only profile it gets. Add a rule to the agent only when a
 job needs it, and add it to that agent alone.
+
+## Job files
+
+A job that belongs to a project is a Markdown file in `<project>/.opencode/jobs/`, and a job for every project is in
+`~/.config/opencode/jobs/`. A file's name is the job's id, and one file holds one job. Commit it like any other file.
+
+```markdown
+---
+name: Morning brief
+cron: "0 7 * * 1-5"
+tz: Europe/London
+agent: jobs
+policy:
+  overlap: queue-one
+  maxLate: 24h
+  timeout: 10m
+---
+Summarise yesterday's work and today's calendar in five lines.
+```
+
+The YAML front matter holds the job's fields, and the body is the prompt. The schedule is written flat, as `cron`,
+`every` or `at` with `tz` beside it, or nested under `schedule:` in the same shape a tool job takes. `agent` is
+required: that agent's own `permissions` are the run's profile. `policy` takes `catchup` (`latest` or `none`),
+`maxLate` (one hour by default), `overlap` (`skip`, `queue-one`, `replace` or `allow`), `timeout` (30 minutes, or five
+for a reminder) and `retries` (`max` and `backoff`). `ends` takes `at` or `times`, and `jitter` delays the start of a
+run without moving its slot.
+
+A duration is a number and a unit: `30s`, `30m`, `24h` or `7d`. A project file runs in its project unless it sets
+`target.directory`; a global file runs wherever the leader is.
+
+The file is the definition, so tools never edit or delete one: pausing a file job stores runtime state only. A file
+that cannot be read, does not parse, or names a field that is refused is listed by `/jobs-status` with its path and the
+line at fault, and every other file still loads.
 
 ## Status
 
@@ -96,5 +130,11 @@ Every message reads `CODE: What happened. Next step: What to do.`, with one next
 | `OPTIONS_INVALID` | An option is unknown, or its value is the wrong type. | Fix the plugin options in opencode.json; the message names the accepted values and gives an example. |
 | `HOST_UNTESTED` | OpenCode is outside `>=2.2.3 <2.3.0`, and `allowUntestedHost` is not set. | Use a supported OpenCode, or set `"allowUntestedHost": true`. |
 | `STATUS_UNAVAILABLE` | The status could not be read, or the plugin is not running in this location. | Restart OpenCode, then run `/jobs-status` again. |
+| `JOBS_INVALID_SCHEDULE` | The schedule names two kinds or none, the cron expression is not five fields or never fires, the interval is under a minute, or the zone or time does not exist. | Use a five-field cron expression, an interval of at least a minute, and an IANA time zone such as `Europe/London`. |
+| `JOBS_INVALID_JOB` | A field other than the schedule is missing or wrong: the name, the action, the agent, the policy, `ends` or `jitter`. | Set the field the message names; it gives the accepted values. |
+| `JOBS_INVALID_FILE` | A job file has no front matter, unclosed front matter, YAML that does not parse, or a field that is refused; the message names the file and the line. | Fix the file at the line the message names, then run `/jobs-status` again. |
+| `JOBS_ALLOW_WIDENS` | A job's `allow` list holds an `allow` entry, and a job may only narrow its agent's rules. | Move the grant to the job agent's own `permissions` in opencode.json, and keep the job's list to deny rules. |
+| `JOBS_TARGET_MISSING` | A `remind` action or a `notify` target names no session. | Set the session id, and create that session if it is gone. |
+| `JOBS_STORAGE_VERSION` | The job store was written by a newer version of the plugin. | Update the plugin to the version that wrote the store, or clear its storage to start again. |
 
 The tools RPC's own codes are in [Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md#errors).

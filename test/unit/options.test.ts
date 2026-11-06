@@ -2,22 +2,25 @@ import { describe, expect, test } from "bun:test"
 import { DEFAULT_OPTIONS, parseOptions } from "../../src/options.js"
 
 describe("parseOptions", () => {
-  test("defaults to an enabled plugin on a tested host", () => {
+  test("defaults to an enabled plugin on a tested host, in the server's time zone", () => {
     expect(parseOptions(undefined)).toEqual(DEFAULT_OPTIONS)
     expect(parseOptions({})).toEqual(DEFAULT_OPTIONS)
-    expect(DEFAULT_OPTIONS).toEqual({ enabled: true, allowUntestedHost: false })
+    expect(DEFAULT_OPTIONS).toEqual({ enabled: true, allowUntestedHost: false, timezone: null })
   })
 
   test("accepts every documented value", () => {
-    expect(parseOptions({ enabled: false, allowUntestedHost: true })).toEqual({ enabled: false, allowUntestedHost: true })
-    expect(parseOptions({ enabled: false, allowUntestedHost: false })).toEqual({ enabled: false, allowUntestedHost: false })
+    expect(parseOptions({ enabled: false, allowUntestedHost: true })).toEqual({ enabled: false, allowUntestedHost: true, timezone: null })
+    expect(parseOptions({ enabled: false, allowUntestedHost: false, timezone: "Europe/London" })).toEqual({ enabled: false, allowUntestedHost: false, timezone: "Europe/London" })
+    expect(parseOptions({ timezone: " UTC " }).timezone).toBe("UTC")
   })
 
   test.each([
-    [{ timezone: "Europe/London" }, 'Unknown option "timezone". Accepted options: "enabled", "allowUntestedHost"'],
+    [{ concurrency: 2 }, 'Unknown option "concurrency". Accepted options: "enabled", "allowUntestedHost", "timezone"'],
     [{ enabled: "yes" }, 'The option "enabled" must be true or false (true by default), found "yes"'],
     [{ enabled: null }, 'The option "enabled" must be true or false (true by default), found null'],
     [{ allowUntestedHost: 1 }, 'The option "allowUntestedHost" must be true or false (false by default), found 1'],
+    [{ timezone: "" }, 'The option "timezone" must be an IANA time zone name such as "Europe/London" (the server\'s zone by default), found ""'],
+    [{ timezone: "Mars/Olympus" }, 'The option "timezone" is not a time zone: "Mars/Olympus". Accepted values are an IANA time zone name such as "Europe/London" (the server\'s zone by default)'],
     ["read", 'The plugin options must be an object, found "read"'],
     [[], "The plugin options must be an object, found an array"],
   ])("rejects %j with the key, the accepted values and an example", (input, problem) => {
