@@ -197,8 +197,17 @@ export async function putState(storage: Storage, state: JobState): Promise<void>
   await storage.set(stateKey(state.job), state as unknown as Parameters<Storage["set"]>[1])
 }
 
-/** One promise chain per job: every state mutation is a read-modify-write inside it, whichever surface asks (DR-13). */
-const CHAINS = new Map<string, Promise<unknown>>()
+/** One promise chain per job **per store**: every state mutation is a read-modify-write inside it (DR-13). A chain that
+ * belongs to one store keeps two hosts in one process from waiting on each other's writes. */
+const CHAINS = new WeakMap<object, Map<string, Promise<unknown>>>()
+
+function chainsOf(storage: Storage): Map<string, Promise<unknown>> {
+  const found = CHAINS.get(storage)
+  if (found !== undefined) return found
+  const created = new Map<string, Promise<unknown>>()
+  CHAINS.set(storage, created)
+  return created
+}
 
 /**
  * Changes a job's state atomically as far as one process can: the change runs after every earlier one for that job, on
@@ -206,7 +215,8 @@ const CHAINS = new Map<string, Promise<unknown>>()
  * cannot lose a counter, and a run-now cannot drop a queued slot.
  */
 export function updateState(storage: Storage, id: string, change: (state: JobState) => JobState): Promise<JobState> {
-  const previous = CHAINS.get(id) ?? Promise.resolve()
+  const chains = chainsOf(storage)
+  const previous = chains.get(id) ?? Promise.resolve()
   const next = previous.then(
     async () => {
       const updated = change(await readState(storage, id))
@@ -219,7 +229,7 @@ export function updateState(storage: Storage, id: string, change: (state: JobSta
       return updated
     },
   )
-  CHAINS.set(id, next.then(() => undefined, () => undefined))
+  chains.set(id, next.then(() => undefined, () => undefined))
   return next
 }
 

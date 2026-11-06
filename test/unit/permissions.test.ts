@@ -84,6 +84,20 @@ describe("the refusal a job gets", () => {
     expect(refusal?.nextStep).toContain('{"action":"*","resource":"*","effect":"deny"}')
   })
 
+  test("is read in the directory the run happens in, not the leader's", async () => {
+    const seen: unknown[] = []
+    const agent = {
+      get: async (input: { agentID: string; location?: { directory: string } }) => {
+        seen.push(input)
+        return { location: { directory: "/work" }, data: { id: input.agentID, name: input.agentID, permissions: [allow, ...AGENT_BLOCK] } }
+      },
+    } as unknown as Pick<Plugin.Context["agent"], "get">
+    await guardAgent(agent, "jobs", "/projects/b")
+    expect(seen).toEqual([{ agentID: "jobs", location: { directory: "/projects/b" } }])
+    await guardAgent(agent, "jobs")
+    expect(seen[1]).toEqual({ agentID: "jobs" })
+  })
+
   test("lets a guarded agent through", () => {
     expect(refusalFor([agent("jobs", [allow, ...AGENT_BLOCK])], "jobs")).toBeUndefined()
   })
