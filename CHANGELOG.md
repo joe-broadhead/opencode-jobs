@@ -20,7 +20,16 @@ All notable changes to this project are documented here. The format follows [Kee
 - Run records in OpenCode's own storage, with a schema version, a migration, and retention that keeps the last 50 runs
   of a job and the last 30 days, whichever keeps less.
 - The options `enabled`, `allowUntestedHost` and `timezone`.
-- The read-only agent profile every job runs as, documented with the blanket deny that makes it closed.
+- The read-only agent profile every job runs as, documented with the blanket deny that makes it closed, and refused
+  with `JOBS_AGENT_UNGUARDED` when a job's agent does not deny by default.
+- Unattended safety: a run never waits for a permission prompt, and a tool its agent asks about is denied in the job's
+  session with `JOBS_UNATTENDED` and recorded. The evaluate hook that does it is matched to the plugin's own run
+  sessions, and only ever tightens.
+- A run's session rules: the job's deny-only list, plus the tools a run may never call, so a prompt cannot create,
+  change or multiply jobs.
+- The kill switch: `/jobs-pause` pauses every job at once, interrupting what is in flight and starting nothing, and
+  status says so until it is run again.
+- Job output framed as job output: a reminder posted into a session says what it is and where it came from.
 - The family icon kit's mark and its 128 and 256 pixel rasters, declared in `opencode.icons` and exported from the
   package, with the `jelly` declaration documented in `docs/jelly.md`. Jobs declares no vendor, and the package carries
   no vendor marks.

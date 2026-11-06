@@ -31,8 +31,22 @@ What a run can do is the agent's own `permissions`, and nothing else:
 1. **A job names one agent**, and that agent's rules are the run's profile. The plugin ships no rules, inserts none into
    any agent, and never weakens a deny. The documented profile is read-only and starts with a blanket deny, because an
    agent's own rules are applied after OpenCode's base rule that allows everything.
-2. **Changing a job needs a person.** Creating, updating, deleting, running and resuming a job ask for approval, and
+2. **A job whose agent does not deny by default is refused**, at create and again when a slot starts, with
+   `JOBS_AGENT_UNGUARDED` and the block to paste. It is not run into a prompt that would be denied every time, and it is
+   not run at all.
+3. **A run never asks.** One `evaluate` hook turns an `ask` inside a session this plugin created for a run into a deny,
+   in the plugin's own words, so an unattended run cannot wait for an approval. The hook matches only those sessions,
+   considers only the permission checks for them, and only ever narrows: an allow stays an allow and a deny stays a
+   deny. It is a deliberate exception to the family's rule against permission hooks, matched by the repository's
+   forbidden-API scan to its one file and to the bundle that inlines it.
+4. **A run cannot schedule.** Inside a job session, the session's own rules deny creating, updating, deleting,
+   extending, resuming and running a job, so a prompt that asks for one cannot grow the schedule.
+5. **Changing a job needs a person.** Creating, updating, deleting, running and resuming a job ask for approval, and
    the prompt is the yes. Pausing is always allowed.
+6. **The kill switch** stops every job at once, and is never silent: `/jobs-pause` posts what it did into the session,
+   and status says every job is paused and how to resume them. The `enabled` option stops the runner at setup instead.
+7. **Job output is labelled.** A summary, a reminder and a notice are framed as output from a scheduled job, not as an
+   instruction from the person.
 
 ## Scripts
 

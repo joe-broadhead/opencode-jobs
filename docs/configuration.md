@@ -57,6 +57,24 @@ it is the profile, and nothing that writes is in it.
 A job runs as one named agent, and that agent's rules are the only profile it gets. Add a rule to the agent only when a
 job needs it, and add it to that agent alone.
 
+## Safety
+
+- **A job whose agent does not deny by default is refused**, at create and again when a slot starts, with
+  `JOBS_AGENT_UNGUARDED`. Nothing runs. Status names the agent and prints the block to paste.
+- **A run never asks.** A tool the agent would ask about is denied inside the job's session with `JOBS_UNATTENDED`, and
+  the run carries on and records it. One `permission.hook("evaluate")` does this, matched to the sessions this plugin
+  created for runs. It never turns an allow into a deny or a deny into an allow, and it never touches a session a person
+  opened.
+- **A run cannot schedule.** Inside a job session, the session's own rules deny `jobs_create`, `jobs_update`,
+  `jobs_delete`, `jobs_resume`, `jobs_extend` and `jobs_run_now`.
+- **A job may only narrow.** A job's `allow` list holds deny rules and nothing else. An `allow` entry is refused with
+  `JOBS_ALLOW_WIDENS`, because a session rule that allows would override the agent's deny.
+- **The kill switch.** `/jobs-pause` pauses every job at once: nothing new starts, and a run in flight is interrupted.
+  Run it again to resume; status says every job is paused and how to resume them. The `enabled` option stops the runner
+  at setup instead.
+- **Job output is labelled.** A run's summary, a reminder and a notice are framed as output from a scheduled job, never
+  as an instruction.
+
 ## Job files
 
 A job that belongs to a project is a Markdown file in `<project>/.opencode/jobs/`, and a job for every project is in
@@ -135,6 +153,8 @@ Every message reads `CODE: What happened. Next step: What to do.`, with one next
 | `JOBS_INVALID_JOB` | A field other than the schedule is missing or wrong: the name, the action, the agent, the policy, `ends` or `jitter`. | Set the field the message names; it gives the accepted values. |
 | `JOBS_INVALID_FILE` | A job file has no front matter, unclosed front matter, YAML that does not parse, or a field that is refused; the message names the file and the line. | Fix the file at the line the message names, then run `/jobs-status` again. |
 | `JOBS_ALLOW_WIDENS` | A job's `allow` list holds an `allow` entry, and a job may only narrow its agent's rules. | Move the grant to the job agent's own `permissions` in opencode.json, and keep the job's list to deny rules. |
+| `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, or there is no such agent, so a job under it is refused instead of run into denied prompts. | Give the agent the read-only block, starting with the blanket deny, or point the job at an agent that has it; `/jobs-status` prints it. |
+| `JOBS_UNATTENDED` | A run called a tool its agent asks about. The call was denied, and the run continued. | Add an `allow` rule for that tool to the job agent's own `permissions`, and only if the job needs it. |
 | `JOBS_TARGET_MISSING` | A `remind` action or a `notify` target names no session. | Set the session id, and create that session if it is gone. |
 | `JOBS_STORAGE_VERSION` | The job store was written by a newer version of the plugin. | Update the plugin to the version that wrote the store, or clear its storage to start again. |
 
