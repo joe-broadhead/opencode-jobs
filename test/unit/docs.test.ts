@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url"
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url))
 // Everything a user or the model reads about the current release.
-const FILES = ["README.md", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md", "AGENTS.md", ...readdirSync(join(ROOT, "docs")).map((name) => `docs/${name}`)]
+const FILES = ["README.md", "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md", "AGENTS.md", ...files("docs"), ...files("skills")]
 const text = (file: string) => readFileSync(join(ROOT, file), "utf8").replace(/\r\n/g, "\n")
 const flat = (file: string) => text(file).replace(/\s+/g, " ")
 

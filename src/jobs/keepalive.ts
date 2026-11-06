@@ -13,13 +13,17 @@ import type { Clock } from "./clock.js"
 import type { Session } from "./execute.js"
 import { MINUTE } from "./model.js"
 
-/** The longest period, so a default 60-minute location is touched three times before it could unload. */
-export const KEEPALIVE_CAP = 20 * MINUTE
+/** The period's range: the option is in minutes, and a beat is never closer than a minute or further than an hour. */
+export const MIN_PERIOD = MINUTE
+export const MAX_PERIOD = 60 * MINUTE
 
-/** The period for an effective idle timeout: a third of it, at least a minute, at most 20 minutes. */
-export function keepAlivePeriod(idleTimeoutMs?: number | null): number {
-  if (idleTimeoutMs === undefined || idleTimeoutMs === null || !Number.isFinite(idleTimeoutMs) || idleTimeoutMs <= 0) return KEEPALIVE_CAP
-  return Math.max(MINUTE, Math.min(KEEPALIVE_CAP, Math.floor(idleTimeoutMs / 3)))
+/**
+ * The period the `keepAliveMinutes` option asks for, in milliseconds (D2). It must stay below the user's
+ * `experimental.location_idle_timeout`: the status row says so, and nothing here can read that timeout.
+ */
+export function keepAlivePeriod(minutes: number): number {
+  const wanted = Number.isFinite(minutes) ? Math.round(minutes * MINUTE) : MAX_PERIOD
+  return Math.max(MIN_PERIOD, Math.min(MAX_PERIOD, wanted))
 }
 
 export interface KeepAliveInput {
@@ -27,8 +31,8 @@ export interface KeepAliveInput {
   readonly clock: Clock
   /** The leader's directory: the location the beat touches. */
   readonly location: string
-  /** The effective idle timeout, when it is known; otherwise the 20-minute cap. */
-  readonly idleTimeoutMs?: number | null
+  /** How often to beat, from the `keepAliveMinutes` option. */
+  readonly periodMs: number
   /** False once this instance stops leading. */
   readonly active: () => boolean
   readonly onBeat?: (at: number, ok: boolean) => void
@@ -45,7 +49,7 @@ export interface KeepAlive {
 }
 
 export function startKeepAlive(input: KeepAliveInput): KeepAlive {
-  const periodMs = keepAlivePeriod(input.idleTimeoutMs)
+  const periodMs = Math.max(MIN_PERIOD, input.periodMs)
   let looping = true
   let beats = 0
   let lastBeatAt: number | undefined

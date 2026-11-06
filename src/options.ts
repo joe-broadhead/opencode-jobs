@@ -11,12 +11,17 @@ export interface Options {
   readonly timezone: string | null
   /** How many runs may be in flight at once, across every job. Bounds cost and file contention. */
   readonly concurrency: number
+  /** How often the keep-alive touches the leader's location, in minutes (D2). Below the user's idle timeout. */
+  readonly keepAliveMinutes: number
 }
 
-export const DEFAULT_OPTIONS: Options = { enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2 }
+export const DEFAULT_OPTIONS: Options = { enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2, keepAliveMinutes: 20 }
 
 /** The most runs a person may allow at once: the option is a cost bound, not a throughput knob. */
 export const MAX_CONCURRENCY = 8
+/** The keep-alive's range: at least a minute, and no more than an hour. */
+export const MIN_KEEPALIVE_MINUTES = 1
+export const MAX_KEEPALIVE_MINUTES = 60
 
 const EXAMPLE = `"plugins": [{ "package": "@joe-broadhead/opencode-jobs", "options": { "enabled": true } }]`
 const ACCEPTED = {
@@ -24,6 +29,7 @@ const ACCEPTED = {
   allowUntestedHost: "true or false (false by default)",
   timezone: 'an IANA time zone name such as "Europe/London" (the server\'s zone by default)',
   concurrency: `a whole number from 1 to ${MAX_CONCURRENCY} (2 by default)`,
+  keepAliveMinutes: `a whole number of minutes from ${MIN_KEEPALIVE_MINUTES} to ${MAX_KEEPALIVE_MINUTES} (20 by default)`,
 } as const
 
 const invalid = (problem: string) =>
@@ -44,6 +50,7 @@ export function parseOptions(raw: unknown): Options {
     allowUntestedHost: flag(input, "allowUntestedHost"),
     timezone: zone(input),
     concurrency: count(input),
+    keepAliveMinutes: keepAlive(input),
   }
 }
 
@@ -58,6 +65,16 @@ function count(input: Record<string, unknown>): number {
   const value = input.concurrency
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > MAX_CONCURRENCY) {
     throw invalid(`The option "concurrency" must be ${ACCEPTED.concurrency}, found ${describe(value)}`)
+  }
+  return value
+}
+
+/** The keep-alive period, in minutes: below the user's idle timeout, so the leader's location never outlives it. */
+function keepAlive(input: Record<string, unknown>): number {
+  if (!Object.hasOwn(input, "keepAliveMinutes")) return DEFAULT_OPTIONS.keepAliveMinutes
+  const value = input.keepAliveMinutes
+  if (typeof value !== "number" || !Number.isInteger(value) || value < MIN_KEEPALIVE_MINUTES || value > MAX_KEEPALIVE_MINUTES) {
+    throw invalid(`The option "keepAliveMinutes" must be ${ACCEPTED.keepAliveMinutes}, found ${describe(value)}. Keep it below experimental.location_idle_timeout`)
   }
   return value
 }

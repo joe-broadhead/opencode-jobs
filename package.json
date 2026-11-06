@@ -71,6 +71,8 @@
     "lint": "node scripts/check.mjs forbidden"
   },
   "devDependencies": {
+    "@babel/core": "7.29.7",
+    "@babel/preset-typescript": "7.27.1",
     "@opencode/client": "2.2.3",
     "@opencode/plugin": "2.2.3",
     "@opencode/sdk": "2.2.3",
@@ -78,6 +80,7 @@
     "@opentui/solid": "0.8.0",
     "@types/bun": "1.4.4",
     "@types/node": "24.19.2",
+    "babel-preset-solid": "1.9.16",
     "croner": "11.0.0",
     "esbuild": "0.28.2",
     "solid-js": "1.9.17",
@@ -88,8 +91,83 @@
     "title": "Jobs",
     "summary": "Run prompts, slash commands and reminders on a schedule, inside OpenCode.",
     "icon": "assets/icon.svg",
-    "tools": [],
-    "skills": [],
+    "tools": [
+      {
+        "name": "jobs.status",
+        "permission": "jobs_status",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "jobs.list",
+        "permission": "jobs_list",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "jobs.get",
+        "permission": "jobs_get",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "jobs.history",
+        "permission": "jobs_history",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "jobs.pause",
+        "permission": "jobs_pause",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "jobs.pause_all",
+        "permission": "jobs_pause_all",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "jobs.create",
+        "permission": "jobs_create",
+        "effect": "ask",
+        "readOnly": false
+      },
+      {
+        "name": "jobs.update",
+        "permission": "jobs_update",
+        "effect": "ask",
+        "readOnly": false
+      },
+      {
+        "name": "jobs.delete",
+        "permission": "jobs_delete",
+        "effect": "ask",
+        "readOnly": false
+      },
+      {
+        "name": "jobs.run_now",
+        "permission": "jobs_run_now",
+        "effect": "ask",
+        "readOnly": false
+      },
+      {
+        "name": "jobs.resume",
+        "permission": "jobs_resume",
+        "effect": "ask",
+        "readOnly": false
+      },
+      {
+        "name": "jobs.extend",
+        "permission": "jobs_extend",
+        "effect": "ask",
+        "readOnly": false
+      }
+    ],
+    "skills": [
+      "jobs"
+    ],
     "rpc": [],
     "views": [],
     "signIns": [],

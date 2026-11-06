@@ -162,19 +162,24 @@ export const settle = async (turns = 8) => {
  * The agent API a run checks before it starts: every agent is guarded unless `unguarded` names it, an agent in
  * `missing` raises the host's not-found error, and any other lookup failure is `fail`.
  */
-export function agentsFake(options: { readonly unguarded?: readonly string[]; readonly missing?: readonly string[]; readonly fail?: boolean } = {}) {
+export function agentsFake(options: { readonly unguarded?: readonly string[]; readonly missing?: readonly string[]; readonly fail?: boolean; readonly names?: readonly string[] } = {}) {
   const guarded = [
     { action: "*", resource: "*", effect: "deny" as const },
     { action: "read", resource: "*", effect: "allow" as const },
   ]
   const open = [{ action: "*", resource: "*", effect: "allow" as const }]
+  const names = options.names ?? ["jobs", "build", "reviewer", "plan"]
+  const info = (agentID: string) => ({ id: agentID, name: agentID, mode: "primary" as const, hidden: false, permissions: options.unguarded?.includes(agentID) === true ? open : guarded })
   const get = async ({ agentID }: { agentID: string }) => {
     if (options.fail === true) throw new Error("agent.list is not ready")
     if (options.missing?.includes(agentID) === true) throw Object.assign(new Error(`Agent not found: ${agentID}`), { _tag: "Agent.NotFoundError" })
-    const permissions = options.unguarded?.includes(agentID) === true ? open : guarded
-    return { location: { directory: "/work" }, data: { id: agentID, name: agentID, permissions } }
+    return { location: { directory: "/work" }, data: info(agentID) }
   }
-  return { get } as unknown as Pick<Plugin.Context["agent"], "get">
+  const list = async () => {
+    if (options.fail === true) throw new Error("agent.list is not ready")
+    return { location: { directory: "/work" }, data: names.filter((name) => options.missing?.includes(name) !== true).map(info) }
+  }
+  return { get, list } as unknown as Pick<Plugin.Context["agent"], "get" | "list">
 }
 
 export interface SessionFakeOptions {

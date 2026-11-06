@@ -5,17 +5,20 @@ describe("parseOptions", () => {
   test("defaults to an enabled plugin on a tested host, in the server's time zone", () => {
     expect(parseOptions(undefined)).toEqual(DEFAULT_OPTIONS)
     expect(parseOptions({})).toEqual(DEFAULT_OPTIONS)
-    expect(DEFAULT_OPTIONS).toEqual({ enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2 })
+    expect(DEFAULT_OPTIONS).toEqual({ enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2, keepAliveMinutes: 20 })
   })
 
   test("accepts every documented value", () => {
-    expect(parseOptions({ enabled: false, allowUntestedHost: true })).toEqual({ enabled: false, allowUntestedHost: true, timezone: null, concurrency: 2 })
-    expect(parseOptions({ enabled: false, allowUntestedHost: false, timezone: "Europe/London", concurrency: 4 })).toEqual({ enabled: false, allowUntestedHost: false, timezone: "Europe/London", concurrency: 4 })
+    expect(parseOptions({ enabled: false, allowUntestedHost: true })).toEqual({ enabled: false, allowUntestedHost: true, timezone: null, concurrency: 2, keepAliveMinutes: 20 })
+    expect(parseOptions({ enabled: false, allowUntestedHost: false, timezone: "Europe/London", concurrency: 4, keepAliveMinutes: 5 })).toEqual({ enabled: false, allowUntestedHost: false, timezone: "Europe/London", concurrency: 4, keepAliveMinutes: 5 })
     expect(parseOptions({ timezone: " UTC " }).timezone).toBe("UTC")
   })
 
   test.each([
-    [{ maxRunsPerJob: 2 }, 'Unknown option "maxRunsPerJob". Accepted options: "enabled", "allowUntestedHost", "timezone", "concurrency"'],
+    [{ maxRunsPerJob: 2 }, 'Unknown option "maxRunsPerJob". Accepted options: "enabled", "allowUntestedHost", "timezone", "concurrency", "keepAliveMinutes"'],
+    [{ keepAliveMinutes: 0 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 60 (20 by default), found 0. Keep it below experimental.location_idle_timeout'],
+    [{ keepAliveMinutes: 61 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 60 (20 by default), found 61. Keep it below experimental.location_idle_timeout'],
+    [{ keepAliveMinutes: 1.5 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 60 (20 by default), found 1.5. Keep it below experimental.location_idle_timeout'],
     [{ concurrency: 0 }, 'The option "concurrency" must be a whole number from 1 to 8 (2 by default), found 0'],
     [{ concurrency: 9 }, 'The option "concurrency" must be a whole number from 1 to 8 (2 by default), found 9'],
     [{ concurrency: 1.5 }, 'The option "concurrency" must be a whole number from 1 to 8 (2 by default), found 1.5'],

@@ -1,21 +1,23 @@
 import { Plugin } from "@opencode/plugin"
+import { registerCommands } from "./commands.js"
 import { PLUGIN_ID } from "./constants.js"
 import { checkHost } from "./host-version.js"
-import { refusalFor, unguardedAgents, type AgentInfo } from "./host/permissions.js"
+import { insertDefaultRules } from "./host/permissions.js"
 import { registerToolsRpc } from "./host/tools-rpc.js"
+import { pauseEveryJob, runNow, type ActionInput } from "./jobs/actions.js"
 import { adopt } from "./jobs/adopt.js"
 import { systemClock, type Clock } from "./jobs/clock.js"
 import { createExecutor } from "./jobs/execute.js"
-import { readJobFiles, type AgentGuard } from "./jobs/files.js"
-import { startKeepAlive, type KeepAlive } from "./jobs/keepalive.js"
+import { keepAlivePeriod, startKeepAlive, type KeepAlive } from "./jobs/keepalive.js"
 import { Leader } from "./jobs/leader.js"
 import { serverTimezone, type Job } from "./jobs/model.js"
+import { createReport, readSource } from "./jobs/report.js"
 import { registerSafety } from "./jobs/safety.js"
 import { Runner } from "./jobs/runner.js"
-import { migrate, readJobs, readPauseAll, setPauseAll } from "./jobs/store.js"
+import { migrate, putBeat, readPauseAll } from "./jobs/store.js"
+import { ownedMethods, toolTransform, type ToolInput } from "./jobs/tools.js"
 import { parseOptions } from "./options.js"
 import { registerStatusRpc } from "./rpc.js"
-import { buildStatus, registerPauseCommand, registerStatusCommand } from "./status.js"
 
 /** Injected by tests: a clock, and whether the loop ticks itself. Production passes nothing. */
 export interface JobsDeps {
@@ -28,9 +30,9 @@ export interface JobsDeps {
 }
 
 /**
- * Registers the status surfaces and both RPCs, reads what there is to report, and starts the worker: leader election,
- * then the runner, the keep-alive and adoption of anything the last leader left in flight. Nothing here touches a
- * session until this instance holds the lease.
+ * Registers every surface — the tools, the commands, both RPCs and the one evaluate hook — and starts the worker:
+ * leader election, then the runner, the keep-alive and adoption of anything the last leader left in flight. Nothing
+ * here touches a session until this instance holds the lease.
  */
 export function createJobsPlugin(deps: JobsDeps = {}) {
   return Plugin.define({
@@ -41,36 +43,55 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
       const timezone = options.timezone ?? serverTimezone()
       const clock = deps.clock ?? systemClock
       const problems = await openStore(ctx)
-      const read = async () => {
-        const check = await agentCheck(ctx)
-        const jobs = await known(ctx, timezone, clock, check.guard)
-        const paused = await readPauseAll(ctx.storage).catch(() => undefined)
-        return buildStatus({
-          host,
-          enabled: options.enabled,
-          jobs: { total: jobs.files.jobs.length, paused: 0, expiring: 0, invalidFiles: jobs.files.invalid.length },
-          // An agent nobody's job names is not jobs' business: the agents a job targets, refused ones included.
-          unguardedAgents: unguardedAgents(check.list, [...jobs.jobs.map((job) => job.agent), ...jobs.files.refused]),
-          ...(paused === undefined ? {} : { paused }),
-          problems: [...problems, ...jobs.files.invalid.map((file) => file.message)],
-        })
+      const report = createReport({
+        storage: ctx.storage,
+        location: ctx.location.directory,
+        timezone,
+        clock,
+        agent: ctx.agent,
+        host,
+        enabled: options.enabled,
+        keepAliveMinutes: options.keepAliveMinutes,
+        problems,
+      })
+      const actions: ActionInput = {
+        storage: ctx.storage,
+        agent: ctx.agent,
+        clock,
+        timezone,
+        source: () => report.source(),
+        wake: () => worker?.wake(),
       }
+      const tools: ToolInput = { ...actions, report, assert: (check) => ctx.permission.assert(check) }
       // Transforms replay on every rebuild, so each registration is disposed on cleanup in reverse order.
       const stops = [
-        await registerStatusCommand(ctx, read),
-        await registerPauseCommand(ctx, async () => {
-          const paused = await readPauseAll(ctx.storage)
-          const next = await setPauseAll(ctx.storage, paused === undefined, clock.now())
-          worker?.wake()
-          return next
+        await registerCommands(ctx, {
+          status: () => report.status(),
+          togglePause: async () => pauseEveryJob(actions, (await readPauseAll(ctx.storage)) === undefined),
+          runNow: (id) => runNow(actions, id),
+          ids: async () => (await report.list()).map((job) => ({ id: job.id, name: job.name })),
         }),
-        await registerStatusRpc(ctx.rpc, read),
+        await registerStatusRpc(ctx.rpc, report),
         // Scripts call the known reads with no model, as a session and its agent.
-        await registerToolsRpc(ctx, { owned: [] }),
+        await registerToolsRpc(ctx, { owned: ownedMethods(tools) }),
         // The one evaluate hook: a run of ours never waits for an approval nobody can give.
         await registerSafety(ctx.permission),
+        // Every agent gets the default rules after its base allow: the jobs tools ask, the reads and pauses are allowed.
+        await ctx.agent.transform((editor) => {
+          for (const { id } of editor.list()) editor.update(id, (info) => insertDefaultRules(info.permissions))
+        }).then((registration) => registration.dispose),
+        await ctx.tool.transform(toolTransform(tools)).then((registration) => registration.dispose),
       ]
-      const worker = options.enabled ? startWorker(ctx, { clock, timezone, concurrency: options.concurrency, loop: deps.loop !== false, deps }) : undefined
+      const worker = options.enabled
+        ? startWorker(ctx, {
+            clock,
+            timezone,
+            concurrency: options.concurrency,
+            keepAliveMs: keepAlivePeriod(options.keepAliveMinutes),
+            loop: deps.loop !== false,
+            deps,
+          })
+        : undefined
       return async () => {
         for (const stop of stops.reverse()) await stop()
         await worker?.stop()
@@ -79,40 +100,12 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
   })
 }
 
-/** The guarded-agent check for the host's agents now: no list means no check, and the evaluate hook is the backstop. */
-async function agentCheck(ctx: Pick<Plugin.Context, "agent">): Promise<{ readonly list: readonly AgentInfo[]; readonly guard?: AgentGuard }> {
-  const list = await ctx.agent.list().then(
-    (found) => found.data,
-    () => [],
-  )
-  if (list.length === 0) return { list }
-  return { list, guard: (agent: string) => refusalFor(list, agent) }
-}
-
-interface KnownJobs {
-  readonly files: Awaited<ReturnType<typeof readJobFiles>>
-  /** The store's tool jobs, with a file job of the same id winning, because the file is the definition a project commits. */
-  readonly jobs: readonly Job[]
-}
-
-/** Every job this instance knows, read now: a refused file is reported, never thrown, and never becomes a job. */
-async function known(ctx: Pick<Plugin.Context, "storage" | "location" | "agent">, timezone: string, clock: Clock, guard?: AgentGuard): Promise<KnownJobs> {
-  const stored = await readJobs(ctx.storage).catch(() => [])
-  const files = await readJobFiles({
-    now: clock.now(),
-    timezone,
-    projects: [ctx.location.directory],
-    ...(guard === undefined ? {} : { guard }),
-  }).catch(() => ({ jobs: [], invalid: [], refused: [] }))
-  const byId = new Map(files.jobs.map((job) => [job.id, job] as const))
-  for (const job of stored) if (!byId.has(job.id)) byId.set(job.id, job)
-  return { files, jobs: [...byId.values()] }
-}
-
 interface WorkerInput {
   readonly clock: Clock
   readonly timezone: string
   readonly concurrency: number
+  /** The keep-alive period, from the `keepAliveMinutes` option. */
+  readonly keepAliveMs: number
   readonly loop: boolean
   readonly deps: JobsDeps
 }
@@ -156,10 +149,7 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
   }
 
   // Every job this leader knows, read the same way status reads them, so a refused file never becomes a job.
-  const jobs = async (): Promise<readonly Job[]> => {
-    const check = await agentCheck(ctx)
-    return (await known(ctx, input.timezone, input.clock, check.guard)).jobs
-  }
+  const jobs = async (): Promise<readonly Job[]> => (await readSource({ storage: ctx.storage, location: ctx.location.directory, timezone: input.timezone, clock: input.clock, agent: ctx.agent })).jobs
 
   leader = new Leader({
     storage: ctx.storage,
@@ -189,7 +179,9 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
         session: ctx.session,
         clock: input.clock,
         location: ctx.location.directory,
+        periodMs: input.keepAliveMs,
         active: () => leader.isLeader,
+        onBeat: (at, ok) => void putBeat(ctx.storage, { at, ok }).catch(() => undefined),
       })
       input.deps.onWorker?.(worker)
       // Adoption re-attaches to runs the last leader left busy; it must not block the loop.
