@@ -208,8 +208,10 @@ export class Leader {
 
   private async becomeLeader(): Promise<void> {
     if (this.announced) return
-    this.announced = true
+    // Announced only once the worker is up: a throw here is retried on the next pass instead of leaving a leader with
+    // nothing running.
     await this.onLead()
+    this.announced = true
   }
 
   private async becomeFollower(): Promise<void> {

@@ -42,7 +42,8 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
       const options = parseOptions(ctx.options)
       const host = checkHost(ctx.app.version, options.allowUntestedHost)
       const timezone = options.timezone ?? serverTimezone()
-      const facts = await load(ctx, timezone)
+      const clock = deps.clock ?? systemClock
+      const facts = await load(ctx, timezone, clock)
       const read = async () => buildStatus({ host, enabled: options.enabled, jobs: facts.jobs, problems: facts.problems })
       // Transforms replay on every rebuild, so each registration is disposed on cleanup in reverse order.
       const stops = [
@@ -51,7 +52,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         // Scripts call the known reads with no model, as a session and its agent.
         await registerToolsRpc(ctx, { owned: [] }),
       ]
-      const worker = options.enabled ? startWorker(ctx, { clock: deps.clock ?? systemClock, timezone, concurrency: options.concurrency, loop: deps.loop !== false, deps }) : undefined
+      const worker = options.enabled ? startWorker(ctx, { clock, timezone, concurrency: options.concurrency, loop: deps.loop !== false, deps }) : undefined
       return async () => {
         for (const stop of stops.reverse()) await stop()
         await worker?.stop()
@@ -166,14 +167,14 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
 }
 
 /** The store's schema is brought up to date once per setup; a file that cannot be read is a status problem, not a throw. */
-async function load(ctx: Pick<Plugin.Context, "storage" | "location">, timezone: string): Promise<Facts> {
+async function load(ctx: Pick<Plugin.Context, "storage" | "location">, timezone: string, clock: Clock): Promise<Facts> {
   const problems: string[] = []
   try {
     await migrate(ctx.storage)
   } catch (error) {
     problems.push(error instanceof Error ? error.message : String(error))
   }
-  const files = await readJobFiles({ now: Date.now(), timezone, projects: [ctx.location.directory] }).catch((error: unknown) => ({
+  const files = await readJobFiles({ now: clock.now(), timezone, projects: [ctx.location.directory] }).catch((error: unknown) => ({
     jobs: [],
     invalid: [{ path: ctx.location.directory, message: errorText("JOBS_INVALID_FILE", `The job files could not be read (${reasonOf(error)}).`, `Check that the job folders are readable, then restart OpenCode.`) }],
   }))

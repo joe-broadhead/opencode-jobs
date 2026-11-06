@@ -12,7 +12,7 @@
  */
 import type { Plugin } from "@opencode/plugin"
 import type { Clock } from "./clock.js"
-import type { Job } from "./model.js"
+import type { Job, JobAction } from "./model.js"
 import { getRun, putRun, slotISO, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
 
 /** The session members one run uses, and nothing else. */
@@ -81,6 +81,8 @@ export function createExecutor(input: ExecutorInput): Executor {
 export interface ExecuteInput extends ExecutorInput, RunRequest {}
 
 export async function execute(input: ExecuteInput): Promise<RunResult> {
+  // A step down before the claim leaves no record at all: the new leader owns the slot and will run it once.
+  if (!input.active()) return { claimed: false, status: "queued", abandoned: true }
   const { job, slot, clock, storage } = input
   const key = slotISO(slot)
   const existing = await getRun(storage, job.id, key)
@@ -89,6 +91,11 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
   const lost = await claimSlot(input, existing)
   if (lost !== undefined) return lost
   if (!input.active()) return { claimed: true, status: "queued", abandoned: true }
+
+  // A reminder posts into an existing session: no run session, no parked parent, and nothing to interrupt but the
+  // target's own turn, which is the person's, so a replace never touches it.
+  const action = job.action
+  if (action.type === "remind") return complete(input, key, clock.now(), action.sessionID, await remind(input, action))
 
   const directory = job.target.directory ?? input.location
   let sessionID: string | undefined
@@ -112,23 +119,7 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
     const startedAt = clock.now()
     await putRun(storage, { job: job.id, slot: key, status: "running", late: input.late, attempt: input.attempt, token: input.token, sessionID, startedAt })
     input.onSession?.({ slot, sessionID, interrupt })
-    const result = await run(input, sessionID)
-    if (!input.active()) return { claimed: true, ...result, abandoned: true }
-    const record = await putRun(storage, {
-      job: job.id,
-      slot: key,
-      status: result.status,
-      late: input.late,
-      attempt: input.attempt,
-      token: input.token,
-      sessionID,
-      startedAt,
-      endedAt: clock.now(),
-      ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
-      ...(result.summary === undefined ? {} : { summary: result.summary }),
-      ...(result.cost === undefined ? {} : { cost: result.cost }),
-    })
-    return { claimed: true, status: result.status, record, sessionID, ...(result.outcome === undefined ? {} : { outcome: result.outcome }), ...(result.summary === undefined ? {} : { summary: result.summary }) }
+    return await complete(input, key, startedAt, sessionID, await run(input, sessionID, action))
   } catch (error) {
     // A run that cannot start is a failed run: the record says so, and the runner counts it.
     if (!input.active()) return { claimed: true, status: "running", ...(sessionID === undefined ? {} : { sessionID }), abandoned: true }
@@ -145,6 +136,34 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
       error: reason(error),
     })
     return { claimed: true, status: "failed", record: failed, ...(sessionID === undefined ? {} : { sessionID }), error: reason(error) }
+  }
+}
+
+/** Writes the final record, unless this instance stopped leading: then the new leader adopts the open one. */
+async function complete(input: ExecuteInput, key: string, startedAt: number, sessionID: string | undefined, result: Finished): Promise<RunResult> {
+  const { job, clock, storage } = input
+  if (!input.active()) return { claimed: true, status: result.status, ...(sessionID === undefined ? {} : { sessionID }), abandoned: true }
+  const record = await putRun(storage, {
+    job: job.id,
+    slot: key,
+    status: result.status,
+    late: input.late,
+    attempt: input.attempt,
+    token: input.token,
+    ...(sessionID === undefined ? {} : { sessionID }),
+    startedAt,
+    endedAt: clock.now(),
+    ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
+    ...(result.summary === undefined ? {} : { summary: result.summary }),
+    ...(result.cost === undefined ? {} : { cost: result.cost }),
+  })
+  return {
+    claimed: true,
+    status: result.status,
+    record,
+    ...(sessionID === undefined ? {} : { sessionID }),
+    ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
+    ...(result.summary === undefined ? {} : { summary: result.summary }),
   }
 }
 
@@ -172,22 +191,32 @@ async function claimSlot(input: ExecuteInput, existing: RunRecord | undefined): 
   return undefined
 }
 
-/** Prompt, command or reminder, then the wait against the timeout, then the outcome and the summary. */
-async function run(input: ExecuteInput, sessionID: string): Promise<Finished> {
-  const { job, clock, session } = input
-  const action = job.action
-
-  if (action.type === "remind") {
-    await session.synthetic({ sessionID: action.sessionID, text: action.text, resume: action.wake })
-    // A reminder without a wake is a post, not a run: there is no model turn to wait for and no new output.
-    if (!action.wake) return { status: "succeeded" }
-    const finished = await bounded({ session, sessionID: action.sessionID, timeoutMs: job.policy.timeoutMs, clock, signal: input.signal, interrupt: async () => { await session.interrupt({ sessionID: action.sessionID }).catch(() => undefined) } })
-    return outcomeOf(session, action.sessionID, finished, input.signal)
+/** A reminder: posted into its own session with no model turn, or awaited when `wake` asks the agent to answer. */
+async function remind(input: ExecuteInput, action: Extract<JobAction, { type: "remind" }>): Promise<Finished> {
+  await input.session.synthetic({ sessionID: action.sessionID, text: action.text, resume: action.wake })
+  if (!action.wake) return { status: "succeeded" }
+  const interrupt = async () => {
+    await input.session.interrupt({ sessionID: action.sessionID }).catch(() => undefined)
   }
+  const finished = await bounded({ session: input.session, sessionID: action.sessionID, timeoutMs: input.job.policy.timeoutMs, clock: input.clock, signal: input.signal, interrupt })
+  return outcomeOf(input.session, action.sessionID, finished, input.signal)
+}
 
+/** A prompt or a command, then the wait against the timeout, then the outcome and the summary. */
+async function run(input: ExecuteInput, sessionID: string, action: Exclude<JobAction, { type: "remind" }>): Promise<Finished> {
+  const { job, clock, session } = input
   if (action.type === "prompt") await session.prompt({ sessionID, text: action.text })
   else await session.command({ sessionID, name: action.name, text: action.arguments ?? "" })
-  const finished = await bounded({ session, sessionID, timeoutMs: job.policy.timeoutMs, clock, signal: input.signal, interrupt: async () => { await session.interrupt({ sessionID }).catch(() => undefined) } })
+  const finished = await bounded({
+    session,
+    sessionID,
+    timeoutMs: job.policy.timeoutMs,
+    clock,
+    signal: input.signal,
+    interrupt: async () => {
+      await session.interrupt({ sessionID }).catch(() => undefined)
+    },
+  })
   return outcomeOf(session, sessionID, finished, input.signal)
 }
 
