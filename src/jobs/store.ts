@@ -35,6 +35,8 @@ export interface JobState {
   readonly job: string
   /** The next slot, as an instant; absent while the schedule has no slot left. */
   readonly nextDueAt?: number
+  /** The schedule has no slot left: the job ran its `at`, reached its end or expired. It never runs again. */
+  readonly done?: boolean
   /** Finished runs, which `ends.times` counts. */
   readonly runCount: number
   /** The slot of the last run that started, as an ISO time. */
@@ -57,6 +59,8 @@ export interface RunRecord {
   readonly status: RunStatus
   readonly late: boolean
   readonly attempt: number
+  /** The leader token that claimed the slot: a write that reads back another token did not win the slot. */
+  readonly token?: string
   readonly sessionID?: string
   readonly startedAt?: number
   readonly endedAt?: number
@@ -167,6 +171,7 @@ export async function readState(storage: Storage, id: string): Promise<JobState>
     job: id,
     runCount: typeof value.runCount === "number" ? value.runCount : 0,
     consecutiveFailures: typeof value.consecutiveFailures === "number" ? value.consecutiveFailures : 0,
+    ...(value.done === true ? { done: true } : {}),
     ...(typeof value.nextDueAt === "number" ? { nextDueAt: value.nextDueAt } : {}),
     ...(typeof value.lastRun === "string" ? { lastRun: value.lastRun } : {}),
     ...(typeof value.queuedSlot === "number" ? { queuedSlot: value.queuedSlot } : {}),
@@ -261,4 +266,29 @@ export async function prune(storage: Storage, now: number): Promise<Pruned> {
   const pruned = pruneRuns(await scanRuns(storage), now)
   for (const record of pruned.remove) await removeRun(storage, record)
   return pruned
+}
+
+/** What the leader's loop last did: it is the status `Runner` row, and how a stop is told from a running runner. */
+export interface RunnerRecord {
+  readonly startedAt: number
+  readonly stoppedAt?: number
+  readonly location: string
+  readonly pid: number
+}
+
+const RUNNER_KEY = "runner"
+
+export async function readRunner(storage: Storage): Promise<RunnerRecord | undefined> {
+  const value = await storage.get(RUNNER_KEY)
+  if (!isObject(value) || typeof value.startedAt !== "number" || typeof value.location !== "string") return undefined
+  return {
+    startedAt: value.startedAt,
+    location: value.location,
+    pid: typeof value.pid === "number" ? value.pid : 0,
+    ...(typeof value.stoppedAt === "number" ? { stoppedAt: value.stoppedAt } : {}),
+  }
+}
+
+export async function putRunner(storage: Storage, record: RunnerRecord): Promise<void> {
+  await storage.set(RUNNER_KEY, record as unknown as Parameters<Storage["set"]>[1])
 }

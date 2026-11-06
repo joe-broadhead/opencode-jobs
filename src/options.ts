@@ -9,15 +9,21 @@ export interface Options {
   readonly allowUntestedHost: boolean
   /** The zone a job that names none runs in. Null uses the server's zone. */
   readonly timezone: string | null
+  /** How many runs may be in flight at once, across every job. Bounds cost and file contention. */
+  readonly concurrency: number
 }
 
-export const DEFAULT_OPTIONS: Options = { enabled: true, allowUntestedHost: false, timezone: null }
+export const DEFAULT_OPTIONS: Options = { enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2 }
+
+/** The most runs a person may allow at once: the option is a cost bound, not a throughput knob. */
+export const MAX_CONCURRENCY = 8
 
 const EXAMPLE = `"plugins": [{ "package": "@joe-broadhead/opencode-jobs", "options": { "enabled": true } }]`
 const ACCEPTED = {
   enabled: "true or false (true by default)",
   allowUntestedHost: "true or false (false by default)",
   timezone: 'an IANA time zone name such as "Europe/London" (the server\'s zone by default)',
+  concurrency: `a whole number from 1 to ${MAX_CONCURRENCY} (2 by default)`,
 } as const
 
 const invalid = (problem: string) =>
@@ -33,12 +39,26 @@ export function parseOptions(raw: unknown): Options {
       throw invalid(`Unknown option "${key}". Accepted options: ${Object.keys(ACCEPTED).map((name) => `"${name}"`).join(", ")}`)
     }
   }
-  return { enabled: flag(input, "enabled"), allowUntestedHost: flag(input, "allowUntestedHost"), timezone: zone(input) }
+  return {
+    enabled: flag(input, "enabled"),
+    allowUntestedHost: flag(input, "allowUntestedHost"),
+    timezone: zone(input),
+    concurrency: count(input),
+  }
 }
 
 function flag(input: Record<string, unknown>, key: "enabled" | "allowUntestedHost") {
   const value = Object.hasOwn(input, key) ? input[key] : key === "enabled"
   if (typeof value !== "boolean") throw invalid(`The option "${key}" must be ${ACCEPTED[key]}, found ${describe(value)}`)
+  return value
+}
+
+function count(input: Record<string, unknown>): number {
+  if (!Object.hasOwn(input, "concurrency")) return DEFAULT_OPTIONS.concurrency
+  const value = input.concurrency
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > MAX_CONCURRENCY) {
+    throw invalid(`The option "concurrency" must be ${ACCEPTED.concurrency}, found ${describe(value)}`)
+  }
   return value
 }
 

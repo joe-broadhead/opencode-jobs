@@ -5,17 +5,20 @@ describe("parseOptions", () => {
   test("defaults to an enabled plugin on a tested host, in the server's time zone", () => {
     expect(parseOptions(undefined)).toEqual(DEFAULT_OPTIONS)
     expect(parseOptions({})).toEqual(DEFAULT_OPTIONS)
-    expect(DEFAULT_OPTIONS).toEqual({ enabled: true, allowUntestedHost: false, timezone: null })
+    expect(DEFAULT_OPTIONS).toEqual({ enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2 })
   })
 
   test("accepts every documented value", () => {
-    expect(parseOptions({ enabled: false, allowUntestedHost: true })).toEqual({ enabled: false, allowUntestedHost: true, timezone: null })
-    expect(parseOptions({ enabled: false, allowUntestedHost: false, timezone: "Europe/London" })).toEqual({ enabled: false, allowUntestedHost: false, timezone: "Europe/London" })
+    expect(parseOptions({ enabled: false, allowUntestedHost: true })).toEqual({ enabled: false, allowUntestedHost: true, timezone: null, concurrency: 2 })
+    expect(parseOptions({ enabled: false, allowUntestedHost: false, timezone: "Europe/London", concurrency: 4 })).toEqual({ enabled: false, allowUntestedHost: false, timezone: "Europe/London", concurrency: 4 })
     expect(parseOptions({ timezone: " UTC " }).timezone).toBe("UTC")
   })
 
   test.each([
-    [{ concurrency: 2 }, 'Unknown option "concurrency". Accepted options: "enabled", "allowUntestedHost", "timezone"'],
+    [{ maxRunsPerJob: 2 }, 'Unknown option "maxRunsPerJob". Accepted options: "enabled", "allowUntestedHost", "timezone", "concurrency"'],
+    [{ concurrency: 0 }, 'The option "concurrency" must be a whole number from 1 to 8 (2 by default), found 0'],
+    [{ concurrency: 9 }, 'The option "concurrency" must be a whole number from 1 to 8 (2 by default), found 9'],
+    [{ concurrency: 1.5 }, 'The option "concurrency" must be a whole number from 1 to 8 (2 by default), found 1.5'],
     [{ enabled: "yes" }, 'The option "enabled" must be true or false (true by default), found "yes"'],
     [{ enabled: null }, 'The option "enabled" must be true or false (true by default), found null'],
     [{ allowUntestedHost: 1 }, 'The option "allowUntestedHost" must be true or false (false by default), found 1'],
