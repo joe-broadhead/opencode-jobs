@@ -14,3 +14,6 @@ All notable changes to this project are documented here. The format follows [Kee
 - The tools RPC `jobs.scheduler.tools`, which lets a script reach the plugin with no model, as a session and its agent.
 - The options `enabled` and `allowUntestedHost`.
 - The read-only agent profile every job runs as, documented with the blanket deny that makes it closed.
+- The family icon kit's mark and its 128 and 256 pixel rasters, declared in `opencode.icons` and exported from the
+  package, with the `jelly` declaration documented in `docs/jelly.md`. Jobs declares no vendor, and the package carries
+  no vendor marks.
