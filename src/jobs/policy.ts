@@ -86,14 +86,15 @@ export function stopReason(job: Pick<Job, "expires" | "ends">, state: Pick<JobSt
 }
 
 export interface RetryPlan {
-  /** The attempt the retry will be. */
+  /** The attempt the retry will be, counting from 1. */
   readonly attempt: number
   readonly delayMs: number
 }
 
 /**
  * The retry after an attempt that has finished: exponential backoff from `retries.backoffMs`, up to `retries.max`
- * retries. Only a `failed` run is retried: a timeout, an interruption and a success are final.
+ * retries. Only a `failed` run is retried: a timeout, an interruption and a success are final. `attempt` is the
+ * attempt that just finished, counting from 1.
  */
 export function retryAfter(job: Pick<Job, "policy">, input: { readonly attempt: number; readonly outcome: RunOutcome }): RetryPlan | null {
   if (input.outcome !== "failed") return null
