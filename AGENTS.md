@@ -19,10 +19,11 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
 - **Ship prebuilt, one file per entry.** `scripts/build.mjs` bundles `src/index.ts` and `src/tui.ts` with esbuild into
   the self-contained `dist/index.js` and `dist/tui.js`: no chunks, no relative imports, and only host-provided modules
   external. `tsc` only typechecks. No declaration files, `.tsx` or JSX.
-- **No permission rules.** This plugin inserts nothing into any agent and adds no default block. A job runs as the
-  agent it names, and that agent's own `permissions` are its profile. A run's session rules only ever narrow them, and
-  a job whose agent does not deny by default is refused with `JOBS_AGENT_UNGUARDED` at create and again when a slot
-  starts, rather than run into a permission prompt nobody can answer.
+- **Default rules, never a grant.** The plugin inserts one block after each agent's base allow: `jobs_*` asks, and the
+  four reads and the two pauses are allowed (S3). It grants nothing, weakens no deny, and inserts nothing into an agent
+  without a base allow. A job runs as the agent it names, and that agent's own `permissions` are its profile; a run's
+  session rules only ever narrow them. A job whose agent does not deny by default is refused with
+  `JOBS_AGENT_UNGUARDED` at create and again when a slot starts, rather than run into a prompt nobody can answer.
 - **The permission hooks.** Two `permission.hook("evaluate")` calls are allowed, and only these: the one in
   `src/host/tools-rpc.ts` turns an `ask` on one of the tools RPC's own script calls in flight into a deny, and the one
   in `src/jobs/safety.ts` does the same for a session this plugin created for a run. Each file holds exactly one hook,
@@ -35,6 +36,9 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
 - **Transforms are cheap, synchronous and never throw.** Record failures for status instead.
 - **Errors** read `CODE: What happened. Next step: What to do.`, built by `jobsError` or `errorText`. Codes have no
   service prefix; shared failures use the shared names (`HOST_UNTESTED`, `OPTIONS_INVALID`, `STATUS_UNAVAILABLE`).
+- **One model, four surfaces.** `src/jobs/report.ts` reads the store once for `/jobs-status`, the `/jobs` dialog, the
+  status RPC and the `jobs_status` tool; `src/status.ts` renders it and nothing else. The tool stays compact: state,
+  counts, the count of unguarded agents and one next step.
 - **Status.** `src/status.ts` builds one model for `/jobs-status`, the `/jobs` dialog and the status RPC. The RPC keeps
   the fields every plugin of this family shares, `version`, `host` (`version`, `range`, `tested`), `state`,
   `unguardedAgents` and `nextStep`, under those names. Status names jobs, agents, times and outcomes, never a prompt or

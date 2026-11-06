@@ -6,11 +6,15 @@ server. It uses the tools RPC, `jobs.scheduler.tools`, through `opencode api` or
 | Method | What it gives |
 | --- | --- |
 | `describe` | The methods this plugin registers, with each method's input as JSON Schema, and where the location is. |
+| `jobs_status` | The compact status: state, counts, how many agents need the block, and the next step. |
+| `jobs_list` | The jobs there are: id, name, state, agent and next run. `{ "state"?, "limit"? }`. |
+| `jobs_get` | One job, with its runtime state and its last three runs. `{ "id" }`. |
+| `jobs_history` | Recent runs, with each summary labelled as job output. `{ "id"?, "limit"?, "since"? }`. |
 
-Call `describe` for the list rather than assuming it: only reads are methods, and a read is a method only when the
-plugin's own tool table has it. Calls that change something never are: `jobs_pause` and `jobs_pause_all` change state,
-and `jobs_run_now` needs a person, so it keeps its approval prompt and a script cannot answer one. Creating, updating,
-deleting, resuming and extending a job are not methods either: OpenCode answers `rpc.method_not_found`.
+Call `describe` for the list rather than assuming it: only reads are methods. Calls that change something never are:
+`jobs_pause` and `jobs_pause_all` change state, and `jobs_run_now` needs a person, so it keeps its approval prompt and a
+script cannot answer one. Creating, updating, deleting, resuming and extending a job are not methods either: OpenCode
+answers `rpc.method_not_found`.
 
 ## A script runs as a session
 
