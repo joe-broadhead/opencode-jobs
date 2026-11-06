@@ -17,6 +17,7 @@ Set options with the object form of the plugin entry. Every option is optional.
 | `enabled` | `true` or `false` | `true` | `false` stops the runner and leaves the status command, the dialog and both RPCs working. |
 | `allowUntestedHost` | `true` or `false` | `false` | Starts on an OpenCode version outside `>=2.2.3 <2.3.0`, with the `OpenCode` status row saying it is outside the range. |
 | `timezone` | An IANA zone name, such as `Europe/London` | The server's zone | The zone a job that names none runs in. A job's own `tz` wins. |
+| `concurrency` | A whole number from 1 to 8 | `2` | How many runs may be in flight at once, across every job. It bounds cost and file contention, and a run that arrives while the cap is reached waits for the next free slot. |
 
 A wrong option fails setup with `OPTIONS_INVALID`, which names the option and the accepted values. Nothing runs until it
 is fixed.

@@ -31,7 +31,10 @@ run("git", ["init", "--quiet", work], root)
 afterAll(() => rmSync(work, { recursive: true, force: true }), { timeout: 120_000 })
 
 const MAX_FILES = 30
-const MAX_PACKED_BYTES = 100 * 1024
+// The server bundle deliberately carries the scheduler and the file parser (croner, yaml; D3, NOTICE), which is most of
+// the tarball. The cap is wide enough for those two and the plugin, and narrow enough to catch a third library arriving
+// unnoticed.
+const MAX_PACKED_BYTES = 128 * 1024
 // The two self-contained entry bundles, and nothing else, in dist/.
 const DIST = ["dist/index.js", "dist/tui.js"]
 // Modules the host serves to plugins at runtime. Everything else must be inlined in the bundle.

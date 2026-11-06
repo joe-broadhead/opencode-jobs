@@ -1,0 +1,254 @@
+/**
+ * One run: the dedup point, the session, the prompt, the timeout and the record.
+ *
+ * The run's key is `run/<job>/<slotISO>`, so it is deterministic per job and slot. The record is written `queued`
+ * *before* anything starts and read back; a write that comes back with another leader's token did not own the slot, so
+ * nothing runs. Storage has no compare-and-set (F3), so this read-back is what makes two overlapping leaders safe in
+ * practice: the in-process lock is exact, the lease makes overlap rare, and the record decides the slot (DESIGN §5.2).
+ *
+ * A run never waits for a permission prompt. The session is created as the job's own agent, whose `permissions` are the
+ * whole profile; the timeout is the bound of last resort, and a run that outlives its instance writes nothing, so the
+ * next leader finalises it exactly once (`adopt.ts`).
+ */
+import type { Plugin } from "@opencode/plugin"
+import type { Clock } from "./clock.js"
+import type { Job } from "./model.js"
+import { getRun, putRun, slotISO, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
+
+/** The session members one run uses, and nothing else. */
+export type Session = Pick<Plugin.Context["session"], "create" | "get" | "remove" | "prompt" | "command" | "synthetic" | "wait" | "interrupt" | "context">
+
+/** How long a run may take to go idle after its interrupt before the record is written anyway. */
+export const INTERRUPT_GRACE = 5_000
+/** How long a run's claim waits before reading its own write back: storage was visible in ≤13 ms (V4). */
+export const CLAIM_SETTLE = 25
+/** The title of the one parked parent per project; its run sessions are its children (F11). */
+export const PARENT_TITLE = "Jobs"
+
+const TERMINAL: ReadonlySet<RunStatus> = new Set(["succeeded", "failed", "timed_out", "interrupted", "skipped", "missed"])
+
+export const isTerminal = (status: RunStatus) => TERMINAL.has(status)
+
+/** A run the runner tracks while it is in flight, so `replace` can interrupt it and a finish can ring the doorbell. */
+export interface RunHandle {
+  readonly slot: number
+  readonly sessionID?: string
+  readonly interrupt: () => Promise<void>
+}
+
+export interface RunRequest {
+  readonly job: Job
+  /** The planned fire time, before jitter. */
+  readonly slot: number
+  readonly attempt: number
+  readonly late: boolean
+  /** False once this instance has stopped being the leader: the run then finishes silently for the new leader. */
+  readonly active: () => boolean
+  readonly onSession?: (handle: RunHandle) => void
+}
+
+export interface RunResult {
+  /** False when the slot belonged to someone else, or already had a record. */
+  readonly claimed: boolean
+  readonly status: RunStatus
+  readonly outcome?: RunOutcome
+  readonly record?: RunRecord
+  readonly sessionID?: string
+  readonly summary?: string
+  readonly error?: string
+  /** A run that outlived its instance: it wrote nothing, so the new leader adopts the record. */
+  readonly abandoned?: boolean
+}
+
+export type Executor = (request: RunRequest) => Promise<RunResult>
+
+export interface ExecutorInput {
+  readonly storage: Storage
+  readonly session: Session
+  readonly clock: Clock
+  /** The directory a job without `target.directory` runs in: the leader's location. */
+  readonly location: string
+  /** The leader's token, recorded on every run it claims. */
+  readonly token: string
+  /** Aborted on cleanup, so a pending timeout does not outlive the instance. */
+  readonly signal?: AbortSignal
+}
+
+export function createExecutor(input: ExecutorInput): Executor {
+  return (request) => execute({ ...input, ...request })
+}
+
+export interface ExecuteInput extends ExecutorInput, RunRequest {}
+
+export async function execute(input: ExecuteInput): Promise<RunResult> {
+  const { job, slot, clock, storage } = input
+  const key = slotISO(slot)
+  const existing = await getRun(storage, job.id, key)
+  if (existing !== undefined && isTerminal(existing.status)) return { claimed: false, status: existing.status, record: existing }
+
+  const lost = await claimSlot(input, existing)
+  if (lost !== undefined) return lost
+  if (!input.active()) return { claimed: true, status: "queued", abandoned: true }
+
+  const directory = job.target.directory ?? input.location
+  let sessionID: string | undefined
+  let interrupt = async () => undefined
+  try {
+    const parentID = await jobsParent({ storage, session: input.session, directory })
+    const created = await input.session.create({
+      location: { directory },
+      parentID,
+      agent: job.agent,
+      ...(job.target.model === undefined ? {} : { model: job.target.model }),
+      title: `Job · ${job.name} · ${key}`,
+      // A job's list is deny-only (D7): a session rule that allows would be a grant that overrides the agent (V3).
+      permissions: job.allow,
+      metadata: { jobs: { job: job.id, run: key, slot } },
+    })
+    sessionID = created.id
+    interrupt = async () => {
+      await input.session.interrupt({ sessionID: created.id }).catch(() => undefined)
+    }
+    const startedAt = clock.now()
+    await putRun(storage, { job: job.id, slot: key, status: "running", late: input.late, attempt: input.attempt, token: input.token, sessionID, startedAt })
+    input.onSession?.({ slot, sessionID, interrupt })
+    const result = await run(input, sessionID)
+    if (!input.active()) return { claimed: true, ...result, abandoned: true }
+    const record = await putRun(storage, {
+      job: job.id,
+      slot: key,
+      status: result.status,
+      late: input.late,
+      attempt: input.attempt,
+      token: input.token,
+      sessionID,
+      startedAt,
+      endedAt: clock.now(),
+      ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
+      ...(result.summary === undefined ? {} : { summary: result.summary }),
+      ...(result.cost === undefined ? {} : { cost: result.cost }),
+    })
+    return { claimed: true, status: result.status, record, sessionID, ...(result.outcome === undefined ? {} : { outcome: result.outcome }), ...(result.summary === undefined ? {} : { summary: result.summary }) }
+  } catch (error) {
+    // A run that cannot start is a failed run: the record says so, and the runner counts it.
+    if (!input.active()) return { claimed: true, status: "running", ...(sessionID === undefined ? {} : { sessionID }), abandoned: true }
+    const failed = await putRun(storage, {
+      job: job.id,
+      slot: key,
+      status: "failed",
+      late: input.late,
+      attempt: input.attempt,
+      token: input.token,
+      ...(sessionID === undefined ? {} : { sessionID }),
+      startedAt: clock.now(),
+      endedAt: clock.now(),
+      error: reason(error),
+    })
+    return { claimed: true, status: "failed", record: failed, ...(sessionID === undefined ? {} : { sessionID }), error: reason(error) }
+  }
+}
+
+interface Finished {
+  readonly status: RunStatus
+  readonly outcome?: RunOutcome
+  readonly summary?: string
+  readonly cost?: number
+}
+
+/**
+ * The dedup point. A terminal record means the slot is done. Otherwise the record is written `queued` with our token,
+ * the write is given time to be visible, and the record is read back: another token means another leader owns the slot
+ * and this run does nothing. A record that is already `running` and still ours is a retry of the same slot, and is
+ * claimed again deliberately.
+ */
+async function claimSlot(input: ExecuteInput, existing: RunRecord | undefined): Promise<RunResult | undefined> {
+  const { job, slot, clock, storage } = input
+  const key = slotISO(slot)
+  if (existing !== undefined && existing.status === "running" && existing.token !== input.token) return { claimed: false, status: "running", record: existing }
+  await putRun(storage, { job: job.id, slot: key, status: "queued", late: input.late, attempt: input.attempt, token: input.token })
+  await clock.sleep(CLAIM_SETTLE, input.signal)
+  const back = await getRun(storage, job.id, key)
+  if (back?.token !== input.token) return { claimed: false, status: back?.status ?? "queued", ...(back === undefined ? {} : { record: back }) }
+  return undefined
+}
+
+/** Prompt, command or reminder, then the wait against the timeout, then the outcome and the summary. */
+async function run(input: ExecuteInput, sessionID: string): Promise<Finished> {
+  const { job, clock, session } = input
+  const action = job.action
+
+  if (action.type === "remind") {
+    await session.synthetic({ sessionID: action.sessionID, text: action.text, resume: action.wake })
+    // A reminder without a wake is a post, not a run: there is no model turn to wait for and no new output.
+    if (!action.wake) return { status: "succeeded" }
+    const finished = await bounded({ session, sessionID: action.sessionID, timeoutMs: job.policy.timeoutMs, clock, signal: input.signal, interrupt: async () => { await session.interrupt({ sessionID: action.sessionID }).catch(() => undefined) } })
+    return outcomeOf(session, action.sessionID, finished, input.signal)
+  }
+
+  if (action.type === "prompt") await session.prompt({ sessionID, text: action.text })
+  else await session.command({ sessionID, name: action.name, text: action.arguments ?? "" })
+  const finished = await bounded({ session, sessionID, timeoutMs: job.policy.timeoutMs, clock, signal: input.signal, interrupt: async () => { await session.interrupt({ sessionID }).catch(() => undefined) } })
+  return outcomeOf(session, sessionID, finished, input.signal)
+}
+
+/**
+ * `wait` against the job's timeout. `wait` resolves rather than reporting an outcome, so a timeout means the run is
+ * interrupted and the record says `timed_out`; the interruption is bounded too, and the record is written either way.
+ * A cleanup during the wait returns `done`, so the old instance never interrupts a session the new leader adopts.
+ */
+async function bounded(input: { session: Session; sessionID: string; timeoutMs: number; clock: Clock; signal?: AbortSignal; interrupt: () => Promise<void> }): Promise<"done" | "timeout"> {
+  const wait = input.session.wait({ sessionID: input.sessionID }).then(
+    () => "done" as const,
+    () => "done" as const,
+  )
+  const race = await Promise.race([wait, input.clock.sleep(input.timeoutMs, input.signal).then(() => "timeout" as const)])
+  if (race === "done" || input.signal?.aborted === true) return "done"
+  await input.interrupt()
+  await Promise.race([wait, input.clock.sleep(INTERRUPT_GRACE, input.signal)])
+  return "timeout"
+}
+
+/** The outcome the host reports, which is the source of truth after a wait, and the last assistant text as the summary. */
+async function outcomeOf(session: Session, sessionID: string, finished: "done" | "timeout", signal?: AbortSignal): Promise<Finished> {
+  const info = await session.get({ sessionID }).catch(() => undefined)
+  const summary = await summaryOf(session, sessionID)
+  const outcome = info?.outcome
+  const status: RunStatus = finished === "timeout" && signal?.aborted !== true ? "timed_out" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "interrupted" : "succeeded"
+  return {
+    status,
+    ...(outcome === undefined ? {} : { outcome }),
+    ...(summary === undefined ? {} : { summary }),
+    ...(typeof info?.cost === "number" ? { cost: info.cost } : {}),
+  }
+}
+
+/** The parked "Jobs" parent of a directory, recreated when it has been deleted, which also deletes its children (F11). */
+export async function jobsParent(input: { storage: Storage; session: Pick<Session, "create" | "get">; directory: string }): Promise<string> {
+  const key = `state/parent/${input.directory}`
+  const stored = await input.storage.get(key)
+  if (typeof stored === "string" && stored !== "") {
+    const alive = await input.session.get({ sessionID: stored }).catch(() => undefined)
+    if (alive !== undefined) return stored
+  }
+  const created = await input.session.create({ title: PARENT_TITLE, location: { directory: input.directory }, metadata: { jobs: { parent: true } } })
+  await input.storage.set(key, created.id)
+  return created.id
+}
+
+/** The last assistant text, which is the run's summary: job output, capped by the store, never a transcript. */
+export async function summaryOf(session: Pick<Session, "context">, sessionID: string): Promise<string | undefined> {
+  const messages = await session.context({ sessionID }).catch(() => [])
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as { type?: string; content?: readonly { type?: string; text?: unknown }[] } | undefined
+    if (message?.type !== "assistant" || !Array.isArray(message.content)) continue
+    const text = message.content
+      .filter((part) => part?.type === "text" && typeof part.text === "string")
+      .map((part) => part.text as string)
+      .join("\n")
+      .trim()
+    return text === "" ? undefined : text
+  }
+  return undefined
+}
+
+const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))
