@@ -69,15 +69,26 @@ const PRELUDE = `globalThis.tools = (() => {
 
 const result = (value: unknown): string => JSON.stringify(value === undefined ? null : value)
 
+/** A row written at dispatch and amended when the call settles. */
+interface MutableCall {
+  readonly method: string
+  readonly at: number
+  ms: number
+  outcome: "ok" | "refused" | "error"
+  bytes: number
+}
+
 export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult> {
   const wasm = quickjsWasm()
-  const calls: ScriptCall[] = []
+  const calls: MutableCall[] = []
+  let dispatched = 0
   const flags = { timedOut: false, memoryExceeded: false, callLimit: false, outputTruncated: false }
   const deadline = input.now() + input.timeoutMs
   const controller = new AbortController()
   const abort = () => controller.abort()
   input.signal?.addEventListener("abort", abort, { once: true })
   let interrupting = false
+  let closed = false
   let bytes = 0
   let evalError: unknown
 
@@ -105,31 +116,48 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
       const args = jsonHandle.toString()
       const deferred = vm.newPromise()
       const started = input.now()
+      // The cap counts at dispatch, synchronously, before any await: a guest that fires calls without awaiting them
+      // (Promise.all, fire-and-forget) cannot pass the check for every call at once (SR-1). The row is written at
+      // dispatch and amended when the call settles, so the record cannot under-report.
+      if (dispatched >= input.limits.maxCalls) {
+        flags.callLimit = true
+        interrupting = true
+        calls.push({ method, at: started, ms: 0, outcome: "refused", bytes: 0 })
+        deferred.reject(vm.newError("JOBS_SCRIPT_LIMIT: the script used more tool calls than the job allows."))
+        vm.executePendingJobs()
+        return deferred.handle
+      }
+      dispatched += 1
+      const row: MutableCall = { method, at: started, ms: 0, outcome: "ok", bytes: 0 }
+      calls.push(row)
       void (async () => {
         const settle = (error?: Error) => {
+          row.ms = input.now() - started
+          // A burst past the cap can settle after the run has ended and the VM is disposed.
+          if (closed) return
           if (error === undefined) vm.executePendingJobs()
           else {
             deferred.reject(vm.newError(error.message))
             vm.executePendingJobs()
           }
         }
-        if (calls.length >= input.limits.maxCalls) {
-          flags.callLimit = true
-          interrupting = true
-          calls.push({ method, at: started, ms: 0, outcome: "refused", bytes: 0 })
-          settle(new Error("JOBS_SCRIPT_LIMIT: the script used more tool calls than the job allows."))
-          return
-        }
         if (!input.allowed.has(method)) {
-          calls.push({ method, at: started, ms: 0, outcome: "refused", bytes: 0 })
+          row.outcome = "refused"
           settle(new Error(`JOBS_SCRIPT_UNKNOWN_TOOL: ${method} is not in the job's manifest.`))
           return
         }
         try {
           const value = await input.bridge(method, JSON.parse(args) as unknown, controller.signal)
+          // The run can end (a later call hit the cap, or the deadline fired) while this dispatch is in flight: the
+          // call happened, but its result is not delivered, and the VM is disposed.
+          if (closed) {
+            row.outcome = controller.signal.aborted ? "refused" : "error"
+            return
+          }
           const text = result(value)
           const size = Buffer.byteLength(text, "utf8")
-          calls.push({ method, at: started, ms: input.now() - started, outcome: "ok", bytes: size })
+          row.outcome = "ok"
+          row.bytes = size
           bytes += size
           if (bytes > input.limits.maxOutputBytes) {
             flags.outputTruncated = true
@@ -140,7 +168,7 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
           deferred.resolve(vm.newString(text))
           settle()
         } catch (error) {
-          calls.push({ method, at: started, ms: input.now() - started, outcome: controller.signal.aborted ? "refused" : "error", bytes: 0 })
+          row.outcome = controller.signal.aborted ? "refused" : "error"
           settle(new Error(short(error)))
         }
       })()
@@ -158,18 +186,20 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
         throw new Error(settled.error.toString())
       }
       const output = settled.value.toString()
-      if (output.length > input.limits.maxOutputBytes) {
+      const size = Buffer.byteLength(output, "utf8")
+      if (size > input.limits.maxOutputBytes) {
         flags.outputTruncated = true
-        return { ok: true, value: { truncated: output.slice(0, input.limits.maxOutputBytes), note: "output truncated at the job's limit" }, calls, limits: flags, outputTruncated: true }
+        return { ok: true, value: { truncated: true, bytes: size, note: "output truncated at the job's limit" }, calls: [...calls], limits: flags, outputTruncated: true }
       }
-      return { ok: true, value: JSON.parse(output) as unknown, calls, limits: flags, outputTruncated: false }
+      return { ok: true, value: JSON.parse(output) as unknown, calls: [...calls], limits: flags, outputTruncated: false }
     } catch (error) {
       const message = short(error)
       if (/out of memory/i.test(message) || /memory/i.test(String((evalError as { message?: string } | undefined)?.message))) flags.memoryExceeded = true
       if (controller.signal.aborted && !flags.timedOut && !flags.callLimit && !flags.outputTruncated) flags.timedOut = true
-      return { ok: false, error: `${flags.memoryExceeded ? "JOBS_SCRIPT_LIMIT: the script ran out of memory" : flags.callLimit ? "JOBS_SCRIPT_LIMIT: the script used too many tool calls" : flags.outputTruncated ? "JOBS_SCRIPT_LIMIT: the script's output is over the limit" : flags.timedOut ? "JOBS_SCRIPT_LIMIT: the script ran longer than the job allows" : "JOBS_SCRIPT_FAILED: the script failed"}: ${message}`, calls, limits: flags, outputTruncated: flags.outputTruncated }
+      return { ok: false, error: `${flags.memoryExceeded ? "JOBS_SCRIPT_LIMIT: the script ran out of memory" : flags.callLimit ? "JOBS_SCRIPT_LIMIT: the script used too many tool calls" : flags.outputTruncated ? "JOBS_SCRIPT_LIMIT: the script's output is over the limit" : flags.timedOut ? "JOBS_SCRIPT_LIMIT: the script ran longer than the job allows" : "JOBS_SCRIPT_FAILED: the script failed"}: ${message}`, calls: [...calls], limits: flags, outputTruncated: flags.outputTruncated }
     }
   } finally {
+    closed = true
     input.signal?.removeEventListener("abort", abort)
     vm.dispose()
   }

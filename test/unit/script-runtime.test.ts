@@ -46,22 +46,45 @@ describe("the script runtime", () => {
     expect(refused.calls[0]).toMatchObject({ method: "host:other", outcome: "refused" })
   })
 
-  test("stops at the call limit, the output limit and the wall clock", async () => {
-    const calls = await run(`for (let i = 0; i < 5; i += 1) { await tools.host.mem({ i }) } return "done"`, { limits: { maxCalls: 2 }, timeoutMs: 5_000 })
-    expect(calls.ok).toBe(false)
-    expect(calls.limits.callLimit).toBe(true)
-    expect(calls.calls.filter((call) => call.outcome === "ok")).toHaveLength(2)
+  test("reserves the call cap at dispatch, so a burst of unawaited calls cannot pass it", async () => {
+    // SR-1: the cap is checked synchronously in __call. Fifty calls fired at once with a cap of one dispatch once.
+    for (const [burst, cap] of [[50, 1], [1000, 100]] as const) {
+      const dispatched: number[] = []
+      const result = await run(`const p = []; for (let i = 0; i < ${burst}; i += 1) p.push(tools.host.mem({ i })); await Promise.all(p); return "done"`, {
+        bridge: async (_method, input) => {
+          dispatched.push(Number((input as { i: number }).i))
+          return { ok: true }
+        },
+        limits: { maxCalls: cap },
+        timeoutMs: 10_000,
+      })
+      expect(result.limits.callLimit).toBe(true)
+      expect(dispatched).toHaveLength(cap)
+      // Every dispatched call has a row: the cap, then one refused row for each call past it. The interrupt stops the
+      // guest at its next bytecode, so the burst may not reach every iteration; the bridge count is what must hold.
+      expect(result.calls.length).toBeGreaterThanOrEqual(cap)
+      expect(result.calls.length).toBeLessThanOrEqual(burst)
+      // A dispatched call is not "refused": the cap's rows are exactly the cap, whatever their result did when the
+      // interrupt ended the run.
+      expect(result.calls.filter((call) => call.outcome !== "refused")).toHaveLength(cap)
+      expect(result.calls.filter((call) => call.outcome === "refused")).toHaveLength(result.calls.length - cap)
+      expect(result.ok).toBe(false)
+    }
+  }, 30_000)
 
-    const output = await run(`return "${"x".repeat(2048)}"`, { limits: { maxOutputBytes: 256 } })
+  test("stops at the output limit and the wall clock, and truncates by bytes with a marker", async () => {
+    const output = await run(`return "${"\u00e9".repeat(2048)}"`, { limits: { maxOutputBytes: 256 } })
     expect(output.outputTruncated).toBe(true)
-    expect(JSON.stringify(output.value).length).toBeLessThanOrEqual(400)
     expect(output.limits.outputTruncated).toBe(true)
+    // A valid JSON value, not a string cut mid-token: the byte length and a marker.
+    expect(output.value).toMatchObject({ truncated: true, note: expect.stringContaining("limit") })
+    expect((output.value as { bytes: number }).bytes).toBeGreaterThan(256)
 
     const clock = await run("for (;;) {}", { timeoutMs: 250 })
     expect(clock.ok).toBe(false)
     expect(clock.limits.timedOut).toBe(true)
     expect(clock.error).toContain("JOBS_SCRIPT_LIMIT")
-  }, 20_000)
+  }, 30_000)
 
   test("trips the memory limit, and reports a thrown script as a failure with one bounded line", async () => {
     const memory = await run(`const a = []; for (;;) { a.push(new Array(1_000_000).fill(7)) }`, { limits: { memoryMb: 16 }, timeoutMs: 5_000 })
