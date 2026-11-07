@@ -108,6 +108,10 @@ the run would record `JOBS_UNATTENDED`. Leave the write out of the profile; a jo
 
 - **A job whose agent does not deny by default is refused**, at create and again when a slot starts, with
   `JOBS_AGENT_UNGUARDED`. Nothing runs. Status names the agent and prints the block to paste.
+- **A job whose agent the host no longer lists is refused**, at file read and again when a slot starts, with
+  `JOBS_AGENT_MISSING`. This can happen after a plugin update: OpenCode's running plugin can keep a stale agent list
+  while its own API still lists the agent. Nothing runs; status names the agent, and the next step is `opencode reload`
+  in a terminal, or a restart. Every slot re-checks, so jobs resume on their own once the agent is back.
 - **A run never asks.** A tool the agent would ask about is denied inside the job's session with `JOBS_UNATTENDED`, and
   the run carries on and records it. Two `permission.hook("evaluate")` hooks exist: this one, matched to the sessions
   this plugin created for runs (a registry of their ids), and the tools RPC's, matched to a script's own call in flight.
@@ -246,7 +250,8 @@ Both are read-only, and both answer a `STATUS_UNAVAILABLE` failure with a `nextS
 The fields every plugin of this family shares are `version`, `host` (`version`, `range`, `tested`), `state`,
 `unguardedAgents` and `nextStep`. Jobs has no service to connect to, so `state` is `ready`, or `disabled` when the
 `enabled` option is `false`. Its own fields sit beside them: `jobs`, `runner`, `liveness`, `paused`, `nextRuns`,
-`recentRuns`, `failures`, `permissionsBlock` and `problems`.
+`recentRuns`, `failures`, `missingAgents`, `permissionsBlock` and `problems`. `missingAgents` names the agents a job
+uses that the host no longer lists; it is empty when there are none.
 
 ## Errors
 
@@ -263,7 +268,8 @@ its code and shown in status; it is not thrown at you.
 | `JOBS_INVALID_FILE` | A job file has no front matter, unclosed front matter, YAML that does not parse, or a field that is refused; the message names the file and the line. | Fix the file at the line the message names, then run `/jobs-status` again. |
 | `JOBS_ALLOW_WIDENS` | A job's `allow` list holds an `allow` entry, and a job may only narrow its agent's rules. | Move the grant to the job agent's own `permissions` in opencode.json, and keep the job's list to deny rules. |
 | `JOBS_TARGET_MISSING` | A job, session or agent the call names does not exist. | Run `jobs_list` to see the jobs there are, and create the session before naming it. |
-| `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, or there is no such agent, so a job under it is refused instead of run into denied prompts. | Give the agent the read-only block, starting with the blanket deny, or point the job at an agent that has it; `/jobs-status` prints it. |
+| `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, so a job under it is refused instead of run into denied prompts. | Give the agent the read-only block, starting with the blanket deny, or point the job at an agent that has it; `/jobs-status` prints it. |
+| `JOBS_AGENT_MISSING` | OpenCode no longer lists the job's agent, which can happen after a plugin update. No job that names it runs. | Run `opencode reload` in a terminal, or restart OpenCode; every slot re-checks, so the next slot runs once the agent is back. |
 | `JOBS_UNATTENDED` | A run called a tool its agent asks about. The call was denied, and the run continued. | Decide with the person whether that agent may have it. A read goes in the agent's own `permissions`; a write belongs with a person, not a run. |
 | `JOBS_DISABLED` | Every job is paused, or the job the call names is. | Resume with `/jobs-pause` or the `jobs_resume` tool, then retry. |
 | `JOBS_EXPIRED` | The job has no slot left: its `at` has passed, its `ends` was reached, or its expiry has passed. | Extend it with `jobs_extend`, or create a new job. |

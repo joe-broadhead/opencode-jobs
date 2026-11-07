@@ -24,7 +24,11 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   four reads and the two pauses are allowed (S3). It grants nothing, weakens no deny, and inserts nothing into an agent
   without a base allow. A job runs as the agent it names, and that agent's own `permissions` are its profile; a run's
   session rules only ever narrow them. A job whose agent does not deny by default is refused with
-  `JOBS_AGENT_UNGUARDED` at create and again when a slot starts, rather than run into a prompt nobody can answer.
+  `JOBS_AGENT_UNGUARDED` at create and again when a slot starts, rather than run into a prompt nobody can answer. An
+  agent the host no longer lists — a plugin update can leave the running plugin with a stale agent view — is
+  `JOBS_AGENT_MISSING`: the slot is `skipped` with reason `missing`, status names the agent, and the next step is
+  `opencode reload` (or a restart). The file watch's signature includes the agent list, so a transient stale view is
+  re-read and the jobs resume without an action.
 - **The permission hooks.** Two `permission.hook("evaluate")` calls are allowed, and only these: the one in
   `src/host/tools-rpc.ts` turns an `ask` on one of the tools RPC's own script calls in flight into a deny, and the one
   in `src/jobs/safety.ts` does the same for a session this plugin created for a run, and for a script's call, which is
