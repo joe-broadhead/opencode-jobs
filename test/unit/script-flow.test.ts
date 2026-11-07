@@ -174,11 +174,19 @@ describe("running a script job", () => {
     expect((await stale.run()).status).toBe("skipped")
     expect(stale.session.created).toHaveLength(0)
 
-    const revoked = setup({ resolved: [{ ...RESOLVED[0]!, effect: "deny" }], approval: approvalOf(SCRIPT, [{ ...RESOLVED[0]!, effect: "deny" }]) })
+    // The approval was given when the tool was allowed; the agent now denies it. The hashes still match, so the run
+    // reaches the denied() check and reports revoked (D1).
+    const revoked = setup({ resolved: [{ ...RESOLVED[0]!, effect: "deny" }] })
     const record = (await revoked.run()).record!
     expect(record.reason).toBe("revoked")
     expect(record.error).toContain("JOBS_SCRIPT_REVOKED")
     expect(revoked.session.created).toHaveLength(0)
+
+    // Restoring the rule resumes with the original approval: no re-approval.
+    const restored = setup()
+    const again = await restored.run(START + 60_000)
+    expect(again.status).toBe("succeeded")
+    expect(restored.executed).toHaveLength(1)
   })
 
   test("a changed classification needs re-approval even when the hashes still match", async () => {

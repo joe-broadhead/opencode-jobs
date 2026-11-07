@@ -43,6 +43,15 @@ export function shortReason(text: string): string | undefined {
   return cut(reason, REASON_LIMIT)
 }
 
-/** An error's message, or the value itself, as a short reason; `fallback` when nothing is left. */
-export const reasonOf = (error: unknown, fallback = "no reason given") =>
-  shortReason(error instanceof Error ? error.message : String(error)) ?? fallback
+/**
+ * An error as `<name>: <first line>` when it has a name other than `Error`, otherwise its first line; structured values
+ * with a `message` are read, so a host error never becomes `[object Object]` (D3). Secrets are stripped and the text is
+ * capped like any other reason.
+ */
+export const reasonOf = (error: unknown, fallback = "no reason given") => {
+  const found = (typeof error === "object" && error !== null ? error : {}) as { readonly name?: unknown; readonly message?: unknown }
+  const name = typeof found.name === "string" && found.name !== "" && found.name !== "Error" ? `${found.name}: ` : ""
+  const message = error instanceof Error ? error.message : typeof found.message === "string" ? found.message : String(error)
+  const first = message.split(/\r?\n/)[0] ?? ""
+  return shortReason(`${name}${first}`) ?? fallback
+}

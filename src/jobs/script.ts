@@ -62,7 +62,7 @@ export interface ScriptCall {
   /** When the call started, as an instant. */
   readonly at: number
   readonly ms: number
-  readonly outcome: "ok" | "refused" | "error"
+  readonly outcome: "ok" | "refused" | "error" | "aborted"
   /** The size of the result the guest received, in bytes. */
   readonly bytes: number
 }
@@ -73,6 +73,8 @@ export interface ScriptLimitFlags {
   readonly memoryExceeded: boolean
   readonly callLimit: boolean
   readonly outputTruncated: boolean
+  /** The run was aborted from outside (the kill switch, a cleanup, a host teardown), not by its deadline. */
+  readonly interrupted: boolean
 }
 
 /** The approval a job's script carries in its runtime state, never in its authored definition. */
@@ -135,7 +137,12 @@ export function scriptSessionRules(resolved: readonly ResolvedTool[], selfDenies
   return [{ action: "*", resource: "*", effect: "deny" }, ...allows, ...selfDenies]
 }
 
-/** True when the approval names these exact hashes and the same tools, with the same actions and classes. */
+/**
+ * True when the approval names these exact hashes and the same tools, with the same actions and classes. The current
+ * **effect** is deliberately not compared: the approval binds the source, the manifest and each tool's class, so a rule
+ * that later denies a method still matches here and the run reports `revoked` (with the method and rule), while a source
+ * edit is `unapproved`. Restoring the rule resumes without a new approval.
+ */
 export function approvalMatches(approval: ScriptApproval | undefined, script: Script, resolved: readonly ResolvedTool[]): boolean {
   if (approval === undefined) return false
   if (approval.sourceHash !== sourceHash(script.code) || approval.manifestDigest !== manifestDigest(script.uses)) return false
@@ -143,7 +150,7 @@ export function approvalMatches(approval: ScriptApproval | undefined, script: Sc
   if (approved.size !== resolved.length) return false
   return resolved.every((tool) => {
     const before = approved.get(tool.method)
-    return before !== undefined && before.action === tool.action && before.class === tool.class && before.kind === tool.kind && before.effect === tool.effect
+    return before !== undefined && before.action === tool.action && before.class === tool.class && before.kind === tool.kind
   })
 }
 

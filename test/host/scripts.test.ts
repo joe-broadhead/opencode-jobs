@@ -334,6 +334,11 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       await worker.runner.settle()
       await until("the record is interrupted", async () => (await scanRuns(worker.storage, id)).some((entry) => entry.status === "interrupted"), 10_000)
       expect(Date.now() - started).toBeLessThan(5_000)
+      const interrupted = (await scanRuns(worker.storage, id)).find((entry) => entry.status === "interrupted")!
+      // A kill switch is an interruption, not the deadline (D2), and the record's error is coded and readable (D3).
+      expect(interrupted.limits).toMatchObject({ interrupted: true, timedOut: false })
+      expect(interrupted.error).toContain("JOBS_SCRIPT_INTERRUPTED")
+      expect(interrupted.error).not.toContain("[object Object]")
       // The guarantee is the record plus no further calls: whether an in-process RPC notices the abort is a host
       // detail (SR-7), but the run is over and the guest is disposed, so nothing may be dispatched after the pause.
       const callsAtPause = familyCalls.length

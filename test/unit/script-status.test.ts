@@ -26,7 +26,7 @@ async function report() {
     nextDueAt: NOW,
     approval: { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), digest: digestOf(script), at: NOW, resolved: [] },
   })
-  await putRun(storage.storage, { job: job.id, slot: new Date(NOW).toISOString(), status: "skipped", reason: "revoked", late: false, attempt: 1, error: "JOBS_SCRIPT_REVOKED: a tool is denied." })
+  await putRun(storage.storage, { job: job.id, slot: new Date(NOW).toISOString(), status: "skipped", reason: "revoked", late: false, attempt: 1, error: "JOBS_SCRIPT_REVOKED: The script \"bookmarks\" uses tools its agent now denies: host:mem (mem). Next step: Remove the deny rule." })
   return createReport({ storage: storage.storage, location: "/nowhere", timezone: "UTC", clock: clock.clock, agent: agentsFake(), host: HOST, enabled: true, keepAliveMinutes: 20 })
 }
 
@@ -35,6 +35,9 @@ describe("status and a revoked script", () => {
     const status = await (await report()).status()
     expect(status.scriptJobs).toEqual({ approved: 0, unapproved: 1, names: ["bookmarks"], revoked: ["bookmarks"] })
     expect(status.nextStep).toContain("/jobs-approve bookmarks")
+    // The problem row names the job, the method and the action the agent now denies (D1).
+    expect(status.problems[0]).toContain("JOBS_SCRIPT_REVOKED")
+    expect(status.problems[0]).toContain("host:mem")
   })
 
   test("a successful latest run is not flagged", async () => {

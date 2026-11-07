@@ -54,7 +54,7 @@ function harness() {
     scripts,
     runScriptOnce: async () => {
       asked.push({ action: "jobs_script", resources: ["script:sha256:x"] })
-      return { ok: true, calls: [], limits: { timedOut: false, memoryExceeded: false, callLimit: false, outputTruncated: false }, digest: "0".repeat(64), approval: { sourceHash: "0".repeat(64), manifestDigest: "0".repeat(64), digest: "0".repeat(64), at: NOW, resolved: [] } }
+      return { ok: true, calls: [], limits: { timedOut: false, memoryExceeded: false, callLimit: false, outputTruncated: false, interrupted: false }, digest: "0".repeat(64), approval: { sourceHash: "0".repeat(64), manifestDigest: "0".repeat(64), digest: "0".repeat(64), at: NOW, resolved: [] } }
     },
   }
   return { input, asked, storage }

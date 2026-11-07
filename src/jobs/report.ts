@@ -224,7 +224,9 @@ export function createReport(input: ReportInput): Report {
         return summary === undefined ? {} : { scriptJobs: summary }
       })(),
       ...(known ? {} : { agentsUnknown: true }),
-      problems: [...(input.problems ?? []), ...files.invalid.map((file) => file.message)].map((problem) => cut(oneLine(problem), 400)).slice(0, MAX_PROBLEMS),
+      problems: [...(input.problems ?? []), ...files.invalid.map((file) => file.message), ...revokedProblems(records)]
+        .map((problem) => cut(oneLine(problem), 400))
+        .slice(0, MAX_PROBLEMS),
     })
   }
 
@@ -303,6 +305,21 @@ function scriptSummary(
   const revoked = scripts.filter((entry) => latest.get(entry.id)?.reason === "revoked").map((entry) => entry.id)
   const names = [...new Set([...stale, ...revoked])]
   return { approved: scripts.length - names.length, unapproved: names.length, names, revoked }
+}
+
+/**
+ * The latest revoked run's coded error per job: it names the method and the action the agent now denies, so the status's
+ * problem row says what rule to change (D1). Capped and de-duplicated by job.
+ */
+function revokedProblems(records: readonly RunRecord[]): readonly string[] {
+  const seen = new Set<string>()
+  const problems: string[] = []
+  for (const record of records) {
+    if (record.reason !== "revoked" || record.error === undefined || seen.has(record.job)) continue
+    seen.add(record.job)
+    problems.push(record.error)
+  }
+  return problems
 }
 
 /** The failures that need attention: per job, its failed and timed-out runs, with the code and how many. */

@@ -79,7 +79,8 @@ describe("the approval binding", () => {
     expect(approvalMatches(approval, script, [resolved[0]!, { ...resolved[1]!, action: "other" }])).toBe(false)
     // A classification change invalidates it: the person approved a read, and it became a write.
     expect(approvalMatches(approval, script, [resolved[0]!, { ...resolved[1]!, class: "write" }])).toBe(false)
-    expect(approvalMatches(approval, script, [resolved[0]!, { ...resolved[1]!, effect: "deny" }])).toBe(false)
+    // The effect is not part of the binding: a deny is reported as `revoked` by the run, not as a stale approval (D1).
+    expect(approvalMatches(approval, script, [resolved[0]!, { ...resolved[1]!, effect: "deny" }])).toBe(true)
   })
 
   test("lists a write, a send, an export and an unclassified tool, and no read", () => {

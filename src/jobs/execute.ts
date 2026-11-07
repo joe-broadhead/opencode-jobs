@@ -198,6 +198,7 @@ async function complete(input: ExecuteInput, key: string, startedAt: number, ses
     ...(result.result === undefined ? {} : { result: result.result }),
     ...(result.calls === undefined ? {} : { calls: result.calls }),
     ...(result.limits === undefined ? {} : { limits: result.limits }),
+    ...(result.error === undefined ? {} : { error: result.error }),
   })
   return {
     claimed: true,
@@ -218,6 +219,8 @@ interface Finished {
   readonly result?: RunRecord["result"]
   readonly calls?: RunRecord["calls"]
   readonly limits?: RunRecord["limits"]
+  /** A script run's coded error, when it did not succeed. */
+  readonly error?: string
 }
 
 /**
@@ -444,7 +447,7 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
     })
     const bridge = createBridge({ rpc, tool: tools, session: input.session, agent: input.agents, sessionID, agentID: job.agent, manifest: resolved })
     const outcome = await runScript({ code: script.code, allowed: new Set(resolved.map((tool) => tool.method)), limits, timeoutMs, bridge, signal: controller.signal, now: clock.now })
-    const interrupted = stopped || input.signal?.aborted === true
+    const interrupted = stopped || input.signal?.aborted === true || outcome.limits.interrupted
     const status: RunStatus = outcome.ok ? "succeeded" : interrupted ? "interrupted" : outcome.limits.timedOut ? "timed_out" : "failed"
     return await complete(input, key, startedAt, sessionID, {
       status,
@@ -452,6 +455,7 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
       result: outcome.ok ? { ok: true, value: outcome.value } : { ok: false, error: outcome.error },
       calls: outcome.calls,
       limits: outcome.limits,
+      ...(outcome.ok || outcome.error === undefined ? {} : { error: outcome.error }),
     })
   } catch (error) {
     if (sessionID !== undefined) forgetJobSession(sessionID)

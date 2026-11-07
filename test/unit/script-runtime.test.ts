@@ -16,6 +16,22 @@ const run = (code: string, options: { bridge?: ScriptBridge; allowed?: string[];
   })
 
 describe("the script runtime", () => {
+  test("a structured host error is <name>: <first line>, with a code and a next step, never [object Object]", async () => {
+    const result = await run(`return await tools.host.mem({})`, {
+      bridge: async () => {
+        throw { name: "AbortError", message: "All fibers interrupted\nstack line" }
+      },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.error).not.toContain("[object Object]")
+    expect(result.error).toContain("AbortError: All fibers interrupted")
+    expect(result.error).not.toContain("stack line")
+    expect(result.error).toContain("JOBS_SCRIPT_INTERRUPTED")
+    expect(result.error).toContain("Next step:")
+    expect(result.limits.interrupted).toBe(true)
+    expect(result.limits.timedOut).toBe(false)
+  })
+
   test("has the wasm it ships, and gives the guest no host capability", async () => {
     expect(quickjsWasm().byteLength).toBeGreaterThan(600_000)
     const result = await run(`return {
@@ -83,6 +99,7 @@ describe("the script runtime", () => {
     const clock = await run("for (;;) {}", { timeoutMs: 250 })
     expect(clock.ok).toBe(false)
     expect(clock.limits.timedOut).toBe(true)
+    expect(clock.limits.interrupted).toBe(false)
     expect(clock.error).toContain("JOBS_SCRIPT_LIMIT")
   }, 30_000)
 
@@ -113,6 +130,10 @@ describe("the script runtime", () => {
     const result = await pending
     expect(result.ok).toBe(false)
     expect(sawAbort).toBe(true)
-    expect(result.calls[0]).toMatchObject({ method: "host:mem", outcome: "refused" })
+    // A kill switch is an interruption, not a timeout, and its in-flight call is aborted (D2).
+    expect(result.limits.timedOut).toBe(false)
+    expect(result.limits.interrupted).toBe(true)
+    expect(result.error).toContain("JOBS_SCRIPT_INTERRUPTED")
+    expect(result.calls[0]).toMatchObject({ method: "host:mem", outcome: "aborted" })
   }, 20_000)
 })

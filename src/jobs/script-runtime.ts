@@ -11,6 +11,7 @@
  */
 import { existsSync, readFileSync } from "node:fs"
 import { QuickJS, Intrinsics } from "quickjs-wasi"
+import { reasonOf } from "../redact.js"
 import type { ScriptCall, ScriptLimitFlags, ScriptLimits } from "./script.js"
 
 /** One tool call the guest makes. The host resolves it against the manifest before anything is dispatched. */
@@ -74,7 +75,7 @@ interface MutableCall {
   readonly method: string
   readonly at: number
   ms: number
-  outcome: "ok" | "refused" | "error"
+  outcome: "ok" | "refused" | "error" | "aborted"
   bytes: number
 }
 
@@ -82,7 +83,8 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
   const wasm = quickjsWasm()
   const calls: MutableCall[] = []
   let dispatched = 0
-  const flags = { timedOut: false, memoryExceeded: false, callLimit: false, outputTruncated: false }
+  const flags = { timedOut: false, memoryExceeded: false, callLimit: false, outputTruncated: false, interrupted: false }
+  let deadlineHit = false
   const deadline = input.now() + input.timeoutMs
   const controller = new AbortController()
   const abort = () => controller.abort()
@@ -98,10 +100,17 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
     intrinsics: Intrinsics.ALL,
     interruptHandler: () => {
       if (interrupting) return true
-      if (controller.signal.aborted || input.now() > deadline) {
+      // Only the deadline is a timeout. A kill switch, a cleanup or a host teardown aborts the controller and is
+      // recorded as interrupted (D2), never as the script running too long.
+      if (input.now() > deadline) {
         flags.timedOut = true
+        deadlineHit = true
         interrupting = true
         controller.abort()
+        return true
+      }
+      if (controller.signal.aborted) {
+        interrupting = true
         return true
       }
       return false
@@ -168,7 +177,7 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
           deferred.resolve(vm.newString(text))
           settle()
         } catch (error) {
-          row.outcome = controller.signal.aborted ? "refused" : "error"
+          row.outcome = controller.signal.aborted ? "aborted" : "error"
           settle(new Error(short(error)))
         }
       })()
@@ -183,7 +192,9 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
       const settled = await vm.resolvePromise(handle)
       if ("error" in settled) {
         evalError = settled.error
-        throw new Error(settled.error.toString())
+        // A QuickJS failure can be a rejected object; read its message, never `[object Object]` (D3).
+        const value = settled.error as unknown
+        throw new Error(short(value))
       }
       const output = settled.value.toString()
       const size = Buffer.byteLength(output, "utf8")
@@ -195,8 +206,21 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
     } catch (error) {
       const message = short(error)
       if (/out of memory/i.test(message) || /memory/i.test(String((evalError as { message?: string } | undefined)?.message))) flags.memoryExceeded = true
-      if (controller.signal.aborted && !flags.timedOut && !flags.callLimit && !flags.outputTruncated) flags.timedOut = true
-      return { ok: false, error: `${flags.memoryExceeded ? "JOBS_SCRIPT_LIMIT: the script ran out of memory" : flags.callLimit ? "JOBS_SCRIPT_LIMIT: the script used too many tool calls" : flags.outputTruncated ? "JOBS_SCRIPT_LIMIT: the script's output is over the limit" : flags.timedOut ? "JOBS_SCRIPT_LIMIT: the script ran longer than the job allows" : "JOBS_SCRIPT_FAILED: the script failed"}: ${message}`, calls: [...calls], limits: flags, outputTruncated: flags.outputTruncated }
+      // The host tearing a call down (a location reload) says "All fibers interrupted"; that is an abort, not a fault.
+      if (/all fibers interrupted|aborted/i.test(message)) flags.interrupted = true
+      if (controller.signal.aborted && !deadlineHit && !flags.callLimit && !flags.outputTruncated) flags.interrupted = true
+      const coded = flags.memoryExceeded
+        ? "JOBS_SCRIPT_LIMIT: the script ran out of memory. Next step: Raise the job's memory limit, or make the script smaller."
+        : flags.callLimit
+          ? "JOBS_SCRIPT_LIMIT: the script used too many tool calls. Next step: Raise the job's maxCalls, or make the script call fewer tools."
+          : flags.outputTruncated
+            ? "JOBS_SCRIPT_LIMIT: the script's output is over the limit. Next step: Raise the job's maxOutputBytes, or return less data."
+            : flags.timedOut
+              ? "JOBS_SCRIPT_LIMIT: the script ran longer than the job allows. Next step: Raise the job's policy timeout, or give the script a shorter timeoutMs."
+              : flags.interrupted
+                ? "JOBS_SCRIPT_INTERRUPTED: the run was interrupted. Next step: Run it again with jobs_run_now, or wait for its next slot."
+                : "JOBS_SCRIPT_FAILED: the script failed. Next step: Read the script's error, fix the script or its tools, then approve it again if it changed."
+      return { ok: false, error: `${coded} (${message})`, calls: [...calls], limits: flags, outputTruncated: flags.outputTruncated }
     }
   } finally {
     closed = true
@@ -205,8 +229,5 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
   }
 }
 
-/** A guest or host message, one line and bounded, so a record never carries a stack or a payload. */
-function short(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error)
-  return message.split(/\r?\n/)[0]!.slice(0, 300)
-}
+/** A guest or host message, `<name>: <first line>` and bounded, so a record never carries a stack or a payload. */
+const short = (error: unknown): string => reasonOf(error, "no reason given")
