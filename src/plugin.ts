@@ -11,7 +11,7 @@ import { createExecutor } from "./jobs/execute.js"
 import { keepAlivePeriod, startKeepAlive, type KeepAlive } from "./jobs/keepalive.js"
 import { Leader } from "./jobs/leader.js"
 import { HOUR, serverTimezone, type Job } from "./jobs/model.js"
-import { createReport, readSource } from "./jobs/report.js"
+import { createReport, readSource, type Report } from "./jobs/report.js"
 import { registerSafety } from "./jobs/safety.js"
 import { Runner } from "./jobs/runner.js"
 import { migrate, pruneWithSessions, putBeat, readPauseAll } from "./jobs/store.js"
@@ -97,6 +97,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
             concurrency: options.concurrency,
             keepAliveMs: keepAlivePeriod(options.keepAliveMinutes),
             watch,
+            report,
             loop: deps.loop !== false,
             deps,
           })
@@ -117,6 +118,8 @@ interface WorkerInput {
   readonly keepAliveMs: number
   /** The job-file watch the status surfaces share. */
   readonly watch: FileWatch
+  /** The report the surfaces share, so a host test can read what status says. */
+  readonly report: Report
   readonly loop: boolean
   readonly deps: JobsDeps
 }
@@ -127,6 +130,8 @@ export interface Worker {
   readonly keepAlive: KeepAlive
   /** The plugin's own storage, which every job and run key lives in. */
   readonly storage: Plugin.Context["storage"]
+  /** The report the status surfaces share: its `missingAgents` is the instance's own agent view. */
+  readonly report: Report
   /** Wakes the runner now, when this instance leads; safe when it does not. */
   readonly wake: () => void
   readonly stop: () => Promise<void>
@@ -152,6 +157,7 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
       return keepAlive
     },
     storage: ctx.storage,
+    report: input.report,
     wake: () => runner?.wake(),
     stop: async () => {
       await leader.release()
