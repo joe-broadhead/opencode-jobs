@@ -198,11 +198,20 @@ describe.each(HOST_VERSIONS)("installed alone, in stock OpenCode %s", (version) 
 /**
  * The failure the soak found: a plugin-only reload, which is what `opencode plugin update` does, can leave the running
  * plugin with a stale agent view — the host's own API still lists the project's configuration agents, but the plugin
- * does not. Jobs must fail closed, say what happened, and resume with no further action once the agents are back. The
- * break is a race, so the test retries the bundle change until it loses, as the real update can.
+ * does not. Jobs must fail closed, say what happened, and resume with no further action once the agents are back.
+ *
+ * The plugin sees only its own agent view, so an agent the host stops listing is the same failure to it. One test per
+ * release first makes the real plugin-only reload: the break is a race that some machines never lose, so it retries the
+ * bundle change and asserts the fail-closed state when the race loses, and an in-place reload that kept the agent when
+ * it does not. It then takes the agent out of the configuration on purpose, so every environment proves that the job
+ * fails closed, runs nothing across a slot, and runs the next slot exactly once when the agent is back.
  */
+const MINUTE = 60_000
+
 interface HostStatus {
   readonly jobs: { readonly total: number; readonly invalidFiles: number }
+  readonly runner?: { readonly since: number }
+  readonly nextRuns: readonly { readonly id: string; readonly at: number }[]
   readonly recentRuns: readonly { readonly job: string; readonly name: string; readonly status: string; readonly slot: string }[]
   readonly missingAgents: readonly string[]
   readonly unguardedAgents: readonly string[]
@@ -210,98 +219,155 @@ interface HostStatus {
   readonly problems: readonly string[]
 }
 
-describe.each(HOST_VERSIONS)("a plugin-only reload, in stock OpenCode %s", (version) => {
-  test("a dropped agent fails closed, says so, and the next slot runs once after opencode reload", async () => {
-    const installed = installedPackage(false)
-    const host = await serve(version, installed, {
-      name: "agent-reload",
-      config: { agents: { jobs: { description: "The jobs agent", mode: "primary", permissions: [{ action: "*", resource: "*", effect: "deny" }] } } },
-      files: {
-        ".opencode/jobs/status.md": "---\nname: Status\nschedule:\n  every: 1 minute\naction:\n  type: command\n  name: jobs-status\nagent: jobs\n---\n",
-      },
-    })
-    // `opencode reload` can close the socket for a moment (2.2.3 in particular), so a transient reset is retried, not
-    // read as a failed assertion.
-    const retry = async <T>(read: () => Promise<T>): Promise<T> => {
-      for (let attempt = 0; ; attempt += 1) {
-        try {
-          return await read()
-        } catch (error) {
-          if (attempt >= 20 || !/ECONNRESET|ECONNREFUSED|socket connection was closed/i.test(String(error))) throw error
-          await Bun.sleep(1_000)
-        }
+const JOBS_AGENT = { description: "The jobs agent", mode: "primary", permissions: [{ action: "*", resource: "*", effect: "deny" }] }
+const STATUS_JOB = "---\nname: Status\nschedule:\n  every: 1 minute\naction:\n  type: command\n  name: jobs-status\nagent: jobs\n---\n"
+
+/** A stock host with the guarded `jobs` agent and one job that runs it every minute, with the reads the tests poll. */
+async function agentReloadHost(version: string, name: string) {
+  const installed = installedPackage(false)
+  const host = await serve(version, installed, { name, config: { agents: { jobs: JOBS_AGENT } }, files: { ".opencode/jobs/status.md": STATUS_JOB } })
+  // `opencode reload` can close the socket for a moment (2.2.3 in particular), so a transient reset is retried, not
+  // read as a failed assertion.
+  const retry = async <T>(read: () => Promise<T>): Promise<T> => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await read()
+      } catch (error) {
+        if (attempt >= 20 || !/ECONNRESET|ECONNREFUSED|socket connection was closed/i.test(String(error))) throw error
+        await Bun.sleep(1_000)
       }
     }
-    const status = async () => retry(async () => (await host.api<{ output: HostStatus }>("POST", `/api/rpc/${PLUGIN_ID}/status`, { input: {} })).output)
-    const sessions = async () => retry(async () => (await host.api<{ data: readonly { readonly id: string }[] }>("GET", "/api/session")).data.length)
-    const loaded = async () => (await status()).jobs.total === 1
+  }
+  const status = async () => retry(async () => (await host.api<{ output: HostStatus }>("POST", `/api/rpc/${PLUGIN_ID}/status`, { input: {} })).output)
+  const sessions = async () => retry(async () => (await host.api<{ data: readonly { readonly id: string }[] }>("GET", "/api/session")).data.length)
+  const loaded = async () => (await status()).jobs.total === 1
+  const succeeded = (runs: HostStatus["recentRuns"]) => runs.filter((run) => run.status === "succeeded").map((run) => run.slot)
+  /** What has run so far: the sessions there are and the slots that succeeded. */
+  const baseline = async () => ({ sessions: await sessions(), slots: new Set(succeeded((await status()).recentRuns)) })
+  type Baseline = Awaited<ReturnType<typeof baseline>>
+  /** Nothing ran since the baseline: no new slot succeeded, none is running, and no session was written. */
+  const nothingRanSince = async (since: Baseline) => {
+    const now = await status()
+    expect(succeeded(now.recentRuns).filter((slot) => !since.slots.has(slot))).toEqual([])
+    expect(now.recentRuns.filter((run) => run.status === "running")).toEqual([])
+    expect(await sessions()).toBe(since.sessions)
+  }
+  /** The fail-closed state: the agent is named, the next step is the reload, and the job's file does not load. */
+  const failedClosed = async () => {
+    const down = await status()
+    expect(down.missingAgents).toEqual(["jobs"])
+    expect(down.unguardedAgents).toEqual([])
+    expect(down.nextStep).toContain("opencode reload")
+    expect(down.problems.some((problem) => problem.startsWith("JOBS_AGENT_MISSING: "))).toBe(true)
+    expect(down.jobs.invalidFiles).toBe(1)
+  }
+  /** The next slot after the baseline runs once and creates its own session, and no slot runs twice as more arrive. */
+  const runsOnceAfter = async (since: Baseline) => {
+    const fresh = async () => succeeded((await status()).recentRuns).filter((slot) => !since.slots.has(slot))
+    const deadline = Date.now() + 180_000
+    while (Date.now() < deadline && (await fresh()).length === 0) await Bun.sleep(3_000)
+    const first = await fresh()
+    if (first.length === 0) throw new Error(`the recovered job never ran: ${JSON.stringify(await status())}; sessions ${await sessions()}`)
+    expect(new Set(first).size).toBe(first.length)
+    expect(await sessions()).toBeGreaterThan(since.sessions)
+    await Bun.sleep(20_000)
+    const later = succeeded((await status()).recentRuns)
+    expect(new Set(later).size).toBe(later.length)
+    const added = later.filter((slot) => !since.slots.has(slot)).length
+    // One session per run, and one shared parent is allowed.
+    expect(await sessions()).toBeGreaterThanOrEqual(since.sessions + added)
+    expect(await sessions()).toBeLessThanOrEqual(since.sessions + added + 1)
+  }
+  /** Boots until the job loads. The same race can lose at boot; the status names the action, so the test uses it. */
+  const boot = async () => {
+    await host.until("the server answers", async () => ((await status()) ? true : undefined), 180_000)
+    for (let attempt = 0; attempt < 30 && !(await loaded()); attempt += 1) {
+      if ((await status()).missingAgents.includes("jobs")) host.reload()
+      await Bun.sleep(2_000)
+    }
+    expect(await loaded()).toBe(true)
+  }
+  const config = join(host.directory, "opencode.json")
+  /** Rewrites the project's configuration with or without the `jobs` agent, keeping everything else. */
+  const setAgent = (present: boolean) => {
+    const current = JSON.parse(readFileSync(config, "utf8")) as Record<string, unknown>
+    writeFileSync(config, JSON.stringify({ ...current, agents: present ? { jobs: JOBS_AGENT } : {} }))
+  }
+  return { host, status, loaded, baseline, nothingRanSince, failedClosed, runsOnceAfter, boot, setAgent }
+}
+
+describe.each(HOST_VERSIONS)("a missing agent, in stock OpenCode %s", (version) => {
+  test("a plugin-only reload reloads in place; a missing agent fails closed, runs nothing, and the next slot runs once when it is back", async () => {
+    const stock = await agentReloadHost(version, "agent-reload")
+    const { host } = stock
     try {
-      await host.until("the server answers", async () => ((await status()) ? true : undefined), 180_000)
-      // The same race can lose at boot. The status names the action, so the test uses it.
-      for (let attempt = 0; attempt < 30 && !(await loaded()); attempt += 1) {
-        if ((await status()).missingAgents.includes("jobs")) host.reload()
-        await Bun.sleep(2_000)
-      }
-      expect(await loaded()).toBe(true)
-      const before = await sessions()
+      await stock.boot()
+      const since = (await stock.status()).runner?.since
 
       // The plugin re-setup a plugin update causes. Retried because whether setup sees the configuration agents is a race.
       let broken = false
       for (let attempt = 0; attempt < 4 && !broken; attempt += 1) {
-        appendFileSync(join(installed, "dist", "index.js"), "\n// reload\n")
+        const before = await stock.baseline()
+        appendFileSync(join(installedPackage(false), "dist", "index.js"), "\n// reload\n")
         await Bun.sleep(6_000)
-        broken = (await status()).missingAgents.includes("jobs")
+        broken = (await stock.status()).missingAgents.includes("jobs")
+        if (broken) {
+          await stock.failedClosed()
+          // While the row is up, nothing runs and nothing is written.
+          await stock.nothingRanSince(before)
+        }
       }
-      expect(broken).toBe(true)
 
-      const down = await status()
-      expect(down.missingAgents).toEqual(["jobs"])
-      expect(down.unguardedAgents).toEqual([])
-      expect(down.nextStep).toContain("opencode reload")
-      expect(down.problems.some((problem) => problem.startsWith("JOBS_AGENT_MISSING: "))).toBe(true)
-      expect(down.jobs.invalidFiles).toBe(1)
-
-      // While the row is up, nothing runs and nothing is written.
-      expect((await status()).recentRuns.filter((run) => run.status === "succeeded" || run.status === "running")).toEqual([])
-      expect(await sessions()).toBe(before)
-
-      // Either the next file scan finds the agents again (auto-recovery, no user action), or they stay missing past a
-      // scheduled slot; then the status row's own action restores them. The test accepts either, and proves both that
-      // nothing ran while broken and that the next slot runs exactly once after recovery.
-      let healed = false
-      const waitUntil = Date.now() + 75_000
-      while (Date.now() < waitUntil && !healed) {
-        healed = await loaded()
-        if (!healed) await Bun.sleep(3_000)
-      }
-      if (!healed) {
-        // A whole slot passed while the agent was missing: nothing ran, and nothing was written.
-        expect((await status()).recentRuns.filter((run) => run.status === "succeeded" || run.status === "running")).toEqual([])
-        expect(await sessions()).toBe(before)
+      if (broken) {
+        // Either the next file scan finds the agents again (auto-recovery, no user action), or they stay missing past a
+        // scheduled slot; then the status row's own action restores them.
+        let healed = false
+        const waitUntil = Date.now() + 75_000
+        while (Date.now() < waitUntil && !healed) {
+          healed = await stock.loaded()
+          if (!healed) await Bun.sleep(3_000)
+        }
         for (let attempt = 0; attempt < 4 && !healed; attempt += 1) {
           host.reload()
           await Bun.sleep(8_000)
-          healed = await loaded()
+          healed = await stock.loaded()
         }
+        expect(healed).toBe(true)
+      } else {
+        // The race did not lose here. The plugin still reloaded in place, under a new runner, and kept the agent.
+        const after = await stock.status()
+        expect(after.runner?.since).toBeNumber()
+        expect(after.runner?.since).not.toBe(since)
+        expect(after.missingAgents).toEqual([])
+        expect(after.jobs.total).toBe(1)
       }
-      expect(healed).toBe(true)
 
-      // The next slot runs once, and creates one session: the run's own.
-      const deadline = Date.now() + 180_000
-      while (Date.now() < deadline && !(await status()).recentRuns.some((run) => run.status === "succeeded")) await Bun.sleep(3_000)
-      const slots = (runs: readonly { readonly slot: string; readonly status: string }[]) => runs.filter((run) => run.status === "succeeded").map((run) => run.slot)
-      const final = await status()
-      const first = slots(final.recentRuns)
-      if (first.length === 0) throw new Error(`the recovered job never ran: ${JSON.stringify(final)}; sessions ${await sessions()}`)
-      // Every slot ran once, and the run wrote: a session exists that did not before (one shared parent is allowed).
-      expect(new Set(first).size).toBe(first.length)
-      expect(await sessions()).toBeGreaterThan(before)
-      // No slot runs twice, even as the following ones arrive.
-      await Bun.sleep(20_000)
-      const later = slots((await status()).recentRuns)
-      expect(new Set(later).size).toBe(later.length)
-      expect(await sessions()).toBeGreaterThanOrEqual(before + later.length)
-      expect(await sessions()).toBeLessThanOrEqual(before + later.length + 1)
+      // The host stops listing the agent: the same failure to the plugin, made on purpose, so every environment has it.
+      const due = (await stock.status()).nextRuns.find((run) => run.id === "status")?.at
+      expect(due).toBeNumber()
+      stock.setAgent(false)
+      host.reload()
+      // A slot that started just before the change may still be finishing; the baseline is taken once none is in flight.
+      const settled = async () => {
+        const now = await stock.status()
+        return now.missingAgents.includes("jobs") && !now.recentRuns.some((run) => run.status === "running") ? true : undefined
+      }
+      await host.until("the plugin no longer sees the agent", settled, 60_000)
+      const before = await stock.baseline()
+      await stock.failedClosed()
+      // A whole slot passes while the agent is missing: nothing runs, and nothing is written. The job runs every minute
+      // from the slot it was due at, so the first of those slots after the baseline is the one to wait out.
+      let slot = due!
+      while (slot <= Date.now()) slot += MINUTE
+      await Bun.sleep(slot - Date.now() + 5_000)
+      await stock.nothingRanSince(before)
+      await stock.failedClosed()
+
+      stock.setAgent(true)
+      host.reload()
+      await host.until("the job loads again", async () => ((await stock.loaded()) ? true : undefined), 90_000)
+      expect((await stock.status()).missingAgents).toEqual([])
+      await stock.runsOnceAfter(before)
     } catch (error) {
       throw new Error(`${(error as Error).message}\n--- opencode ${version} log ---\n${host.log().slice(-3000)}`)
     } finally {
