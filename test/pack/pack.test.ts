@@ -8,7 +8,7 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { spawn, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { arch, platform } from "node:os"
 import { basename, dirname, join, relative, resolve, sep } from "node:path"
@@ -303,7 +303,14 @@ describe.each(HOST_VERSIONS)("a missing agent, in stock OpenCode %s", (version) 
     try {
       await stock.boot()
 
-      // The plugin re-setup a plugin update causes. Retried because whether setup sees the configuration agents is a race.
+      // Drop the agent from the project config and reload the location: deterministic, where a plugin-only re-setup is
+      // a race. The plugin's file scan then cannot resolve the job's agent, which is the state a plugin update leaves.
+      const configPath = join(host.directory, "opencode.json")
+      const config = JSON.parse(readFileSync(configPath, "utf8")) as { agents?: unknown } & Record<string, unknown>
+      const agents = config.agents
+      delete config.agents
+      writeFileSync(configPath, JSON.stringify(config))
+      await host.api("POST", "/api/location/reload").catch(() => undefined)
       let broken = false
       for (let attempt = 0; attempt < 4 && !broken; attempt += 1) {
         const before = await stock.baseline()
