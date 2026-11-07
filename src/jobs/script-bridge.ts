@@ -38,16 +38,25 @@ const refused = (action: string, effect: "ask" | "deny"): Error =>
   new Error(`PERMISSION_DENIED: ${action} ${effect === "ask" ? "would ask for this run's agent, and a script cannot answer" : "is denied for this run's agent"}.`)
 
 export function createBridge(input: BridgeInput): ScriptBridge {
-  let rules: readonly Rule[] | undefined
+  let sessionRules: readonly Rule[] | undefined
   let calls = 0
-  const allRules = async (): Promise<readonly Rule[]> => {
-    if (rules !== undefined) return rules
+  const session = async (): Promise<{ agentID: string; rules: readonly Rule[] }> => {
+    if (sessionRules !== undefined) return { agentID: input.agentID, rules: sessionRules }
     const info = (await input.session.get({ sessionID: input.sessionID as never }).catch(() => ({}))) as SessionInfo
-    const agentID = info.agent ?? input.agentID
-    const agent = await input.agent.get({ agentID, ...(info.location?.directory === undefined ? {} : { location: { directory: info.location.directory } }) }).catch(() => undefined)
-    rules = [...((agent?.data.permissions ?? []) as readonly Rule[]), ...((info.permissions ?? []) as readonly Rule[])]
-    return rules
+    sessionRules = (info.permissions ?? []) as readonly Rule[]
+    return { agentID: info.agent ?? input.agentID, rules: sessionRules }
   }
+  /**
+   * The agent's rules, read on **every** call: a deny added while a run is in flight must stop the next call, even though
+   * the run session's grant would beat it in the host's order (SR-14). The agent is read where the plugin is (v2.1: no
+   * location), and the session's own rules are the grant.
+   */
+  const agentRules = async (): Promise<readonly Rule[]> => {
+    const { agentID } = await session()
+    const agent = await input.agent.get({ agentID } as never).catch(() => undefined)
+    return (agent?.data.permissions ?? []) as readonly Rule[]
+  }
+  const agentDenies = async (action: string): Promise<boolean> => evaluate(await agentRules(), action) === "deny"
 
   const family = (plugin: string, method: string) => {
     const definition = Rpc.define({
@@ -66,7 +75,9 @@ export function createBridge(input: BridgeInput): ScriptBridge {
     const tool = (await input.tool.list()).find((entry) => entry.id === id || entry.name === id)
     if (tool === undefined) throw new Error(`TOOL_UNAVAILABLE: OpenCode does not list ${id}.`)
     const action = tool.options?.permission ?? tool.id
-    const effect = evaluate(await allRules(), action)
+    const rules = await session()
+    // The host's order: the agent's rules, then the run session's grant.
+    const effect = evaluate([...(await agentRules()), ...rules.rules], action)
     if (effect !== "allow") throw refused(action, effect)
     calls += 1
     const callID = `script:${calls}`
@@ -86,6 +97,8 @@ export function createBridge(input: BridgeInput): ScriptBridge {
   return async (method, args, signal) => {
     const tool = input.manifest.find((entry) => entry.method === method)
     if (tool === undefined) throw new Error(`JOBS_SCRIPT_UNKNOWN_TOOL: ${method} is not in the job's manifest.`)
+    // The agent's rules are re-read per call: a deny added after the run's own resolve stops the next call.
+    if (await agentDenies(tool.action)) throw new Error(`JOBS_SCRIPT_REVOKED: ${tool.action} is now denied for this run's agent.`)
     if (method.startsWith("host:")) return hostTool(method.slice("host:".length))(args, signal)
     const at = method.lastIndexOf(".")
     return family(method.slice(0, at), method.slice(at + 1))(args, signal)

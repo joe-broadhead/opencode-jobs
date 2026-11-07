@@ -219,7 +219,10 @@ export function createReport(input: ReportInput): Report {
       failures: failuresOf(records, names),
       unguardedAgents: known ? [...new Set([...unguardedAgents(agents, named), ...refusedUnguarded])] : [],
       missingAgents: known ? [...new Set([...missingFrom(agents, named), ...refusedMissing])] : [],
-      ...(jobScripts(jobs, states).length === 0 ? {} : { scriptJobs: scriptSummary(jobs, states) }),
+      ...(() => {
+        const summary = scriptSummary(jobs, states, records)
+        return summary === undefined ? {} : { scriptJobs: summary }
+      })(),
       ...(known ? {} : { agentsUnknown: true }),
       problems: [...(input.problems ?? []), ...files.invalid.map((file) => file.message)].map((problem) => cut(oneLine(problem), 400)).slice(0, MAX_PROBLEMS),
     })
@@ -277,19 +280,29 @@ export function runView(record: RunRecord, names: ReadonlyMap<string, string>, s
     ...(record.calls === undefined ? {} : { calls: record.calls.length }),
     ...(record.limits === undefined ? {} : { limits: record.limits }),
     ...(summaries && record.summary !== undefined ? { summary: jobOutput(record.summary, { name, at: record.slot }) } : {}),
-    ...(summaries && record.result !== undefined ? { result: record.result } : {}),
+    // A script's result is script output: framed exactly as a summary is, never raw data for a model to follow (SR-9).
+    ...(summaries && record.result !== undefined ? { result: jobOutput(JSON.stringify(record.result), { name, at: record.slot }) } : {}),
   }
 }
 
-/** The script jobs whose stored approval no longer covers their source and manifest. */
-function jobScripts(jobs: readonly Job[], states: ReadonlyMap<string, JobState>): readonly string[] {
-  return jobs.flatMap((job) => (job.action.type === "script" && !approvalCurrent(states.get(job.id)?.approval, job.action.script) ? [job.id] : []))
-}
-
-function scriptSummary(jobs: readonly Job[], states: ReadonlyMap<string, JobState>): { readonly approved: number; readonly unapproved: number; readonly names: readonly string[] } {
-  const scripts = jobs.filter((job) => job.action.type === "script")
-  const names = jobScripts(jobs, states)
-  return { approved: scripts.length - names.length, unapproved: names.length, names }
+/**
+ * The script jobs that need a new approval: their stored approval no longer covers the source and manifest, or their
+ * latest run was skipped because a tool is now denied (SR-8). The second case cannot be seen from the hashes: the run
+ * record is the evidence, and it is why status does not say "approved" while every slot is skipped.
+ */
+function scriptSummary(
+  jobs: readonly Job[],
+  states: ReadonlyMap<string, JobState>,
+  records: readonly RunRecord[],
+): { readonly approved: number; readonly unapproved: number; readonly names: readonly string[]; readonly revoked: readonly string[] } | undefined {
+  const scripts = jobs.flatMap((job) => (job.action.type === "script" ? [{ id: job.id, script: job.action.script }] : []))
+  if (scripts.length === 0) return undefined
+  const latest = new Map<string, RunRecord>()
+  for (const record of records) if (!latest.has(record.job)) latest.set(record.job, record)
+  const stale = scripts.filter((entry) => !approvalCurrent(states.get(entry.id)?.approval, entry.script)).map((entry) => entry.id)
+  const revoked = scripts.filter((entry) => latest.get(entry.id)?.reason === "revoked").map((entry) => entry.id)
+  const names = [...new Set([...stale, ...revoked])]
+  return { approved: scripts.length - names.length, unapproved: names.length, names, revoked }
 }
 
 /** The failures that need attention: per job, its failed and timed-out runs, with the code and how many. */

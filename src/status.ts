@@ -58,7 +58,7 @@ export interface RunView {
   readonly calls?: number
   readonly limits?: { readonly timedOut: boolean; readonly memoryExceeded: boolean; readonly callLimit: boolean; readonly outputTruncated: boolean }
   /** A script run's result, framed as script output; present only where summaries are. */
-  readonly result?: { readonly ok: boolean; readonly value?: unknown; readonly error?: string }
+  readonly result?: string
 }
 
 /** A job whose recent runs failed, with the code and how many times. */
@@ -72,8 +72,10 @@ export interface FailureView {
 export interface ScriptJobsView {
   readonly approved: number
   readonly unapproved: number
-  /** The jobs whose approval no longer covers them, by id. */
+  /** The jobs whose approval no longer covers them, or whose latest run was skipped revoked, by id. */
   readonly names: readonly string[]
+  /** The jobs whose latest run was skipped because a tool is now denied. */
+  readonly revoked: readonly string[]
 }
 
 /** What status is built from: the host check, the options, and the store's report. */
@@ -294,7 +296,8 @@ function scriptRows(status: Status): string[] {
   const { scriptJobs: scripts } = status
   if (scripts === undefined) return []
   const waiting = scripts.unapproved === 0 ? "none" : `${scripts.names.join(", ")} (approve again with /${COMMAND_STEM}-approve <job>)`
-  return [`- Script jobs: ${scripts.approved} approved, ${scripts.unapproved} needing approval${scripts.unapproved === 0 ? "" : `: ${waiting}`}`]
+  const denied = scripts.revoked.length === 0 ? "" : `; a tool is now denied for ${scripts.revoked.join(", ")}`
+  return [`- Script jobs: ${scripts.approved} approved, ${scripts.unapproved} needing approval${scripts.unapproved === 0 ? "" : `: ${waiting}`}${denied}`]
 }
 
 /** What the model's `jobs_status` tool returns: state, counts, the number of agents to fix, and the one next step. */
@@ -360,7 +363,7 @@ const RUN = {
     script: { type: "object" },
     calls: { type: "integer", minimum: 0 },
     limits: { type: "object" },
-    result: { type: "object" },
+    result: { type: "string" },
   },
 } as const
 
@@ -406,7 +409,7 @@ export const STATUS_OUTPUT = {
     scriptJobs: {
       type: "object",
       required: ["approved", "unapproved", "names"],
-      properties: { approved: { type: "integer", minimum: 0 }, unapproved: { type: "integer", minimum: 0 }, names: strings },
+      properties: { approved: { type: "integer", minimum: 0 }, unapproved: { type: "integer", minimum: 0 }, names: strings, revoked: strings },
     },
     agentsUnknown: { type: "boolean" },
     permissionsBlock: { type: "array", items: rule },

@@ -97,6 +97,15 @@ describe("docs", () => {
     for (const field of ["`version`", "`host`", "`state`", "`unguardedAgents`", "`nextStep`"]) expect(guide).toContain(field)
   })
 
+  test("no script example names the guarded jobs profile, which would deny every manifest tool", () => {
+    for (const file of ["README.md", "docs/scripting.md", "docs/configuration.md", "skills/jobs/SKILL.md"]) {
+      for (const [, block] of text(file).matchAll(/```(?:ya?ml|json)\n([\s\S]*?)```/g)) {
+        if (!/["']?type["']?\s*:\s*["']?script/.test(block)) continue
+        expect({ file, guarded: /agent["']?\s*:\s*["']?jobs["']?/.test(block) }).toEqual({ file, guarded: false })
+      }
+    }
+  })
+
   test("the README names every code the plugin raises in its troubleshooting table, and no other", () => {
     const readme = /## Troubleshooting\n([\s\S]*?)\n## /.exec(text("README.md"))?.[1] ?? ""
     const rows = [...readme.matchAll(/\| `([A-Z][A-Z_]+)` \|/g)].map((match) => match[1]!)

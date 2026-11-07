@@ -92,7 +92,7 @@ A job's action can be a script instead of a prompt: no model turn, one confined 
 # ~/.config/opencode/jobs/bookmarks.md
 name: Save new X bookmarks
 schedule: { cron: "0 9 * * 0", tz: Europe/Amsterdam }
-agent: jobs
+agent: build
 action:
   type: script
   uses:
@@ -138,8 +138,10 @@ action:
   1,000 calls). The wall clock is the job's `policy.timeout` (`timeoutMs` narrows it). A script that exceeds one gets
   `JOBS_SCRIPT_LIMIT`, and the record says which limit fired.
 - **No model, no host.** The runtime is QuickJS compiled to WebAssembly, one VM per run: no `fetch`, `require`,
-  `process`, environment, filesystem or timers. Its only host function is the call bridge. `/jobs-pause` aborts a run
-  mid-call, and the record says `interrupted`.
+  `process`, environment, filesystem or timers. Its only host function is the call bridge. `/jobs-pause` aborts an
+  in-flight call and discards its result, and the record says `interrupted`. A script that never yields —
+  `for (;;) {}` — cannot be interrupted from outside the interpreter: it is stopped by the job's `policy.timeout`, not
+  by pause. Give a long script a `timeout` that bounds it.
 - **The record has no payloads.** Each call is its method, time, duration, outcome and byte count; the result is
   capped and framed as script output. Inputs and tool results are never stored a second time.
 

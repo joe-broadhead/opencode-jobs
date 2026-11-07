@@ -190,10 +190,29 @@ async function authorize(input: ToolInput, name: ToolName, call: CallSource | un
   })
 }
 
+/**
+ * True when this call is a script act, whose one prompt is the digest-bound `jobs_script` assert the gate makes (SR-4).
+ * The tool's own write action is merged into that assert, so a person sees the source, the tools and the writes once.
+ */
+async function isScriptAct(input: ToolInput, name: ToolName, args: Record<string, unknown>): Promise<boolean> {
+  if (name === "approve" || name === "run_script") return true
+  const action = args["action"]
+  if (name === "create") return (action as { readonly type?: unknown } | undefined)?.type === "script"
+  if (name !== "update") return false
+  if ((action as { readonly type?: unknown } | undefined)?.type === "script") return true
+  // A patch that does not name the action still edits a script job, whose approval is re-checked by the gate.
+  if (typeof args["id"] !== "string") return false
+  return findJob(input, args["id"]).then(
+    (job) => job.action.type === "script",
+    () => false,
+  )
+}
+
 /** One tool or RPC method, by name. A refused or impossible change throws the coded error the host shows. */
 export async function runJobTool(input: ToolInput, name: ToolName, raw: unknown, call?: CallSource): Promise<ToolResult> {
-  await authorize(input, name, call)
   const args = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>
+  // A script act's only prompt is the gate's digest-bound `jobs_script` assert; see `isScriptAct`.
+  if (!(await isScriptAct(input, name, args))) await authorize(input, name, call)
   const id = () => {
     const value = args["id"]
     if (typeof value !== "string" || value.trim() === "") throw new TypeError("id must be a non-empty string")

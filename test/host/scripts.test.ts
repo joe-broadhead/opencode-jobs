@@ -12,7 +12,6 @@ import { HOST_VERSION } from "./harness.js"
 
 const familyCalls: { method: string; input: unknown; at: number }[] = []
 const memWrites: unknown[] = []
-let slowAborted = false
 
 /**
  * A family-like plugin with a tools RPC in the v2 shape: `describe` with classes, resolve-before-dispatch, and one method
@@ -57,10 +56,10 @@ const family = Plugin.define({
         familyCalls.push({ method: "write", input, at: Date.now() })
         return { output: { wrote: input } }
       }
+      familyCalls.push({ method: "slow", input, at: Date.now() })
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, Number(input?.ms ?? 4000))
         context.signal.addEventListener("abort", () => {
-          slowAborted = true
           clearTimeout(timer)
           resolve()
         }, { once: true })
@@ -184,7 +183,7 @@ const jobSpec = (script: { code: string; uses: string[] }, at: number) => ({
 async function create(host: Host, sessionID: string, spec: Record<string, unknown>) {
   const create = await tool(host, "jobs_create")
   const pending = create.execute(spec, toolCall(sessionID, "call_create"))
-  await reply(host, sessionID, "jobs_create")
+  // One prompt per script act: the digest-bound jobs_script assert (SR-4).
   await reply(host, sessionID, "jobs_script")
   const result = (await pending) as { output?: { job?: { id?: string } } }
   const id = result.output?.job?.id
@@ -241,7 +240,6 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       const create = await tool(host, "jobs_create")
       const spec = { ...jobSpec({ code: "return 1", uses: ["scripts.family.family_write"] }, Date.now() + 60_000), agent: "script-locked" }
       const pending = create.execute(spec, toolCall(session.id, "call_denied"))
-      await reply(host, session.id, "jobs_create")
       await expect(pending).rejects.toThrow("JOBS_SCRIPT_DENIED")
       const jobs = (await host.worker().storage.scan({ prefix: "job/" })).entries
       expect(jobs).toEqual([])
@@ -298,7 +296,6 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       // The approve tool asks once and stores the new approval; the next slot runs.
       const approve = await tool(host, "jobs_approve")
       const pending = approve.execute({ id }, toolCall(session.id, "call_approve"))
-      await reply(host, session.id, "jobs_approve")
       await reply(host, session.id, "jobs_script")
       await pending
       // Move the grid to a slot about a second away, so the test does not wait an hour.
@@ -337,8 +334,11 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       await worker.runner.settle()
       await until("the record is interrupted", async () => (await scanRuns(worker.storage, id)).some((entry) => entry.status === "interrupted"), 10_000)
       expect(Date.now() - started).toBeLessThan(5_000)
-      // The RPC handler's abort listener runs when the interrupted call unwinds; the record may be written first.
-      await until("the in-flight call saw the abort", async () => slowAborted, 5_000)
+      // The guarantee is the record plus no further calls: whether an in-process RPC notices the abort is a host
+      // detail (SR-7), but the run is over and the guest is disposed, so nothing may be dispatched after the pause.
+      const callsAtPause = familyCalls.length
+      await Bun.sleep(2_000)
+      expect(familyCalls.length).toBe(callsAtPause)
     } finally {
       await host.close()
     }
@@ -366,6 +366,43 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
     }
   }, 120_000)
 
+  test("one script act asks exactly once, and never leaves a second prompt waiting", async () => {
+    const host = await newHost()
+    try {
+      const session = await host.client.session.create({ location: host.location, agent: AGENT })
+      const create = await tool(host, "jobs_create")
+      const pending = create.execute(jobSpec({ code: CODE, uses: USES }, Date.now() + 60_000), toolCall(session.id, "call_once"))
+      await reply(host, session.id, "jobs_script")
+      await pending
+      // No prompt is still waiting: a second assert would be listed here.
+      expect(await host.client.permission.list({ sessionID: session.id })).toEqual([])
+
+      const run = await tool(host, "jobs_run_script")
+      const oneoff = run.execute({ code: "return 1", uses: ["scripts.family.family_read"], agent: AGENT }, toolCall(session.id, "call_once_2"))
+      await reply(host, session.id, "jobs_script")
+      await oneoff
+      expect(await host.client.permission.list({ sessionID: session.id })).toEqual([])
+    } finally {
+      await host.close()
+    }
+  }, 120_000)
+
+  test("host: never admits the host's shell, file or network tools, and asks nothing", async () => {
+    const host = await newHost()
+    try {
+      const session = await host.client.session.create({ location: host.location, agent: AGENT })
+      const create = await tool(host, "jobs_create")
+      // This host calls its shell tool `shell`; `bash` is the older id, and both are in the core list.
+      for (const id of ["shell", "edit", "webfetch"]) {
+        const pending = create.execute(jobSpec({ code: "return 1", uses: [`host:${id}`] }, Date.now() + 60_000), toolCall(session.id, `call_${id}`))
+        await expect(pending).rejects.toThrow("JOBS_SCRIPT_HOST_TOOL")
+        expect(await host.client.permission.list({ sessionID: session.id })).toEqual([])
+      }
+    } finally {
+      await host.close()
+    }
+  }, 120_000)
+
   test("jobs_run_script runs once, returns its output, and keeps no job", async () => {
     const host = await newHost()
     try {
@@ -373,7 +410,6 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       const jobsBefore = (await host.worker().storage.scan({ prefix: "job/" })).entries.length
       const run = await tool(host, "jobs_run_script")
       const pending = run.execute({ code: "return { ok: true }", uses: ["scripts.family.family_read"], agent: AGENT }, toolCall(session.id, "call_oneoff"))
-      await reply(host, session.id, "jobs_run_script")
       await reply(host, session.id, "jobs_script")
       const result = (await pending) as { output?: { ok?: boolean; value?: unknown; digest?: string } }
       expect(result.output).toMatchObject({ ok: true, value: { ok: true } })

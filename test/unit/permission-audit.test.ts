@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test"
 import type { Plugin } from "@opencode/plugin"
 import { createReport } from "../../src/jobs/report.js"
+import { parseJob } from "../../src/jobs/model.js"
 import { runJobTool, SCHEMAS, toolId, toolTransform, type ToolInput, type ToolName } from "../../src/jobs/tools.js"
 import { DEFAULT_RULES, evaluate as evaluateRule, type Rule } from "../../src/host/permissions.js"
 import { agentsFake, memoryStorage, testClock } from "./fake.js"
@@ -25,7 +26,20 @@ function harness() {
   const clock = testClock(NOW, { instantBelow: 0 })
   const agent = agentsFake()
   const report = createReport({ storage: storage.storage, location: "/nowhere", timezone: "UTC", clock: clock.clock, agent, host: HOST, enabled: true, keepAliveMinutes: 20 })
+  // A script job for the acts whose only prompt is the digest-bound one.
+  const scriptJob = parseJob(
+    { name: "Script", schedule: { every: "1h" }, action: { type: "script", script: { code: "return 1", uses: ["host:probe"] } } },
+    { now: NOW, timezone: "UTC", id: "job_script", source: "tool", createdBy: "user" },
+  )
+  void storage.storage.set("job/job_script", scriptJob as never)
   const asked: unknown[] = []
+  const scripts = {
+    resolve: async () => [{ method: "host:probe", action: "probe", class: "unclassified" as const, kind: "host" as const, effect: "allow" as const }],
+    approve: async () => {
+      asked.push({ action: "jobs_script", resources: ["script:sha256:x"] })
+      return { sourceHash: "0".repeat(64), manifestDigest: "0".repeat(64), digest: "0".repeat(64), at: NOW, resolved: [] }
+    },
+  }
   const input: ToolInput = {
     storage: storage.storage,
     agent,
@@ -37,6 +51,11 @@ function harness() {
     ready: true,
     report,
     assert: async (check) => void asked.push(check),
+    scripts,
+    runScriptOnce: async () => {
+      asked.push({ action: "jobs_script", resources: ["script:sha256:x"] })
+      return { ok: true, calls: [], limits: { timedOut: false, memoryExceeded: false, callLimit: false, outputTruncated: false }, digest: "0".repeat(64), approval: { sourceHash: "0".repeat(64), manifestDigest: "0".repeat(64), digest: "0".repeat(64), at: NOW, resolved: [] } }
+    },
   }
   return { input, asked, storage }
 }
@@ -55,7 +74,7 @@ const SAMPLE: Record<ToolName, unknown> = {
   run_now: { id: "job_missing" },
   resume: { id: "job_missing" },
   extend: { id: "job_missing", expires: new Date(NOW + 86_400_000).toISOString() },
-  approve: { id: "job_missing" },
+  approve: { id: "job_script" },
   run_script: { code: "return 1", uses: ["host:probe"] },
 }
 
@@ -92,7 +111,11 @@ describe("every tool that changes something asserts before it acts", () => {
     for (const name of askTools()) {
       const { input, asked } = harness()
       await runJobTool(input, name, SAMPLE[name], { sessionID: "ses_1", agent: "build", messageID: "msg_1", id: "call_1" }).catch(() => undefined)
-      expect(asked[0]).toMatchObject({ action: toolId(name), resources: ["*"], source: { type: "tool", messageID: "msg_1", id: "call_1" } })
+      // A script act's one prompt is the digest-bound `jobs_script` assert, not the tool's own action (SR-4).
+      const expected = name === "approve" || name === "run_script"
+        ? { action: "jobs_script", resources: ["script:sha256:x"] }
+        : { action: toolId(name), resources: ["*"], source: { type: "tool", messageID: "msg_1", id: "call_1" } }
+      expect(asked[0]).toMatchObject(expected)
     }
   })
 

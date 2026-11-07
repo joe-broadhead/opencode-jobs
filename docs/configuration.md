@@ -128,6 +128,9 @@ action:
 it. A script job may omit `agent`; it then runs as `build`. Its agent's rules must not deny its tools: the guarded
 `jobs` profile is for prompt jobs.
 
+A script that never yields is stopped by the job's timeout, not by pause: pause aborts an in-flight call, but a
+synchronous loop is only interrupted by the deadline. Set `policy.timeout` to the bound the script needs.
+
 The approval is one prompt at create or update, bound to `script:sha256:<digest>` of the source and the sorted manifest.
 The record keeps each call's method, outcome, duration and size, never its input or result; the result is capped and
 framed as script output. `/jobs-pause` aborts a run mid-call.
