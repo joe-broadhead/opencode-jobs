@@ -97,10 +97,13 @@ async function reloadAndLead(host: Host, setups: number): Promise<void> {
 /**
  * Reloads until the new instance's own agent view is whole. The in-place reload is a race — sometimes the new setup
  * runs before the location has registered its configuration agents — and a stale view would skip the slot under test.
- * The upstream failure and its handling are asserted against the stock host in `test/pack`, not here.
+ * A stale view stays stale until the next reload, and a slow machine loses the race more often, so it reloads again,
+ * after a short pause, up to ten times. The upstream failure and its handling are asserted against the stock host in
+ * `test/pack`, not here.
  */
 async function reloadWithAgents(host: Host): Promise<void> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (attempt > 0) await Bun.sleep(1_000)
     await reloadAndLead(host, host.setups())
     if ((await host.worker().report.status()).missingAgents.length === 0) return
   }
