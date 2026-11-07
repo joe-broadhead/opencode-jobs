@@ -24,6 +24,7 @@ async function setup(overrides: Partial<CommandHooks> = {}) {
     togglePause: async () => ({ at: NOW }),
     runNow: async () => job(),
     ids: async () => [{ id: "job_run", name: "Review" }],
+    approve: async () => ({ job: job(), approval: { digest: "a".repeat(64), resolved: [] } }),
     ...overrides,
   }
   await registerCommands(ctx, hooks)
@@ -32,9 +33,9 @@ async function setup(overrides: Partial<CommandHooks> = {}) {
 }
 
 describe("the server commands", () => {
-  test("are /jobs-status, /jobs-pause and /jobs-run, and no others", async () => {
+  test("are /jobs-status, /jobs-pause, /jobs-approve and /jobs-run, and no others", async () => {
     const { added } = await setup()
-    expect(added.map((command) => command.name)).toEqual(["jobs-status", "jobs-pause", "jobs-run"])
+    expect(added.map((command) => command.name)).toEqual(["jobs-status", "jobs-pause", "jobs-approve", "jobs-run"])
     for (const command of added) expect(command.description).toBeString()
   })
 

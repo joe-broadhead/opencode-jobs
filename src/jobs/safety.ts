@@ -60,8 +60,11 @@ export function isJobSession(sessionID: string): boolean {
   return registry().has(sessionID)
 }
 
-/** The tools a run may not call: a run cannot create, change, extend, resume or start a job, so it cannot multiply. */
-export const SELF_DENIES: readonly DenyRule[] = ["jobs_create", "jobs_update", "jobs_delete", "jobs_resume", "jobs_extend", "jobs_run_now"].map((action) => ({
+/**
+ * The tools a run may not call: a run cannot create, change, extend, resume, start, approve or run a job (a script in a
+ * run must not cascade), so it cannot multiply itself. D-I.
+ */
+export const SELF_DENIES: readonly DenyRule[] = ["jobs_create", "jobs_update", "jobs_delete", "jobs_resume", "jobs_extend", "jobs_run_now", "jobs_approve", "jobs_run_script"].map((action) => ({
   action,
   resource: "*",
   effect: "deny",
@@ -91,6 +94,15 @@ export interface JobSessionInput {
   /** The slot's canonical time, which is also the run record's key. */
   readonly run: string
   readonly slot: number
+  /** A script run's rules, which are the approved manifest; a prompt run's are its deny-only narrowing. */
+  readonly permissions?: readonly JobRule[]
+}
+
+/** One rule a run session carries. */
+export interface JobRule {
+  readonly action: string
+  readonly resource: string
+  readonly effect: "allow" | "deny" | "ask"
 }
 
 /**
@@ -105,7 +117,7 @@ export async function openJobSession(input: JobSessionInput): Promise<{ id: stri
     agent: job.agent,
     ...(job.target.model === undefined ? {} : { model: job.target.model }),
     title: `Job · ${job.name} · ${run}`,
-    permissions: sessionRules(job),
+    permissions: input.permissions ?? sessionRules(job),
     metadata: jobMetadata(job, slot, run),
   })
   rememberJobSession(created.id)

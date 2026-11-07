@@ -55,6 +55,8 @@ const SAMPLE: Record<ToolName, unknown> = {
   run_now: { id: "job_missing" },
   resume: { id: "job_missing" },
   extend: { id: "job_missing", expires: new Date(NOW + 86_400_000).toISOString() },
+  approve: { id: "job_missing" },
+  run_script: { code: "return 1", uses: ["host:probe"] },
 }
 
 /** Runs every tool as a model call would, and returns the tools that never asked. */
@@ -82,7 +84,7 @@ describe("every tool that changes something asserts before it acts", () => {
       if (reads || OPEN.includes(action)) expect({ action, effect: defaultEffect(action) }).toEqual({ action, effect: "allow" })
       else expect({ action, effect: defaultEffect(action) }).toEqual({ action, effect: "ask" })
     }
-    expect(askTools()).toEqual(["create", "update", "delete", "run_now", "resume", "extend"])
+    expect(askTools()).toEqual(["create", "update", "delete", "run_now", "resume", "extend", "approve", "run_script"])
   })
 
   test("each one asserts its own action, as the call, before it reads or writes anything", async () => {

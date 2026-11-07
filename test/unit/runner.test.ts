@@ -478,7 +478,7 @@ describe("a manual run", () => {
     const runner = new Runner({ storage: storage.storage, clock: clock.clock, jobs: async () => [job], execute: runs.make(storage), active: () => true, concurrency: 2, location: "/work" })
     await runner.tick(START)
     const scheduled = (await readState(storage.storage, "hourly")).nextDueAt!
-    await storage.storage.set("state/hourly", { ...(await readState(storage.storage, "hourly")), manual: { at: START + 5_000 } })
+    await storage.storage.set("state/hourly", { ...(await readState(storage.storage, "hourly")), manual: { at: START + 5_000 } } as never)
     const tick = await runner.tick(START + 5_000)
     await runner.settle()
     expect(tick.started).toBe(1)

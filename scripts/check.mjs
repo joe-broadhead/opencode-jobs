@@ -16,8 +16,9 @@ const FILES = ["dist", "skills", "assets/icon.svg", "assets/icon-128.png", "asse
 const EXPORTS = { ".": "index", "./tui": "tui" }
 // The icon kit's three files, exported exactly so a consumer can resolve them from the installed package.
 const ASSET_EXPORTS = { "./icon.svg": "assets/icon.svg", "./icon-128.png": "assets/icon-128.png", "./icon-256.png": "assets/icon-256.png" }
-// dist/ holds one self-contained bundle per export, and nothing else (scripts/build.mjs).
-const DIST = Object.values(EXPORTS).map((base) => `${base}.js`).sort()
+// dist/ holds one self-contained bundle per export, plus the script runtime's wasm data file, and nothing else
+// (scripts/build.mjs).
+const DIST = [...Object.values(EXPORTS).map((base) => `${base}.js`), "quickjs.wasm"].sort()
 // The tested OpenCode line. The host provides @opencode/plugin, OpenTUI and Solid, so the package declares no peers.
 const HOST_RANGE = ">=2.2.3 <2.3.0"
 const HOST_DEV_PIN = "2.2.3"

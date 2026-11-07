@@ -41,14 +41,14 @@ const run = (id: string, minutesAgo: number, overrides: Partial<RunRecord> = {})
 })
 
 describe("the store schema", () => {
-  test("a new store is schema 1, and the migration writes nothing a second time", async () => {
+  test("a new store is the current schema, and the migration writes nothing a second time", async () => {
     const { storage, calls, keys } = memoryStorage()
-    expect(SCHEMA_VERSION).toBe(1)
-    expect(await migrate(storage)).toEqual({ version: 1, previous: null })
+    expect(SCHEMA_VERSION).toBe(2)
+    expect(await migrate(storage)).toEqual({ version: 2, previous: null })
     expect(keys()).toEqual(["meta/schema"])
-    expect((await storage.get("meta/schema"))).toBe(1)
+    expect((await storage.get("meta/schema"))).toBe(2)
     const writes = calls.set
-    expect(await migrate(storage)).toEqual({ version: 1, previous: 1 })
+    expect(await migrate(storage)).toEqual({ version: 2, previous: 2 })
     expect(calls.set).toBe(writes)
   })
 

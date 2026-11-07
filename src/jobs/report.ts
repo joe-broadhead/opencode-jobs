@@ -24,9 +24,10 @@ import type { Clock } from "./clock.js"
 import { nextRun } from "./cron.js"
 import { jobFileSignature, readJobFiles, type AgentGuard, type JobFiles } from "./files.js"
 import type { Job } from "./model.js"
+import { approvalCurrent, digestOf } from "./script.js"
 import { cut, oneLine } from "../redact.js"
 import { jobOutput } from "./safety.js"
-import { readBeat, readJobs, readPauseAll, readRunner, readState, scanRuns, type RunRecord } from "./store.js"
+import { readBeat, readJobs, readPauseAll, readRunner, readState, scanRuns, type JobState, type RunRecord } from "./store.js"
 import type { FileWatch } from "./watch.js"
 
 /** What a report reads: the store, the location, the clock, and the agents the files are checked against. */
@@ -71,6 +72,8 @@ export interface JobView {
   readonly expires?: number
   /** A refused file's coded message, with its path and the line at fault. */
   readonly message?: string
+  /** A script job's digest, its tools and whether the stored approval still covers it. */
+  readonly script?: { readonly digest: string; readonly tools: readonly string[]; readonly approvedAt?: number; readonly needsApproval: boolean }
 }
 
 /** What `jobs_history` and the RPC's `history` return. */
@@ -157,6 +160,16 @@ export function createReport(input: ReportInput): Report {
       ...(at === undefined ? {} : { nextRunAt: at }),
       ...(state.lastRun === undefined ? {} : { lastRunAt: state.lastRun }),
       ...(job.expires === undefined ? {} : { expires: job.expires }),
+      ...(job.action.type === "script"
+        ? {
+            script: {
+              digest: digestOf(job.action.script),
+              tools: [...job.action.script.uses],
+              ...(state.approval === undefined ? {} : { approvedAt: state.approval.at }),
+              needsApproval: !approvalCurrent(state.approval, job.action.script),
+            },
+          }
+        : {}),
     }
   }
 
@@ -206,6 +219,7 @@ export function createReport(input: ReportInput): Report {
       failures: failuresOf(records, names),
       unguardedAgents: known ? [...new Set([...unguardedAgents(agents, named), ...refusedUnguarded])] : [],
       missingAgents: known ? [...new Set([...missingFrom(agents, named), ...refusedMissing])] : [],
+      ...(jobScripts(jobs, states).length === 0 ? {} : { scriptJobs: scriptSummary(jobs, states) }),
       ...(known ? {} : { agentsUnknown: true }),
       problems: [...(input.problems ?? []), ...files.invalid.map((file) => file.message)].map((problem) => cut(oneLine(problem), 400)).slice(0, MAX_PROBLEMS),
     })
@@ -259,8 +273,23 @@ export function runView(record: RunRecord, names: ReadonlyMap<string, string>, s
     attempt: record.attempt,
     ...(record.reason === undefined ? {} : { reason: record.reason }),
     ...(record.count === undefined ? {} : { count: record.count }),
+    ...(record.script === undefined ? {} : { script: record.script }),
+    ...(record.calls === undefined ? {} : { calls: record.calls.length }),
+    ...(record.limits === undefined ? {} : { limits: record.limits }),
     ...(summaries && record.summary !== undefined ? { summary: jobOutput(record.summary, { name, at: record.slot }) } : {}),
+    ...(summaries && record.result !== undefined ? { result: record.result } : {}),
   }
+}
+
+/** The script jobs whose stored approval no longer covers their source and manifest. */
+function jobScripts(jobs: readonly Job[], states: ReadonlyMap<string, JobState>): readonly string[] {
+  return jobs.flatMap((job) => (job.action.type === "script" && !approvalCurrent(states.get(job.id)?.approval, job.action.script) ? [job.id] : []))
+}
+
+function scriptSummary(jobs: readonly Job[], states: ReadonlyMap<string, JobState>): { readonly approved: number; readonly unapproved: number; readonly names: readonly string[] } {
+  const scripts = jobs.filter((job) => job.action.type === "script")
+  const names = jobScripts(jobs, states)
+  return { approved: scripts.length - names.length, unapproved: names.length, names }
 }
 
 /** The failures that need attention: per job, its failed and timed-out runs, with the code and how many. */

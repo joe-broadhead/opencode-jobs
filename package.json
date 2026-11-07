@@ -83,6 +83,7 @@
     "babel-preset-solid": "1.9.16",
     "croner": "11.0.0",
     "esbuild": "0.28.2",
+    "quickjs-wasi": "3.6.2",
     "solid-js": "1.9.17",
     "typescript": "5.9.3",
     "yaml": "2.9.1"
@@ -161,6 +162,18 @@
       {
         "name": "jobs.extend",
         "permission": "jobs_extend",
+        "effect": "ask",
+        "readOnly": false
+      },
+      {
+        "name": "jobs.approve",
+        "permission": "jobs_approve",
+        "effect": "ask",
+        "readOnly": false
+      },
+      {
+        "name": "jobs.run_script",
+        "permission": "jobs_run_script",
         "effect": "ask",
         "readOnly": false
       }

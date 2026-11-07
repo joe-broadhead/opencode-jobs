@@ -12,6 +12,9 @@ import { keepAlivePeriod, startKeepAlive, type KeepAlive } from "./jobs/keepaliv
 import { Leader } from "./jobs/leader.js"
 import { HOUR, serverTimezone, type Job } from "./jobs/model.js"
 import { createReport, readSource, type Report } from "./jobs/report.js"
+import { approveJob } from "./jobs/actions.js"
+import { createScriptGate, type ScriptGate } from "./jobs/script-gate.js"
+import { runScriptOnce } from "./jobs/script-oneoff.js"
 import { registerSafety } from "./jobs/safety.js"
 import { Runner } from "./jobs/runner.js"
 import { migrate, pruneWithSessions, putBeat, readPauseAll } from "./jobs/store.js"
@@ -60,6 +63,15 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         problems,
         watch,
       })
+      const scripts = createScriptGate({
+        rpc: ctx.rpc,
+        tool: ctx.tool,
+        agent: ctx.agent,
+        plugin: ctx.plugin,
+        location: ctx.location.directory,
+        permission: ctx.permission,
+        now: () => clock.now(),
+      })
       const actions: ActionInput = {
         storage: ctx.storage,
         agent: ctx.agent,
@@ -69,8 +81,29 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         source: () => report.source(),
         wake: () => worker?.wake(),
         ready,
+        scripts,
       }
-      const tools: ToolInput = { ...actions, report, assert: (check) => ctx.permission.assert(check) }
+      const tools: ToolInput = {
+        ...actions,
+        report,
+        assert: (check) => ctx.permission.assert(check),
+        runScriptOnce: (definition, call) =>
+          runScriptOnce({
+            definition,
+            ...(typeof (definition as { agent?: unknown }).agent === "string" ? { agent: (definition as { agent: string }).agent } : {}),
+            sessionID: call.sessionID,
+            callerAgent: call.agent,
+            ...(call.messageID === undefined || call.id === undefined ? {} : { source: { messageID: call.messageID, id: call.id } }),
+            gate: scripts,
+            rpc: ctx.rpc,
+            tool: ctx.tool,
+            agentDomain: ctx.agent,
+            session: ctx.session,
+            clock,
+            location: ctx.location.directory,
+            job: { id: "script", name: "Script" },
+          }),
+      }
       // Transforms replay on every rebuild, so each registration is disposed on cleanup in reverse order.
       const stops = [
         await registerCommands(ctx, {
@@ -78,10 +111,14 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
           togglePause: async () => pauseEveryJob(actions, (await readPauseAll(ctx.storage)) === undefined),
           runNow: (id) => runNow(actions, id),
           ids: async () => (await report.list()).map((job) => ({ id: job.id, name: job.name })),
+          approve: async (id, sessionID) => {
+            const info = await ctx.session.get({ sessionID }).catch(() => undefined)
+            return approveJob(actions, id, { sessionID, agent: (info?.agent as string | undefined) ?? "build" })
+          },
         }),
         await registerStatusRpc(ctx.rpc, report),
-        // Scripts call the known reads with no model, as a session and its agent.
-        await registerToolsRpc(ctx, { owned: ownedMethods(tools) }),
+        // Every tool as a method with its class: a script calls them with no model, as a session and its agent.
+        await registerToolsRpc(ctx, { methods: ownedMethods(tools) }),
         // The one evaluate hook: a run of ours never waits for an approval nobody can give.
         await registerSafety(ctx.permission),
         // Every agent gets the default rules after its base allow: the jobs tools ask, the reads and pauses are allowed.
@@ -98,6 +135,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
             keepAliveMs: keepAlivePeriod(options.keepAliveMinutes),
             watch,
             report,
+            scripts,
             loop: deps.loop !== false,
             deps,
           })
@@ -120,6 +158,8 @@ interface WorkerInput {
   readonly watch: FileWatch
   /** The report the surfaces share, so a host test can read what status says. */
   readonly report: Report
+  /** The script gate a script run re-resolves its manifest through. */
+  readonly scripts: ScriptGate
   readonly loop: boolean
   readonly deps: JobsDeps
 }
@@ -182,6 +222,9 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
         location: ctx.location.directory,
         token: leader.token,
         signal: stopped.signal,
+        scripts: input.scripts,
+        tool: ctx.tool,
+        rpc: ctx.rpc,
       })
       // Retention runs when the leader starts and once an hour after: the records it drops lose their sessions too.
       let prunedAt: number | undefined

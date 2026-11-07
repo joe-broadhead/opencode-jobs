@@ -8,6 +8,7 @@
 import { randomBytes } from "node:crypto"
 import { errorText } from "../constants.js"
 import { cronProblem } from "./cron.js"
+import { SCRIPT_MAX, SCRIPT_SOURCE_MAX, type Script } from "./script.js"
 
 export const SECOND = 1000
 export const MINUTE = 60 * SECOND
@@ -48,6 +49,7 @@ export type JobAction =
   | { readonly type: "prompt"; readonly text: string }
   | { readonly type: "command"; readonly name: string; readonly arguments?: string }
   | { readonly type: "remind"; readonly sessionID: string; readonly text: string; readonly wake: boolean }
+  | { readonly type: "script"; readonly script: Script }
 
 /** A narrowing rule. A job's list may only deny: a grant belongs to the agent's own `permissions`. */
 export interface DenyRule {
@@ -102,7 +104,13 @@ export interface Job {
   readonly createdBy: CreatedBy
 }
 
-export type JobCode = "JOBS_INVALID_SCHEDULE" | "JOBS_INVALID_JOB" | "JOBS_ALLOW_WIDENS" | "JOBS_TARGET_MISSING"
+export type JobCode =
+  | "JOBS_INVALID_SCHEDULE"
+  | "JOBS_INVALID_JOB"
+  | "JOBS_ALLOW_WIDENS"
+  | "JOBS_TARGET_MISSING"
+  | "JOBS_SCRIPT_UNKNOWN_TOOL"
+  | "JOBS_SCRIPT_DENIED"
 
 /**
  * Why a job definition was refused: the code and next step, and the field at fault, so a file job's error can name the
@@ -421,7 +429,73 @@ function parseAction(value: unknown): JobAction {
     const sessionID = string(input.sessionID, "action.sessionID", "JOBS_TARGET_MISSING", `Create the session the reminder goes to, then set the job's "action.sessionID" to its id.`)
     return { type, sessionID, text: string(input.text, "action.text"), wake: input.wake === true }
   }
-  return fail("JOBS_INVALID_JOB", "action.type", `"action.type" is ${JSON.stringify(type)}; the types are "prompt", "command" and "remind".`, `Use an action of type "prompt", "command" or "remind".`)
+  if (type === "script") {
+    keys(input, "action", ["type", "script"])
+    return { type, script: parseScript(input.script) }
+  }
+  return fail("JOBS_INVALID_JOB", "action.type", `"action.type" is ${JSON.stringify(type)}; the types are "prompt", "command", "remind" and "script".`, `Use an action of type "prompt", "command", "remind" or "script".`)
+}
+
+/** The method grammar of one `uses` entry: `<plugin>.<method>` or `host:<tool id>`. Exactness is checked when it resolves. */
+const METHOD = /^(?:host:[A-Za-z0-9][A-Za-z0-9_.-]*|[A-Za-z0-9][A-Za-z0-9_.-]*\.[A-Za-z0-9][A-Za-z0-9_.-]*)$/
+
+/** A script's source, manifest, optional timeout and limits. The digest and the approval are job state, not here. */
+function parseScript(value: unknown): Script {
+  const input = object(value, "action.script")
+  keys(input, "action.script", ["code", "uses", "timeoutMs", "limits"])
+  const code = source(input.code)
+  if (!Array.isArray(input.uses)) fail("JOBS_INVALID_JOB", "action.script.uses", `"action.script.uses" must be a list of methods, found ${describe(input.uses)}.`, `List every tool the script calls, as "<plugin id>.<method>" or "host:<tool id>".`)
+  if (input.uses.length === 0) fail("JOBS_INVALID_JOB", "action.script.uses", `"action.script.uses" is empty, so the script could call nothing.`, `List at least one tool, as "<plugin id>.<method>" or "host:<tool id>".`)
+  if (input.uses.length > 200) fail("JOBS_INVALID_JOB", "action.script.uses", `"action.script.uses" has ${input.uses.length} entries; the limit is 200.`, `Name only the tools the script calls.`)
+  const uses = input.uses.map((entry, index) => {
+    if (typeof entry !== "string" || !METHOD.test(entry)) {
+      fail("JOBS_INVALID_JOB", `action.script.uses.${index}`, `The manifest entry ${describe(entry)} is not a method.`, `Write it as "<plugin id>.<method>", such as "x.posts.get_users_bookmarks", or "host:<tool id>", such as "host:mem_mem_remember".`)
+    }
+    return entry
+  })
+  const unique = [...new Set(uses)]
+  const timeoutMs = input.timeoutMs === undefined ? undefined : duration(input.timeoutMs, "action.script.timeoutMs", "JOBS_INVALID_JOB", `Use a duration such as "5m", or remove it.`)
+  const limits = input.limits === undefined ? undefined : parseScriptLimits(input.limits)
+  return { code, uses: unique, ...(timeoutMs === undefined ? {} : { timeoutMs }), ...(limits === undefined ? {} : { limits }) }
+}
+
+/** Parses a script definition from a tool's input, the same validation a job file gets. */
+export function parseScriptDefinition(value: unknown): Script {
+  return parseScript(value)
+}
+
+/** A script's source as written: not trimmed, because its indentation is part of it. */
+function source(value: unknown): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    fail("JOBS_INVALID_JOB", "action.script.code", `"action.script.code" must be the script's source, found ${describe(value)}.`, `Write the JavaScript the script runs in "action.script.code".`)
+  }
+  if (Buffer.byteLength(value, "utf8") > SCRIPT_SOURCE_MAX) {
+    fail("JOBS_INVALID_JOB", "action.script.code", `"action.script.code" is over ${SCRIPT_SOURCE_MAX} bytes.`, `Keep the script under ${SCRIPT_SOURCE_MAX} bytes.`)
+  }
+  if (value.includes("\u0000")) fail("JOBS_INVALID_JOB", "action.script.code", `"action.script.code" contains a null byte.`, `Remove it.`)
+  return value
+}
+
+/** The per-run limits D-E allows: whole numbers inside the hard caps. */
+function parseScriptLimits(value: unknown): Partial<{ memoryMb: number; maxCalls: number; maxOutputBytes: number }> {
+  const input = object(value, "action.script.limits")
+  keys(input, "action.script.limits", ["memoryMb", "maxCalls", "maxOutputBytes"])
+  const whole = (key: "memoryMb" | "maxCalls" | "maxOutputBytes", max: number): number | undefined => {
+    const found = input[key]
+    if (found === undefined) return undefined
+    if (typeof found !== "number" || !Number.isInteger(found) || found < 1 || found > max) {
+      fail("JOBS_INVALID_JOB", `action.script.limits.${key}`, `"action.script.limits.${key}" must be a whole number from 1 to ${max}, found ${describe(found)}.`, `Use a whole number from 1 to ${max}, or remove it.`)
+    }
+    return found
+  }
+  const memoryMb = whole("memoryMb", SCRIPT_MAX.memoryMb)
+  const maxCalls = whole("maxCalls", SCRIPT_MAX.maxCalls)
+  const maxOutputBytes = whole("maxOutputBytes", SCRIPT_MAX.maxOutputBytes)
+  return {
+    ...(memoryMb === undefined ? {} : { memoryMb }),
+    ...(maxCalls === undefined ? {} : { maxCalls }),
+    ...(maxOutputBytes === undefined ? {} : { maxOutputBytes }),
+  }
 }
 
 function parsePolicy(value: unknown, remind: boolean): JobPolicy {
@@ -519,7 +593,12 @@ export function parseJob(value: unknown, context: JobContext): Job {
   const tz = schedule.kind === "every" ? context.timezone : schedule.tz
   const action = parseAction(input.action)
   const policy = parsePolicy(input.policy, action.type === "remind")
-  const agent = string(input.agent, "agent", "JOBS_INVALID_JOB", `Name the agent that runs the job, then give that agent its own "permissions" in opencode.json.`)
+  // A script's reach is its manifest, not an agent profile, so it may run as the built-in `build` when none is named
+  // (D-B). A prompt, command or reminder still names its agent: its rules are the whole profile.
+  const agent =
+    input.agent === undefined && action.type === "script"
+      ? "build"
+      : string(input.agent, "agent", "JOBS_INVALID_JOB", `Name the agent that runs the job, then give that agent its own "permissions" in opencode.json.`)
   const name = input.name === undefined ? context.id : text(input.name, "name", 120)
   const createdAt = Math.floor(context.createdAt ?? context.now)
   const createdBy = context.createdBy ?? (context.source === "file" ? "user" : "agent")

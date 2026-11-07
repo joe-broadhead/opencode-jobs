@@ -25,6 +25,8 @@ export interface CommandHooks {
   readonly runNow: (id: string) => Promise<Job>
   /** The jobs there are, for a `/jobs-run` with no id. */
   readonly ids: () => Promise<readonly { readonly id: string; readonly name: string }[]>
+  /** Approves a script job again; the person's own act, in the session they typed it in. */
+  readonly approve: (id: string, sessionID: string) => Promise<{ readonly job: Job; readonly approval: { readonly digest: string; readonly resolved: readonly unknown[] } }>
 }
 
 export function registerCommands(ctx: CommandInput, hooks: CommandHooks): Promise<() => Promise<void>> {
@@ -46,6 +48,20 @@ export function registerCommands(ctx: CommandInput, hooks: CommandHooks): Promis
           ? refusal("the pause command")
           : await hooks.togglePause().then(pausedText, (error: unknown) => unavailable(error).message)
         await post(sessionID, text, "Jobs paused")
+      },
+    })
+    editor.add({
+      name: `${COMMAND_STEM}-approve`,
+      description: "Approve a script job again after its source, manifest or a tool's class changed",
+      execute: async ({ sessionID, prompt }) => {
+        const id = prompt.text.trim().split(/\s+/)[0] ?? ""
+        const text = id === ""
+          ? `Name the script job to approve, for example /${COMMAND_STEM}-approve morning.`
+          : await hooks.approve(id, sessionID).then(
+              ({ job, approval }) => `Approved ${job.name} (${job.id}): ${approval.resolved.length} tools, ${approval.digest.slice(0, 12)}…`,
+              (error: unknown) => messageOf(error),
+            )
+        await post(sessionID, text, "Jobs approval")
       },
     })
     editor.add({

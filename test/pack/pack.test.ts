@@ -35,9 +35,10 @@ const MAX_FILES = 30
 // The server bundle deliberately carries the scheduler and the file parser (croner, yaml; D3, NOTICE), which is most of
 // the tarball. The cap is wide enough for those two and the plugin, and narrow enough to catch a third library arriving
 // unnoticed.
-const MAX_PACKED_BYTES = 128 * 1024
-// The two self-contained entry bundles, and nothing else, in dist/.
-const DIST = ["dist/index.js", "dist/tui.js"]
+// The script runtime is a 637 KB WebAssembly image and its 116 KB of JS: the design's target is under 2.5 MB.
+const MAX_PACKED_BYTES = 2.5 * 1024 * 1024
+// The two self-contained entry bundles and the script runtime's wasm data file, and nothing else, in dist/.
+const DIST = ["dist/index.js", "dist/tui.js", "dist/quickjs.wasm"]
 // Modules the host serves to plugins at runtime. Everything else must be inlined in the bundle.
 const SERVER_HOST_MODULES = [/^node:/, /^@opencode\/plugin(?:\/|$)/]
 const TUI_HOST_MODULES = [/^node:/, /^@opencode\/plugin(?:\/|$)/, /^@opentui\//, /^solid-js(?:\/|$)/]
@@ -155,7 +156,7 @@ describe("package tarball", () => {
   // imported a sibling module could get an older cached copy of it. Each entry must stand alone.
   test("dist holds only the two entry bundles, and they import no sibling module", () => {
     const dist = join(installedPackage(true), "dist")
-    expect(tree(relative(root, dist), dist).sort()).toEqual(["index.js", "tui.js"])
+    expect(tree(relative(root, dist), dist).sort()).toEqual(["index.js", "quickjs.wasm", "tui.js"])
     for (const file of ["index.js", "tui.js"]) expect(relativeImports(readFileSync(join(dist, file), "utf8"))).toEqual([])
   }, 300_000)
 

@@ -52,6 +52,13 @@ export interface RunView {
   readonly count?: number
   /** The last assistant text, framed as job output: output, never an instruction. */
   readonly summary?: string
+  /** A script run's source and manifest digests and its tools, never its code. */
+  readonly script?: { readonly sourceHash: string; readonly manifestDigest: string; readonly uses: readonly string[] }
+  /** A script run's call count, and which limit ended it. */
+  readonly calls?: number
+  readonly limits?: { readonly timedOut: boolean; readonly memoryExceeded: boolean; readonly callLimit: boolean; readonly outputTruncated: boolean }
+  /** A script run's result, framed as script output; present only where summaries are. */
+  readonly result?: { readonly ok: boolean; readonly value?: unknown; readonly error?: string }
 }
 
 /** A job whose recent runs failed, with the code and how many times. */
@@ -59,6 +66,14 @@ export interface FailureView {
   readonly name: string
   readonly code: string
   readonly count: number
+}
+
+/** Script jobs, approved and waiting for a new approval. */
+export interface ScriptJobsView {
+  readonly approved: number
+  readonly unapproved: number
+  /** The jobs whose approval no longer covers them, by id. */
+  readonly names: readonly string[]
 }
 
 /** What status is built from: the host check, the options, and the store's report. */
@@ -74,6 +89,8 @@ export interface StatusFacts {
   readonly unguardedAgents?: readonly string[]
   /** Agents a job names that the host no longer lists, so their jobs cannot run; empty when there are none. */
   readonly missingAgents?: readonly string[]
+  /** Script jobs and their approvals; absent when no job has a script. */
+  readonly scriptJobs?: ScriptJobsView
   /** The host could not say which agents exist, so nothing ran and nothing can be said about them. */
   readonly agentsUnknown?: boolean
   /** The kill switch, when every job is paused. */
@@ -107,6 +124,8 @@ export interface Status {
   readonly unguardedAgents: readonly string[]
   /** Agents a job names that the host no longer lists, which a plugin update can cause; empty when there are none. */
   readonly missingAgents: readonly string[]
+  /** Script jobs, and the ones whose approval no longer covers them; absent when nothing is a script. */
+  readonly scriptJobs?: ScriptJobsView
   /** True when the host's agent list could not be read: nothing runs, and the row says so. */
   readonly agentsUnknown?: boolean
   /** The read-only block, present with unguarded agents: the paste-ready profile for the agent named. */
@@ -138,6 +157,7 @@ export function buildStatus(facts: StatusFacts): Status {
     failures: facts.failures ?? [],
     unguardedAgents: agents,
     missingAgents: missing,
+    ...(facts.scriptJobs === undefined ? {} : { scriptJobs: facts.scriptJobs }),
     ...(facts.agentsUnknown === true ? { agentsUnknown: true } : {}),
     ...(agents.length === 0 ? {} : { permissionsBlock: AGENT_BLOCK.map((rule) => ({ ...rule })) }),
     problems: facts.problems ?? [],
@@ -150,6 +170,9 @@ function nextStepOf(status: Omit<Status, "nextStep">): string {
   if (status.paused !== undefined) return RESUME
   // A missing agent explains every refused file and skipped slot below it, so its one action comes first.
   if (status.missingAgents.length > 0) return MISSING_NEXT
+  // A script whose source or manifest changed is skipped until it is approved again; that is the one act.
+  const unapproved = status.scriptJobs?.names[0]
+  if (unapproved !== undefined) return `Approve the script job ${JSON.stringify(unapproved)} again with the jobs_approve tool or /${COMMAND_STEM}-approve ${unapproved}.`
   // A problem reads `CODE: What happened. Next step: What to do.`; its own next step becomes the status's.
   const problem = status.problems[0]?.split(" Next step: ")[1]
   if (problem) return problem
@@ -240,6 +263,7 @@ export function formatStatus(status: Status) {
     `- Failures needing attention: ${failureText(status.failures)}`,
     ...agentRows(status),
     ...missingRows(status),
+    ...scriptRows(status),
     `- OpenCode: ${hostText(status)}`,
     `- Next step: ${status.nextStep}`,
   ].join("\n")
@@ -265,6 +289,14 @@ function missingRows(status: Status): string[] {
   return [`- Agents OpenCode no longer lists: ${names} — jobs that name one do not run, which can happen after a plugin update; run "opencode reload" in a terminal, or restart OpenCode.`]
 }
 
+/** The script jobs: how many are approved, and which need a new approval before their next slot runs. */
+function scriptRows(status: Status): string[] {
+  const { scriptJobs: scripts } = status
+  if (scripts === undefined) return []
+  const waiting = scripts.unapproved === 0 ? "none" : `${scripts.names.join(", ")} (approve again with /${COMMAND_STEM}-approve <job>)`
+  return [`- Script jobs: ${scripts.approved} approved, ${scripts.unapproved} needing approval${scripts.unapproved === 0 ? "" : `: ${waiting}`}`]
+}
+
 /** What the model's `jobs_status` tool returns: state, counts, the number of agents to fix, and the one next step. */
 export interface CompactStatus {
   readonly state: State
@@ -274,6 +306,8 @@ export interface CompactStatus {
   readonly unguardedAgents: number
   /** How many agents the host no longer lists; their jobs do not run until a reload or a restart. */
   readonly missingAgents: number
+  /** How many script jobs need a new approval; their slots are skipped until one is given. */
+  readonly scriptsNeedingApproval: number
   /** The host could not say which agents exist; nothing runs until it can. */
   readonly agentsUnknown?: boolean
   readonly nextStep: string
@@ -286,6 +320,7 @@ export function compactStatus(status: Status): CompactStatus {
     paused: status.paused !== undefined,
     unguardedAgents: status.unguardedAgents.length,
     missingAgents: status.missingAgents.length,
+    scriptsNeedingApproval: status.scriptJobs?.unapproved ?? 0,
     ...(status.agentsUnknown === true ? { agentsUnknown: true } : {}),
     nextStep: status.nextStep,
   }
@@ -294,7 +329,7 @@ export function compactStatus(status: Status): CompactStatus {
 /** The compact view as one line of text: the tool's content, with a pointer at the full report. */
 export function formatCompact(status: CompactStatus, total: number): string {
   const counts = total === 0 ? "no jobs yet" : `${total} jobs, ${status.jobs.paused} paused, ${status.jobs.expiring} expiring`
-  return `Jobs: ${counts}. ${status.paused ? "Every job is paused. " : ""}${status.unguardedAgents === 0 ? "" : `${status.unguardedAgents} agent${status.unguardedAgents === 1 ? "" : "s"} need the read-only block. `}${status.missingAgents === 0 ? "" : `${status.missingAgents} agent${status.missingAgents === 1 ? "" : "s"} are no longer listed, so their jobs do not run. `}Next step: ${status.nextStep} Run /${COMMAND_STEM}-status for the full report.`
+  return `Jobs: ${counts}. ${status.paused ? "Every job is paused. " : ""}${status.unguardedAgents === 0 ? "" : `${status.unguardedAgents} agent${status.unguardedAgents === 1 ? "" : "s"} need the read-only block. `}${status.missingAgents === 0 ? "" : `${status.missingAgents} agent${status.missingAgents === 1 ? "" : "s"} are no longer listed, so their jobs do not run. `}${status.scriptsNeedingApproval === 0 ? "" : `${status.scriptsNeedingApproval} script job${status.scriptsNeedingApproval === 1 ? "" : "s"} need approval again. `}Next step: ${status.nextStep} Run /${COMMAND_STEM}-status for the full report.`
 }
 
 const strings = { type: "array", items: { type: "string" } }
@@ -322,6 +357,10 @@ const RUN = {
     reason: { type: "string" },
     attempt: { type: "integer", minimum: 1 },
     count: { type: "integer", minimum: 1 },
+    script: { type: "object" },
+    calls: { type: "integer", minimum: 0 },
+    limits: { type: "object" },
+    result: { type: "object" },
   },
 } as const
 
@@ -364,6 +403,11 @@ export const STATUS_OUTPUT = {
     },
     unguardedAgents: strings,
     missingAgents: strings,
+    scriptJobs: {
+      type: "object",
+      required: ["approved", "unapproved", "names"],
+      properties: { approved: { type: "integer", minimum: 0 }, unapproved: { type: "integer", minimum: 0 }, names: strings },
+    },
     agentsUnknown: { type: "boolean" },
     permissionsBlock: { type: "array", items: rule },
     problems: strings,

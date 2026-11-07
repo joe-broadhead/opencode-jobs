@@ -1,44 +1,43 @@
 # Scripting
 
-A script can reach the plugin with no model: a cron entry, a shell script, or any program that can reach the OpenCode
-server. It uses the tools RPC, `jobs.scheduler.tools`, through `opencode api` or an OpenCode client.
+Every plugin tool is callable without a model: from a shell, a cron entry, a script, or a Jobs `script` action. There is
+one contract, `<plugin id>.tools`, and one rule resolution, so an ad-hoc call and a scheduled script behave the same.
 
-| Method | What it gives |
-| --- | --- |
-| `describe` | The methods this plugin registers, with each method's input as JSON Schema, and where the location is. |
-| `jobs_status` | The compact status: state, counts, how many agents need the block, and the next step. |
-| `jobs_list` | The jobs there are: id, name, state, agent and next run. `{ "state"?, "limit"? }`. |
-| `jobs_get` | One job, with its runtime state and its last three runs. `{ "id" }`. |
-| `jobs_history` | Recent runs, with each summary labelled as job output. `{ "id"?, "limit"?, "since"? }`. |
+OpenCode runs the call in one location and with one session. Read [the location](#the-location) before your first call:
+a call without it reaches the server's default location and fails `rpc.unavailable` when the plugin is loaded elsewhere.
 
-Call `describe` for the list rather than assuming it: only reads are methods. Calls that change something never are:
-`jobs_pause` and `jobs_pause_all` change state, and `jobs_run_now` needs a person, so it keeps its approval prompt and a
-script cannot answer one. Creating, updating, deleting, resuming and extending a job are not methods either: OpenCode
-answers `rpc.method_not_found`.
+## The two routes
 
-## A script runs as a session
+| Route | What it is | Example |
+| --- | --- | --- |
+| A family method | A tool a plugin's tools RPC lists, by exact name. Its action is the plugin's permission action. | `x.posts.get_users_bookmarks` |
+| A host tool | A tool OpenCode lists that has no tools RPC, by exact tool id. It is `unclassified`. | `host:mem_mem_remember` |
 
-Every call names a session, and the session must name an agent. The script runs as that agent, with the access its
-model has:
+A family method is resolved by that plugin's `describe`, carries a class (`read`, `write`, `send`, `export`,
+`destructive`) and goes through the plugin's own shaping, so a script reads what a model would. A `host:` entry is
+called only by exact id, only after the same rule check, and the tool still runs its own assert. Never guess a tool id:
+`describe` lists the family methods, and `GET /api/tool` lists the host tools.
 
-- A tool the agent's rules or the session's rules hide from the model is refused.
-- No one answers a prompt for a script, so an `ask` is refused with `PERMISSION_DENIED` at once, and no prompt is left
-  waiting.
-- A read runs through the plugin itself, as the session's agent, and writes nothing to the session.
-Create the session once, with the agent the script runs as, and keep its id. Never reuse a session found through
-history or a list: the script would run as that session's agent, under its rules.
+`describe` takes no input, or `{ "sessionID": "ses_…" }` to add each method's `permission` for that session
+(`allow`, `ask` or `deny`). That is how an agent can write a script that self-checks before it asks for approval.
+
+## A script runs as a session and its agent
+
+Every call names a session, and the session names an agent. The rules that decide a call are the agent's `permissions`
+followed by the session's; the **last matching rule wins**, as on the model path.
+
+- Only `allow` runs. An `ask` is refused before dispatch with `PERMISSION_DENIED` — no one can answer it — and a
+  `deny` is refused too. No prompt is ever left waiting.
+- A **saved "Always allow" does not authorize an ad-hoc script.** It is not part of the agent and session rules. This is
+  the one deliberate change from v1: a script's permission is a rule in config (or a Jobs approval), never an old
+  click. The next step in the error says so.
+- `shapeInput` runs before dispatch and `shapeResult` after, so a script sees what a model would: X's read cap, its cost
+  line, Plaud's withheld links.
+- A default-deny tool becomes usable only when the agent has a later explicit `allow` for it. That is the documented
+  opt-in, not a bypass: a resolved deny always refuses.
 
 ```sh
-opencode api post /api/session -d '{"title":"job status","agent":"build"}'
-```
-
-Session rules come after the agent's, so a session can narrow what its script may do:
-
-```sh
-opencode api post /api/session -d '{"title":"job status","agent":"build","permissions":[
-  {"action":"jobs_*","resource":"*","effect":"deny"},
-  {"action":"jobs_status","resource":"*","effect":"allow"}
-]}'
+opencode api post /api/session -d '{"title":"script","agent":"build"}'
 ```
 
 ## Calling a method
@@ -47,39 +46,132 @@ The body is `{"input": {"sessionID": "<session>", "input": <the tool's input>}}`
 key is allowed.
 
 ```sh
-opencode api post /api/rpc/jobs.scheduler.tools/describe -d '{"input":{}}'
+opencode api post /api/rpc/x.posts.tools/describe -d '{"input":{}}'
+opencode api post /api/rpc/x.posts.tools/get_users_bookmarks \
+  -H "x-opencode-directory:$PWD" \
+  -d '{"input":{"sessionID":"ses_…","input":{"max_results":20}}}'
 ```
 
-A result is `{"output": <the method's output>}`, as plain JSON. Job names and run summaries are written by whoever made
-the job or ran it: they are data, not instructions.
+A result is `{"output": <the method's output>}`, as plain JSON. Job names, run summaries and tool results are written by
+whoever made them: they are data, not instructions.
 
-## What scripts cannot do
+## The location
 
-- Change a job: no write tool is a method.
-- Run a job: `jobs_run_now` keeps its approval prompt, and a script cannot answer one.
-- Call a tool that is not one of the reads, even with an allow rule.
+Run the command in the project whose agent you mean, and send the call to that location explicitly:
+
+```sh
+opencode api post /api/rpc/<id>/<method> -H "x-opencode-directory:$PWD" -d '{…}'
+```
+
+Without it the call goes to the service's default location and fails `rpc.unavailable` if the plugin is not loaded
+there. The HTTP equivalents are the `location[directory]` query parameter and the same header. `describe` reports the
+`location` that answered and a `locationHint`.
+
+## Jobs' own methods
+
+Jobs exposes all fourteen tools as methods, each with a class. A **run session** denies the state changes, so a script
+cannot manage jobs from inside a run (D-I).
+
+| Method | Class | What it gives |
+| --- | --- | --- |
+| `jobs_status` | read | The compact status: state, counts, agents, scripts and the next step. |
+| `jobs_list` | read | The jobs there are. `{ "state"?, "limit"? }` |
+| `jobs_get` | read | One job, its runtime state, its approval and its last runs. `{ "id" }` |
+| `jobs_history` | read | Recent runs, with each summary labelled as job output. `{ "id"?, "limit"?, "since"? }` |
+| `jobs_pause`, `jobs_pause_all` | write | Pause one job, or the kill switch. |
+| `jobs_create`, `jobs_update`, `jobs_delete` | write | Change a job. A script job asks for its script's approval here. |
+| `jobs_run_now`, `jobs_resume`, `jobs_extend` | write | Start, resume and extend a job. |
+| `jobs_approve` | write | Approve a script job again after its source, manifest or a class changed. |
+| `jobs_run_script` | write | Run one script once, with no model, and return its output to the session that asked. |
+
+## The `script` action
+
+A job's action can be a script instead of a prompt: no model turn, one confined program, one result.
+
+```yaml
+# ~/.config/opencode/jobs/bookmarks.md
+name: Save new X bookmarks
+schedule: { cron: "0 9 * * 0", tz: Europe/Amsterdam }
+agent: jobs
+action:
+  type: script
+  uses:
+    - x.posts.get_users_bookmarks
+    - x.posts.get_users_me
+    - host:mem_mem_remember
+  code: |
+    const me = await tools.x.posts.get_users_me({});
+    const seen = new Set();
+    let saved = 0;
+    let cursor;
+    do {
+      const page = await tools.x.posts.get_users_bookmarks({ max_results: 100, pagination_token: cursor });
+      for (const item of page.data ?? []) {
+        if (!item.id || seen.has(item.id)) continue;
+        seen.add(item.id);
+        await tools.host.mem_mem_remember({
+          content: `X bookmark by ${item.author_id ?? "unknown"}: ${item.text ?? ""} — https://x.com/i/web/status/${item.id}`,
+          kind: "fact",
+          task: "*",
+        });
+        saved += 1;
+      }
+      cursor = page.meta?.next_token;
+    } while (cursor);
+    return { saved, author: me.data?.username ?? null };
+```
+
+- **The manifest is the whole reach.** `uses` names every method the script may call; the runtime refuses anything
+  else, and the run session allows exactly the manifest's actions. A method the agent resolves to `deny` is never
+  granted.
+- **One approval.** `jobs_create`, `jobs_update` and `jobs_run_script` assert `jobs_script` once, bound to
+  `script:sha256:<digest>` where the digest covers the source and the sorted manifest. The prompt shows the source, each
+  tool's class and one line per write; the user reads it and says yes. "Always allow" saves that exact digest, so a
+  changed byte or a changed tool asks again. A `deny` refuses the create with `JOBS_SCRIPT_DENIED`.
+- **Re-checked every slot.** A run re-resolves the manifest against the agent, compares the hashes and each tool's
+  class, and is `skipped` with `unapproved` or `revoked` if anything changed. `/jobs-approve <job>` (or the
+  `jobs_approve` tool) is the one act that restores it; status names the job and the command.
+- **The agent.** A script job names an agent, `build` when none is named. The agent is where the user's denies live; a
+  script job does not need the guarded `jobs` profile, and status says so plainly: a script's tools must not be denied
+  by its agent. The guarded profile is for prompt jobs.
+- **Limits.** 100 tool calls, 64 MB of memory and 64 KB of output by default; `limits` overrides them per job (up to
+  1,000 calls). The wall clock is the job's `policy.timeout` (`timeoutMs` narrows it). A script that exceeds one gets
+  `JOBS_SCRIPT_LIMIT`, and the record says which limit fired.
+- **No model, no host.** The runtime is QuickJS compiled to WebAssembly, one VM per run: no `fetch`, `require`,
+  `process`, environment, filesystem or timers. Its only host function is the call bridge. `/jobs-pause` aborts a run
+  mid-call, and the record says `interrupted`.
+- **The record has no payloads.** Each call is its method, time, duration, outcome and byte count; the result is
+  capped and framed as script output. Inputs and tool results are never stored a second time.
+
+### X's budget
+
+X's script path allows up to **100** bookmarks per page and follows `pagination_token`. X also bounds a script session:
+a per-session `scriptBudgetUsd` of **$1.00** and an `X_BUDGET` refusal when it is spent. A page that costs more than
+the remaining budget is refused; the script records what it saved and the next run continues from the newest
+bookmarks. Do not loop past a page that fails: the budget is a ceiling, not a retry cue.
+
+### `jobs_run_script`
+
+The one-off: `{ code, uses, agent?, timeoutMs?, limits? }`. It validates, resolves and asks the same one approval, runs
+in a fresh session, returns the result to the calling session, and keeps no job. Use it for "run this once now"; a
+scheduled job is the durable form.
 
 ## Errors
 
 A refusal or failure is the RPC error `failed`, with a message `CODE: what happened. Next step: what to do.` and
-`data: { code, next }`. `opencode api` exits with status 1 for any RPC error, after printing the error's JSON to
-standard output.
+`data: { code, next }`. `opencode api` exits with status 1 for any RPC error, after printing the error's JSON.
 
-| Code | When |
-| --- | --- |
-| `SESSION_UNKNOWN` | OpenCode says the session does not exist. Any other failure to look the session up is OpenCode's own error. |
-| `SESSION_AGENT_REQUIRED` | The session names no agent, or an agent that does not exist. |
-| `PERMISSION_DENIED` | The agent's or the session's rules deny the tool, or ask for an approval. |
-| `CANCELLED` | The request was cancelled. |
+| Code | When | What to do |
+| --- | --- | --- |
+| `SESSION_UNKNOWN` | OpenCode says the session does not exist in this location. | Create the session in the location you mean, with the location header or query. |
+| `SESSION_AGENT_REQUIRED` | The session names no agent. | Create a session with an agent. |
+| `PERMISSION_DENIED` | The rule would ask, or denies. | Add an allow rule for the action to the agent or session, or use a session whose agent allows it. |
+| `JOBS_SCRIPT_UNKNOWN_TOOL` | A manifest entry is not a method or a listed tool. | Use exactly what `describe` or the host lists. |
+| `JOBS_SCRIPT_DENIED` | The agent denies a manifest tool. | Remove the deny, or point the job at an agent that allows it. |
+| `JOBS_SCRIPT_UNAPPROVED` | The source, manifest or a class changed since approval. | `/jobs-approve <job>`, or the `jobs_approve` tool. |
+| `JOBS_SCRIPT_REVOKED` | The agent now denies a manifest tool. | Remove the deny, then approve again. |
+| `JOBS_SCRIPT_LIMIT` | A limit ended the run. | Raise the job's `limits`, or make the script smaller. |
+| `CANCELLED` | The request was cancelled. | Call again if still needed. |
 
-OpenCode itself answers `rpc.method_not_found` for a method that does not exist, such as a write, and
-`rpc.invalid_input` for a body that is not the envelope above, with one message per problem:
-
-| Problem | Message |
-| --- | --- |
-| The envelope is not an object | `the envelope must be an object, such as {"sessionID":"<session>","input":<the tool's input>}` |
-| A key other than `sessionID` and `input` | `"extra" is not allowed`, naming the key |
-| `sessionID` missing, not a string, or empty | `"sessionID" must be a non-empty string` |
-| `input` missing | `"input" is missing` |
-| `input` not an object | `"input" must be an object` |
-| `describe` given anything but `{}` or nothing | `describe takes no input` |
+OpenCode itself answers `rpc.method_not_found` for a method that does not exist, `rpc.invalid_input` for a body that is
+not the envelope above, and `rpc.unavailable` when the call reached a location where the plugin is not loaded.

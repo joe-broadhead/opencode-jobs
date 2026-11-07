@@ -15,6 +15,8 @@ import { nextRun } from "./cron.js"
 import { DEFAULTS, nextId, parseJob, serverTimezone, updateJob, type Job } from "./model.js"
 import { stopReason } from "./policy.js"
 import type { Source } from "./report.js"
+import { approvalMatches, denied, type ScriptApproval } from "./script.js"
+import type { ScriptGate } from "./script-gate.js"
 import { getRun, putJob, putState, readState, removeJob, setPauseAll, slotISO, updateState, type PauseRecord } from "./store.js"
 
 export interface ActionInput {
@@ -29,6 +31,16 @@ export interface ActionInput {
   readonly wake: () => void
   /** False when the store could not be brought to this build's schema: nothing is written to a store a newer build owns. */
   readonly ready: boolean
+  /** The script gate: resolving a manifest, and the one approval a script gets. Absent only in unit fakes. */
+  readonly scripts?: ScriptGate
+}
+
+/** The tool call an approval is made in, so the host's prompt carries its own source. */
+export interface ApprovalCall {
+  readonly sessionID: string
+  readonly agent: string
+  readonly messageID?: string
+  readonly id?: string
 }
 
 /** The directory an agent resolves in, when the job targets one other than the leader's own; undefined otherwise. */
@@ -79,34 +91,90 @@ export interface CreateInput {
   readonly jitter?: unknown
 }
 
-/** Creates a job from the model's or a person's input: validated, guarded, and stored. */
-export async function createJob(input: ActionInput, definition: CreateInput): Promise<Job> {
+/**
+ * A script job's manifest is its confinement, so D7's guarded-agent check is replaced by the manifest checks: every
+ * entry must resolve, and none may resolve to deny. The approval is the host's one prompt, bound to the source and the
+ * manifest (D-A), and it is stored as job state.
+ */
+async function scriptApproval(input: ActionInput, job: Job, call: ApprovalCall | undefined, previous?: ScriptApproval): Promise<ScriptApproval> {
+  if (job.action.type !== "script") throw new Error("jobs: a script approval needs a script action")
+  if (input.scripts === undefined) {
+    throw jobsError("JOBS_SCRIPT_UNAPPROVED", `The script gate is not available, so ${JSON.stringify(job.id)} cannot be approved.`, `Restart OpenCode, then approve the script again.`)
+  }
+  if (call === undefined) {
+    throw jobsError("JOBS_UNCHECKED", `The script ${JSON.stringify(job.id)} was changed with no tool call to check its approval against.`, `Call jobs_create or jobs_update from a session, where the approval can be asked.`)
+  }
+  const resolved = await input.scripts.resolve(job.action.script.uses, job.agent, elsewhere(job, input))
+  const bad = denied(resolved)
+  if (bad.length > 0) {
+    const names = bad.map((tool) => `${tool.method} (${tool.action})`).join(", ")
+    throw jobsError(
+      "JOBS_SCRIPT_DENIED",
+      `The script ${JSON.stringify(job.id)} uses tools its agent denies: ${names}.`,
+      `Remove the deny rule for those tools, or point the job at an agent that allows them. A script cannot be granted a tool its agent denies.`,
+    )
+  }
+  // An update that leaves the source, the manifest and the resolution unchanged keeps the approval it already had.
+  if (previous !== undefined && approvalMatches(previous, job.action.script, resolved)) return previous
+  return input.scripts.approve({ sessionID: call.sessionID, agent: call.agent, script: job.action.script, resolved, ...(call.messageID === undefined || call.id === undefined ? {} : { source: { messageID: call.messageID, id: call.id } }) })
+}
+
+/** Creates a job from the model's or a person's input: validated, guarded (or approved), and stored. */
+export async function createJob(input: ActionInput, definition: CreateInput, call?: ApprovalCall): Promise<Job> {
   ensureWritable(input)
   const now = input.clock.now()
   const job = parseJob(definition, { now, timezone: input.timezone, id: nextId(now), source: "tool", createdBy: "agent" })
-  const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input), input.location)
-  if (refusal !== undefined) refuseAgent(refusal)
+  let approval: ScriptApproval | undefined
+  if (job.action.type === "script") approval = await scriptApproval(input, job, call)
+  else {
+    const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input), input.location)
+    if (refusal !== undefined) refuseAgent(refusal)
+  }
   await putJob(input.storage, job)
   const state = await readState(input.storage, job.id)
-  await putState(input.storage, { ...state, nextDueAt: nextRun(job.schedule, now) ?? undefined })
+  await putState(input.storage, {
+    ...state,
+    nextDueAt: nextRun(job.schedule, now) ?? undefined,
+    ...(approval === undefined ? {} : { approval }),
+  })
   input.wake()
   return job
 }
 
 /** Replaces the fields a patch names, keeping the id, the source and who made it. */
-export async function changeJob(input: ActionInput, id: string, patch: CreateInput): Promise<Job> {
+export async function changeJob(input: ActionInput, id: string, patch: CreateInput, call?: ApprovalCall): Promise<Job> {
   ensureWritable(input)
   const existing = mutable(await findJob(input, id), "change")
   const now = input.clock.now()
   const job = updateJob(existing, patch, { now, timezone: input.timezone, id: existing.id, source: existing.source, createdAt: existing.createdAt, createdBy: existing.createdBy })
-  const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input), input.location)
-  if (refusal !== undefined) refuseAgent(refusal)
+  const previous = await readState(input.storage, job.id)
+  let approval: ScriptApproval | undefined
+  if (job.action.type === "script") approval = await scriptApproval(input, job, call, previous.approval)
+  else {
+    const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input), input.location)
+    if (refusal !== undefined) refuseAgent(refusal)
+  }
   await putJob(input.storage, job)
   // A changed schedule starts from now: the old slot belonged to the old schedule.
-  const state = await readState(input.storage, job.id)
-  await putState(input.storage, { ...state, done: undefined, nextDueAt: nextRun(job.schedule, now) ?? undefined })
+  await putState(input.storage, { ...previous, done: undefined, nextDueAt: nextRun(job.schedule, now) ?? undefined, approval })
   input.wake()
   return job
+}
+
+/**
+ * Approves a script job again, after its source, manifest or a tool's class changed. It is the one act a person takes
+ * when status says re-approval is needed; the resolve and the denial check are the same as at create.
+ */
+export async function approveJob(input: ActionInput, id: string, call: ApprovalCall): Promise<{ job: Job; approval: ScriptApproval }> {
+  ensureWritable(input)
+  const job = await findJob(input, id)
+  if (job.action.type !== "script") {
+    throw jobsError("JOBS_INVALID_JOB", `The job ${JSON.stringify(id)} has no script action to approve.`, `Approve only a job whose action is a script.`)
+  }
+  const approval = await scriptApproval(input, job, call)
+  await updateState(input.storage, job.id, (state) => ({ ...state, approval }))
+  input.wake()
+  return { job, approval }
 }
 
 export async function deleteJob(input: ActionInput, id: string): Promise<Job> {

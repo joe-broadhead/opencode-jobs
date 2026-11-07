@@ -48,6 +48,8 @@ export interface HostInput {
   readonly clock?: Clock
   /** False leaves the loop to the caller, which ticks and beats the worker by hand. */
   readonly loop?: boolean
+  /** Plugins loaded beside Jobs: a fake family tools RPC, or a non-family tool with its own assert. */
+  readonly plugins?: readonly Plugin.Plugin[]
 }
 
 export type { Worker } from "../../src/plugin.js"
@@ -100,7 +102,7 @@ export async function startHost(input: HostInput = {}) {
   }
   const { OpenCode } = (await import(pathToFileURL(join(SDK, "dist", "index.js")).href)) as typeof import("@opencode/sdk")
   const client: Client = (await OpenCode.create({
-    plugins: [withOptions, probe],
+    plugins: [withOptions, probe, ...(input.plugins ?? [])],
     // An embedded host reports "unknown" unless told, and the plugin's host guard refuses that.
     app: { version: HOST_VERSION },
     config: { content: JSON.stringify(config), directory: join(base, "config"), project: false, claude: false },

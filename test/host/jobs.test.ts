@@ -43,12 +43,27 @@ describe(`in OpenCode ${HOST_VERSION}`, () => {
       expect(await host.client.rpc(Jobs).list({}, { location: host.location })).toEqual({ jobs: [] })
       expect(await host.client.rpc(Jobs).history({}, { location: host.location })).toEqual({ runs: [] })
 
-      // The tools RPC is registered under the plugin's id, and lists the four reads.
+      // The tools RPC is registered under the plugin's id, and lists every tool as a method.
       const described = (await host.client
         .rpc({ id: TOOLS_RPC_ID, methods: { describe: { input: { type: "object" }, output: { type: "object" } } }, events: {} })
         .describe({}, { location: host.location })) as { id: string; methods: { name: string }[] }
       expect(described.id).toBe(TOOLS_RPC_ID)
-      expect(described.methods.map((method) => method.name)).toEqual(["jobs_status", "jobs_list", "jobs_get", "jobs_history"])
+      expect(described.methods.map((method) => method.name)).toEqual([
+        "jobs_status",
+        "jobs_list",
+        "jobs_get",
+        "jobs_history",
+        "jobs_pause",
+        "jobs_pause_all",
+        "jobs_create",
+        "jobs_update",
+        "jobs_delete",
+        "jobs_run_now",
+        "jobs_resume",
+        "jobs_extend",
+        "jobs_approve",
+        "jobs_run_script",
+      ])
     } finally {
       await host.close()
     }

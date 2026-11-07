@@ -166,6 +166,7 @@ describe("the compact status the model reads", () => {
       paused: true,
       unguardedAgents: 2,
       missingAgents: 0,
+      scriptsNeedingApproval: 0,
       nextStep: "Run /jobs-pause again to resume every job.",
     })
     const text = formatCompact(compact, status.jobs.total)

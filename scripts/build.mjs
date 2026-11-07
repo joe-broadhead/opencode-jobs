@@ -5,7 +5,7 @@
 // Only the modules the host provides stay external. The build fails if an output imports anything else.
 import { transformAsync } from "@babel/core"
 import { build } from "esbuild"
-import { readdirSync, readFileSync, rmSync } from "node:fs"
+import { copyFileSync, readdirSync, readFileSync, rmSync } from "node:fs"
 import { builtinModules } from "node:module"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -73,13 +73,17 @@ const result = await build({
   plugins: [solid, nodeBuiltins, version],
 })
 
+// The script runtime's wasm ships beside the bundle as a data file, read by path at run time. It is not a module and
+// never enters the JS bundle: QuickJS is one 637 KB WebAssembly image, and the package's NOTICE carries its licence.
+copyFileSync(join(root, "node_modules/quickjs-wasi/quickjs.wasm"), join(root, "dist/quickjs.wasm"))
+
 const problems = Object.entries(result.metafile.outputs).flatMap(([file, output]) =>
   output.imports.filter((entry) => !entry.external || !provided(entry.path)).map((entry) => `${file} imports ${entry.path}`),
 )
 const files = readdirSync(join(root, "dist")).sort()
-if (JSON.stringify(files) !== JSON.stringify(["index.js", "tui.js"])) problems.push(`dist/ must hold exactly index.js and tui.js, found ${files.join(", ")}`)
+if (JSON.stringify(files) !== JSON.stringify(["index.js", "quickjs.wasm", "tui.js"])) problems.push(`dist/ must hold exactly index.js, quickjs.wasm and tui.js, found ${files.join(", ")}`)
 if (problems.length) {
   console.error(`build: the bundles are not self-contained:\n  ${problems.join("\n  ")}`)
   process.exit(1)
 }
-console.log("build: dist/index.js and dist/tui.js are self-contained.")
+console.log("build: dist/index.js and dist/tui.js are self-contained, with quickjs.wasm beside them.")

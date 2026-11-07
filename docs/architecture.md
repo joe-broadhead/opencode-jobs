@@ -17,7 +17,12 @@ code comments carry the detail.
 | `src/jobs/actions.ts` | Every change: create, update, delete, pause, resume, extend, run now, pause all. |
 | `src/jobs/watch.ts` | The job-file watch: one mtime check a minute, a parse only when a file changed. |
 | `src/jobs/tools.ts` | The twelve tools and the four tools-RPC reads, over `actions.ts` and `report.ts`. |
-| `src/host/tools-rpc.ts` | The shared tools-RPC module: the one file copied verbatim from the family's shared copy, with only its `PLUGIN-SPECIFIC` block edited. It holds the second evaluate hook. |
+| `src/host/tools-rpc.ts` | The shared tools-RPC v2 module: the one file copied verbatim from the family's shared copy, with only its `PLUGIN-SPECIFIC` block edited. It holds the second evaluate hook. |
+| `src/jobs/script.ts` | A script's definition, digest, approval, limits and the run session's rules. |
+| `src/jobs/script-gate.ts` | Manifest resolution (family `describe`, host tools) and the one `jobs_script` approval. |
+| `src/jobs/script-bridge.ts` | The guest's one call path: a family tools RPC, or a host tool after a pre-dispatch resolve. |
+| `src/jobs/script-runtime.ts` | QuickJS-WASI, one VM per run: no host capabilities, four limits, one bridge. |
+| `src/jobs/script-oneoff.ts` | `jobs_run_script`: one run, nothing kept. |
 | `src/options.ts` | The plugin options, parsed and validated once per setup. |
 | `src/jobs/safety.ts` | The run session and the run session's evaluate hook. |
 | `src/host/permissions.ts` | The default rules the plugin inserts, and the guarded-agent check. |

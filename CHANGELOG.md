@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - Unreleased
+
+### Added
+
+- The `script` action: a job can run a confined program instead of a model prompt. Its `uses` manifest is its whole
+  reach, `/jobs-approve` re-approves it, and the run record keeps what each call did, never a payload.
+- The script runtime: QuickJS compiled to WebAssembly (MIT, bundled as `dist/quickjs.wasm` and in `NOTICE`), one VM per
+  run, with no filesystem, network, process, environment or timers; 100 calls, 64 MB and 64 KB by default, the job's
+  timeout for wall time, and the kill switch mid-call.
+- The approval: `jobs_create`, `jobs_update` and `jobs_run_script` ask once, bound to `script:sha256:<digest>` of the
+  source and the sorted manifest. A tool the agent denies refuses the create with `JOBS_SCRIPT_DENIED`; a changed
+  source, manifest or class makes the slot `skipped` with `JOBS_SCRIPT_UNAPPROVED` or `JOBS_SCRIPT_REVOKED`.
+- `jobs_approve`, `/jobs-approve`, and `jobs_run_script` (one run, nothing kept).
+- A status row for script jobs, the digest and approved tools in `jobs_get`, and `script` facts in the status model.
+
+### Changed
+
+- The tools RPC is v2: every known tool is a method with a class, the rule is resolved before dispatch (an `ask` is
+  refused with no prompt), `shapeInput` runs beside `shapeResult`, and `describe` reports classes and a session's
+  permission. Jobs exposes all fourteen tools as methods; a run session still denies the state changes.
+- An ad-hoc script no longer inherits a saved "Always allow": a script's permission is a config rule or a Jobs approval.
+  This is the one deliberate v2 break.
+- `ctx.agent.get` is called without a location, where the job runs in the leader's own directory (a location passed back
+  could fail for a project-level plugin on 2.2.4).
+
 ## [0.0.0] - 2026-11-07
 
 ### Added

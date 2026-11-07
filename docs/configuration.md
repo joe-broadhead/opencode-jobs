@@ -104,6 +104,37 @@ Then point the job at `agent: jobs-reviewer`. A job's own `allow` list only narr
 Never add an `allow` for a write to get a job through an approval. A run cannot ask, so the approval would be denied and
 the run would record `JOBS_UNATTENDED`. Leave the write out of the profile; a job that must write needs a person.
 
+## Scripts
+
+A job's action may be a script instead of a prompt:
+
+```yaml
+action:
+  type: script
+  uses:
+    - x.posts.get_users_bookmarks
+    - host:mem_mem_remember
+  code: |
+    const page = await tools.x.posts.get_users_bookmarks({ max_results: 100 });
+    return { items: page.data?.length ?? 0 };
+  timeoutMs: 5m
+  limits: { maxCalls: 150, memoryMb: 64, maxOutputBytes: 65536 }
+```
+
+`uses` is the manifest and the script's whole reach: a family method (`<plugin id>.<method>`) or a host tool
+(`host:<exact tool id>`). The run re-resolves it every slot; a source, manifest or class change makes the slot
+`skipped` until `/jobs-approve <job>` re-approves it. The defaults are 100 calls, 64 MB and 64 KB; `maxCalls` may go to
+1,000, `memoryMb` to 512 and `maxOutputBytes` to 1 MiB. The wall clock is `policy.timeout`, and `timeoutMs` can narrow
+it. A script job may omit `agent`; it then runs as `build`. Its agent's rules must not deny its tools: the guarded
+`jobs` profile is for prompt jobs.
+
+The approval is one prompt at create or update, bound to `script:sha256:<digest>` of the source and the sorted manifest.
+The record keeps each call's method, outcome, duration and size, never its input or result; the result is capped and
+framed as script output. `/jobs-pause` aborts a run mid-call.
+
+`jobs_run_script` runs one script once with the same approval and keeps no job. `jobs_approve` (and `/jobs-approve <job>`)
+re-approves a script job after a change.
+
 ## Safety
 
 - **A job whose agent does not deny by default is refused**, at create and again when a slot starts, with
@@ -250,8 +281,9 @@ Both are read-only, and both answer a `STATUS_UNAVAILABLE` failure with a `nextS
 The fields every plugin of this family shares are `version`, `host` (`version`, `range`, `tested`), `state`,
 `unguardedAgents` and `nextStep`. Jobs has no service to connect to, so `state` is `ready`, or `disabled` when the
 `enabled` option is `false`. Its own fields sit beside them: `jobs`, `runner`, `liveness`, `paused`, `nextRuns`,
-`recentRuns`, `failures`, `missingAgents`, `permissionsBlock` and `problems`. `missingAgents` names the agents a job
-uses that the host no longer lists; it is empty when there are none.
+`recentRuns`, `failures`, `missingAgents`, `scriptJobs`, `permissionsBlock` and `problems`. `missingAgents` names the
+agents a job uses that the host no longer lists, and `scriptJobs` counts the script jobs approved and waiting for a new
+approval; both are empty or absent when there are none.
 
 ## Errors
 
@@ -270,6 +302,10 @@ its code and shown in status; it is not thrown at you.
 | `JOBS_TARGET_MISSING` | A job, session or agent the call names does not exist. | Run `jobs_list` to see the jobs there are, and create the session before naming it. |
 | `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, so a job under it is refused instead of run into denied prompts. | Give the agent the read-only block, starting with the blanket deny, or point the job at an agent that has it; `/jobs-status` prints it. |
 | `JOBS_AGENT_MISSING` | OpenCode no longer lists the job's agent, which can happen after a plugin update. No job that names it runs. | Run `opencode reload` in a terminal, or restart OpenCode; every slot re-checks, so the next slot runs once the agent is back. |
+| `JOBS_SCRIPT_DENIED` | The job's agent denies a tool the script's manifest names. A session allow beats an agent deny, so the script is refused rather than granted it. | Remove the deny rule for that tool, or point the job at an agent that allows it. |
+| `JOBS_SCRIPT_UNKNOWN_TOOL` | A manifest entry is not a method the plugin's tools RPC describes, or a tool the host lists. | Use `<plugin id>.<method>` or `host:<tool id>`, then approve the script again. |
+| `JOBS_SCRIPT_UNAPPROVED` | The script's source, its manifest or a tool's class changed since it was approved, so the slot was skipped. | Approve it again with the `jobs_approve` tool or `/jobs-approve <job>`. |
+| `JOBS_SCRIPT_REVOKED` | The script's agent now denies one of its tools, so every run is skipped until that changes. | Remove the deny rule, or point the job at an agent that allows the tool, then approve it again. |
 | `JOBS_UNATTENDED` | A run called a tool its agent asks about. The call was denied, and the run continued. | Decide with the person whether that agent may have it. A read goes in the agent's own `permissions`; a write belongs with a person, not a run. |
 | `JOBS_DISABLED` | Every job is paused, or the job the call names is. | Resume with `/jobs-pause` or the `jobs_resume` tool, then retry. |
 | `JOBS_EXPIRED` | The job has no slot left: its `at` has passed, its `ends` was reached, or its expiry has passed. | Extend it with `jobs_extend`, or create a new job. |

@@ -79,12 +79,16 @@ describe("docs", () => {
     }
   })
 
-  test("the scripting guide names the tools RPC, its describe method and the reads-only rule", () => {
+  test("the scripting guide names the tools RPC, its describe method, the two routes and the script action", () => {
     const guide = flat("docs/scripting.md")
-    expect(guide).toContain("`jobs.scheduler.tools`")
-    expect(guide).toContain("| `describe` |")
-    expect(guide).toContain("only reads are methods")
-    expect(guide).toContain("opencode api post /api/rpc/jobs.scheduler.tools/describe")
+    expect(guide).toContain("`<plugin id>.tools`")
+    expect(guide).toContain("`describe`")
+    expect(guide).toContain("`host:mem_mem_remember`")
+    expect(guide).toContain("opencode api post /api/rpc/x.posts.tools/describe")
+    expect(guide).toContain("## The `script` action")
+    expect(guide).toContain("x-opencode-directory")
+    expect(guide).toContain("scriptBudgetUsd")
+    expect(guide).toContain("X_BUDGET")
   })
 
   test("the configuration guide names both RPCs and the shared status fields", () => {

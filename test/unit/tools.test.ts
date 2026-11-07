@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test"
 import type { Plugin } from "@opencode/plugin"
 import { createReport } from "../../src/jobs/report.js"
 import { getRun, putJob, putState, readPauseAll, readState, scanRuns, setPauseAll } from "../../src/jobs/store.js"
-import { actionOf, DESCRIPTIONS, ownedMethods, READ_TOOLS, runJobTool, SCHEMAS, toolId, toolTransform, type ToolInput, type ToolName } from "../../src/jobs/tools.js"
+import { DESCRIPTIONS, ownedMethods, READ_TOOLS, runJobTool, SCHEMAS, toolId, toolTransform, type ToolInput, type ToolName } from "../../src/jobs/tools.js"
 import { parseJob, type Job } from "../../src/jobs/model.js"
 import { agentsFake, memoryStorage, testClock } from "./fake.js"
 
@@ -48,8 +48,8 @@ const CALL = { sessionID: "ses_1", agent: "build", messageID: "msg_1", id: "call
 const call = (setup: ReturnType<typeof harness>, name: ToolName, input: unknown = {}) => runJobTool(setup.input, name, input, CALL)
 
 describe("the tool table", () => {
-  test("is the twelve tools of PLAN §3, each with a description, a schema and its own permission action", () => {
-    expect(Object.keys(SCHEMAS)).toEqual(["status", "list", "get", "history", "pause", "pause_all", "create", "update", "delete", "run_now", "resume", "extend"])
+  test("is the fourteen tools, each with a description, a schema and its own permission action", () => {
+    expect(Object.keys(SCHEMAS)).toEqual(["status", "list", "get", "history", "pause", "pause_all", "create", "update", "delete", "run_now", "resume", "extend", "approve", "run_script"])
     expect(Object.keys(SCHEMAS).map((name) => toolId(name as ToolName))).toEqual([
       "jobs_status",
       "jobs_list",
@@ -63,6 +63,8 @@ describe("the tool table", () => {
       "jobs_run_now",
       "jobs_resume",
       "jobs_extend",
+      "jobs_approve",
+      "jobs_run_script",
     ])
     for (const name of Object.keys(SCHEMAS) as ToolName[]) expect(DESCRIPTIONS[name]).toBeString()
   })
@@ -79,15 +81,16 @@ describe("the tool table", () => {
     for (const tool of added) expect(tool.options).toEqual({ namespace: "jobs", permission: `jobs_${tool.name}` })
   })
 
-  test("the tools RPC exposes the four reads and nothing that changes anything", () => {
+  test("the tools RPC exposes every tool as a method, with its class, and the four reads are reads", () => {
     expect(READ_TOOLS.map((name) => toolId(name))).toEqual(["jobs_status", "jobs_list", "jobs_get", "jobs_history"])
     const methods = ownedMethods(harness().input)
-    expect(methods.map((method) => method.name)).toEqual(["jobs_status", "jobs_list", "jobs_get", "jobs_history"])
-    for (const [index, method] of methods.entries()) {
-      expect(method.action).toBe(actionOf(READ_TOOLS[index]!))
-      expect(method.action).toBe(method.name)
-      expect(["jobs_create", "jobs_update", "jobs_delete", "jobs_run_now", "jobs_resume", "jobs_extend", "jobs_pause", "jobs_pause_all"]).not.toContain(method.name)
+    expect(methods.map((method) => method.name)).toEqual((Object.keys(SCHEMAS) as ToolName[]).map((name) => toolId(name)))
+    for (const method of methods) {
+      expect(method).toMatchObject({ kind: "plugin", action: method.name })
+      expect(method.class).toBe(READ_TOOLS.includes(method.name.replace("jobs_", "") as never) ? "read" : "write")
     }
+    // A run session denies the state changes; the methods exist so the rules, not the table, decide.
+    expect(methods.map((method) => method.name)).toContain("jobs_run_script")
   })
 })
 
@@ -100,7 +103,8 @@ describe("the reads", () => {
       paused: false,
       unguardedAgents: 0,
       missingAgents: 0,
-      nextStep: "Nothing to do.",
+      scriptsNeedingApproval: 0,
+      nextStep: "Nothing to do."
     })
     expect(result.text).toContain("Jobs: no jobs yet.")
     expect(result.text).toContain("Run /jobs-status for the full report.")

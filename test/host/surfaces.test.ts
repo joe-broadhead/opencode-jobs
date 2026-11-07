@@ -39,6 +39,8 @@ const TOOLS = [
   "jobs_run_now",
   "jobs_resume",
   "jobs_extend",
+  "jobs_approve",
+  "jobs_run_script",
 ]
 
 function manualClock(start: number) {
@@ -72,7 +74,7 @@ const notices = async (host: Host, sessionID: string): Promise<string> => {
 const code = (host: Host, sessionID: string, program: string) => host.client.session.prompt({ sessionID, text: `[[mock:tool:execute:${JSON.stringify({ code: program })}]]` })
 
 describe(`the surfaces in OpenCode ${HOST_VERSION}`, () => {
-  test("registers the twelve tools, and gives every agent the default rules after its base allow", async () => {
+  test("registers the fourteen tools, and gives every agent the default rules after its base allow", async () => {
     const host = await startHost({ loop: false, config: { agents: GUARDED } })
     try {
       const tools = await host.probe().tool.list()
@@ -98,13 +100,14 @@ describe(`the surfaces in OpenCode ${HOST_VERSION}`, () => {
       const again = (await host.probe().agent.get({ agentID: "build" })).data.permissions as { action: string }[]
       expect(again.filter((rule) => rule.action === "jobs_*")).toHaveLength(1)
 
-      // The tools RPC's describe lists the four reads and nothing that changes anything.
+      // The tools RPC's describe lists every tool as a plugin method, with its class; a run session denies the changes.
       const described = (await host.client
         .rpc({ id: TOOLS_RPC_ID, methods: { describe: { input: { type: "object" }, output: { type: "object" } } }, events: {} })
-        .describe({}, { location: host.location })) as { methods: { name: string; kind: string; action: string; input: object }[] }
-      expect(described.methods.map((method) => method.name)).toEqual(["jobs_status", "jobs_list", "jobs_get", "jobs_history"])
+        .describe({}, { location: host.location })) as { methods: { name: string; kind: string; action: string; class: string }[] }
+      expect(described.methods.map((method) => method.name)).toEqual(TOOLS)
       expect(described.methods.every((method) => method.kind === "plugin")).toBe(true)
-      expect(described.methods.map((method) => method.action)).toEqual(["jobs_status", "jobs_list", "jobs_get", "jobs_history"])
+      expect(described.methods.map((method) => method.action)).toEqual(TOOLS)
+      expect(described.methods.filter((method) => method.class === "read").map((method) => method.name)).toEqual(["jobs_status", "jobs_list", "jobs_get", "jobs_history"])
     } finally {
       await host.close()
     }

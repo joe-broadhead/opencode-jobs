@@ -12,9 +12,10 @@ import type { Plugin } from "@opencode/plugin"
 import { jobsError } from "../constants.js"
 import { cut } from "../redact.js"
 import { DAY, type Job } from "./model.js"
+import type { ScriptApproval, ScriptCall, ScriptLimitFlags } from "./script.js"
 
 /** The schema this build writes. A store with a later one is refused, not overwritten. */
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 /** Retention keeps the last 50 runs of a job and the last 30 days, whichever keeps less (D9). */
 export const MAX_RUNS = 50
@@ -50,11 +51,13 @@ export interface JobState {
   readonly retry?: { readonly slot: number; readonly attempt: number; readonly at: number }
   /** A manual run (`jobs_run_now`): its own slot key, which no scheduled slot consumes or collides with (DR-3). */
   readonly manual?: { readonly at: number }
+  /** The approval a script job was given, bound to its source and manifest digests (D-A). Job state, not the file. */
+  readonly approval?: ScriptApproval
 }
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "interrupted" | "skipped" | "missed"
 export type RunOutcome = "succeeded" | "failed" | "interrupted"
-export type SkipReason = "overlap" | "expired" | "ended" | "unguarded" | "missing"
+export type SkipReason = "overlap" | "expired" | "ended" | "unguarded" | "missing" | "unapproved" | "revoked"
 
 /** One run, keyed by the job and the slot it belongs to. The slot is the planned time, before jitter. */
 export interface RunRecord {
@@ -85,6 +88,14 @@ export interface RunRecord {
   readonly from?: string
   /** What the run cost, when the host reports it. */
   readonly cost?: number
+  /** A script run's source and manifest, never its code: the digest is what the approval is bound to. */
+  readonly script?: { readonly sourceHash: string; readonly manifestDigest: string; readonly uses: readonly string[] }
+  /** A script run's result, capped; framed as script output, never as an instruction. */
+  readonly result?: { readonly ok: boolean; readonly value?: unknown; readonly error?: string }
+  /** What each call did, with no payloads (D-C). */
+  readonly calls?: readonly ScriptCall[]
+  /** Which limit ended the run, when one did. */
+  readonly limits?: ScriptLimitFlags
 }
 
 export interface Migration {
@@ -100,6 +111,9 @@ export interface Migration {
  */
 const MIGRATIONS: Readonly<Record<number, (storage: Storage) => Promise<void>>> = {
   1: async () => undefined,
+  // Schema 2 adds a script job's approval to its state and a script run's fields to its record. Both are additive and
+  // absent on an older value, so no key is rewritten.
+  2: async () => undefined,
 }
 
 /** Brings the store to the current schema, once. A store from a newer plugin is refused, never overwritten. */
@@ -189,7 +203,30 @@ export async function readState(storage: Storage, id: string): Promise<JobState>
       ? { retry: { slot: value.retry.slot, attempt: value.retry.attempt, at: value.retry.at } }
       : {}),
     ...(isObject(value.manual) && typeof value.manual.at === "number" ? { manual: { at: value.manual.at } } : {}),
+    ...(asApproval(value.approval) === undefined ? {} : { approval: asApproval(value.approval)! }),
     ...(pause === undefined ? {} : { paused: { at: pause.at as number, ...(typeof pause.reason === "string" ? { reason: pause.reason } : {}) } }),
+  }
+}
+
+/** An approval read back from storage; anything malformed is treated as no approval, so a script fails closed. */
+function asApproval(value: unknown): ScriptApproval | undefined {
+  if (!isObject(value)) return undefined
+  if (typeof value.sourceHash !== "string" || typeof value.manifestDigest !== "string" || typeof value.digest !== "string") return undefined
+  if (typeof value.at !== "number" || (value.decision !== "once" && value.decision !== "always") || !Array.isArray(value.resolved)) return undefined
+  const resolved = value.resolved.flatMap((entry) => {
+    if (!isObject(entry) || typeof entry.method !== "string" || typeof entry.action !== "string" || typeof entry.class !== "string") return []
+    if (entry.kind !== "family" && entry.kind !== "host") return []
+    if (entry.effect !== "allow" && entry.effect !== "ask" && entry.effect !== "deny") return []
+    return [{ method: entry.method, action: entry.action, class: entry.class, kind: entry.kind, effect: entry.effect, ...(typeof entry.description === "string" ? { description: entry.description } : {}) }]
+  })
+  return {
+    sourceHash: value.sourceHash,
+    manifestDigest: value.manifestDigest,
+    digest: value.digest,
+    at: value.at,
+    decision: value.decision,
+    ...(typeof value.requestID === "string" ? { requestID: value.requestID } : {}),
+    resolved: resolved as ScriptApproval["resolved"],
   }
 }
 

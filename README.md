@@ -32,19 +32,27 @@ Run `opencode reload`, or restart OpenCode, then run `/jobs-status`.
 | `/jobs-status` | Posts the report: the runner, the jobs, the next five runs, the last ten runs, failures, the agents that need the block, and the next step. |
 | `/jobs-pause` | Pauses every job at once, or resumes them: nothing new starts and a run in flight is interrupted. |
 | `/jobs-run <id>` | Runs a job now, without waiting for its next slot. |
+| `/jobs-approve <id>` | Approves a script job again after its source, its manifest or a tool's class changed. |
 | `/jobs`, or "Jobs: Status" in the command palette | Opens the same report in a dialog. `r` refreshes and `Esc` closes it; the palette command "Jobs: Pause or resume every job" stops or restarts every job, and asks first. |
 
-The model has twelve `jobs_*` tools: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history` read, `jobs_pause` and
-`jobs_pause_all` pause, and `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_run_now`, `jobs_resume` and
-`jobs_extend` change a job. Pausing every job runs without asking, because it only stops work; every other change asks
-for approval, and the prompt is the yes. `jobs_history` is the only surface that returns what a run said. A failed run
-is retried for its slot by `policy.retries`, and `notify` posts a run's outcome into a session as job output.
+The model has fourteen `jobs_*` tools: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history` read, `jobs_pause` and
+`jobs_pause_all` pause, `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_run_now`, `jobs_resume`, `jobs_extend`,
+`jobs_approve` and `jobs_run_script` change a job or run a script. Pausing every job runs without asking, because it
+only stops work; every other change asks for approval, and the prompt is the yes. `jobs_history` is the only surface
+that returns what a run said. A failed run is retried for its slot by `policy.retries`, and `notify` posts a run's
+outcome into a session as job output.
 
-A job is one of three things:
+A job is one of four things:
 
 - a **prompt** the job's agent runs in a fresh session;
 - a **command**, such as `/morning`, run in that session;
-- a **reminder**, posted into a session you name with no model turn.
+- a **reminder**, posted into a session you name with no model turn;
+- a **script**, a confined program that calls named plugin tools and no model. It is approved once, bound to its exact
+  source and tool list, and re-checked every slot; a changed script or tool needs `/jobs-approve`.
+
+A script is the no-model path: `uses` is its whole reach, it cannot ask, and the record keeps only what each call did.
+[Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md) has the approval flow, the two
+routes it can call (family methods and `host:<tool id>`), the limits, and the X-bookmarks walkthrough.
 
 A job that belongs to a project is a Markdown file in `.opencode/jobs/`, so it is reviewed and committed like any other
 file:
@@ -166,6 +174,10 @@ Run `/jobs-status` first. Its last line is the next step.
 | Agents OpenCode no longer lists | A plugin update can leave OpenCode's running plugin with a stale agent list, so jobs that name a configuration agent do not run. Run `opencode reload` in a terminal, or restart OpenCode; jobs resume on their own. |
 | `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, so the job is refused rather than run into prompts. Paste the block `/jobs-status` prints. |
 | `JOBS_AGENT_MISSING` | OpenCode no longer lists the job's agent here, which can happen after a plugin update. Run `opencode reload` in a terminal, or restart OpenCode; the next slot runs once it is back. |
+| `JOBS_SCRIPT_DENIED` | The job's agent denies a tool the script's manifest names. A session allow beats an agent deny, so the script is refused rather than granted it. Remove the deny rule for that tool, or point the job at an agent that allows it. |
+| `JOBS_SCRIPT_UNKNOWN_TOOL` | A manifest entry is not a method the plugin's tools RPC describes, or a tool the host lists. Use `<plugin id>.<method>` or `host:<tool id>`, then approve the script again. |
+| `JOBS_SCRIPT_UNAPPROVED` | The script's source, its manifest or a tool's class changed since it was approved, so the slot was skipped. Approve it again with the `jobs_approve` tool or `/jobs-approve <job>`. |
+| `JOBS_SCRIPT_REVOKED` | The script's agent now denies one of its tools, so every run is skipped until that changes. Remove the deny rule, or point the job at an agent that allows the tool, then approve it again. |
 | `JOBS_UNATTENDED` | A run tried a tool its agent asks about. Nothing waits: the call was denied. A read the job needs goes in its agent's own `permissions`; a write belongs with a person, not a run. |
 | `JOBS_ALLOW_WIDENS` | A job's `allow` list holds an `allow` entry. Move the grant to the job agent's own `permissions`. |
 | `JOBS_INVALID_SCHEDULE` | The schedule names two kinds or none, or the cron expression, interval or zone is wrong. The message names the field. |

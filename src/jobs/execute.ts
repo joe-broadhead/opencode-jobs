@@ -13,9 +13,14 @@
 import type { Plugin } from "@opencode/plugin"
 import { guardAgent } from "../host/permissions.js"
 import type { Clock } from "./clock.js"
+import { jobsError } from "../constants.js"
 import type { Job, JobAction } from "./model.js"
-import { forgetJobSession, jobOutput, openJobSession } from "./safety.js"
-import { getRun, putRun, readPauseAll, slotISO, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
+import { forgetJobSession, jobOutput, openJobSession, SELF_DENIES } from "./safety.js"
+import { approvalMatches, denied, limitsOf, manifestDigest, scriptSessionRules, sourceHash, type Script } from "./script.js"
+import { createBridge } from "./script-bridge.js"
+import type { ScriptGate } from "./script-gate.js"
+import { runScript } from "./script-runtime.js"
+import { getRun, putRun, readPauseAll, readState, slotISO, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
 
 /** The session members one run uses, and nothing else. */
 export type Session = Pick<Plugin.Context["session"], "create" | "get" | "remove" | "prompt" | "command" | "synthetic" | "wait" | "interrupt" | "context">
@@ -76,6 +81,11 @@ export interface ExecutorInput {
   readonly token: string
   /** Aborted on cleanup, so a pending timeout does not outlive the instance. */
   readonly signal?: AbortSignal
+  /** The script gate: a manifest's resolution and the one approval a script gets. A script run requires it. */
+  readonly scripts?: ScriptGate
+  /** The host's tools and tools RPCs, which a script's bridge calls. A script run requires both. */
+  readonly tool?: Pick<Plugin.Context["tool"], "list">
+  readonly rpc?: Plugin.Context["rpc"]
 }
 
 export function createExecutor(input: ExecutorInput): Executor {
@@ -100,6 +110,8 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
   // A reminder posts into an existing session: no run session, no parked parent, and nothing to interrupt but the
   // target's own turn, which is the person's, so a replace never touches it.
   const action = job.action
+  // A script runs no model turn: its session is created from the approved manifest, and the record carries no payloads.
+  if (action.type === "script") return executeScript(input, action.script)
   // A reminder's session is the person's, so the record names it but never owns it.
   if (action.type === "remind") return complete(input, key, clock.now(), action.sessionID, await remind(input, action, slotISO(slot)), false)
 
@@ -182,6 +194,10 @@ async function complete(input: ExecuteInput, key: string, startedAt: number, ses
     ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
     ...(result.summary === undefined ? {} : { summary: result.summary }),
     ...(result.cost === undefined ? {} : { cost: result.cost }),
+    ...(result.script === undefined ? {} : { script: result.script }),
+    ...(result.result === undefined ? {} : { result: result.result }),
+    ...(result.calls === undefined ? {} : { calls: result.calls }),
+    ...(result.limits === undefined ? {} : { limits: result.limits }),
   })
   return {
     claimed: true,
@@ -198,6 +214,10 @@ interface Finished {
   readonly outcome?: RunOutcome
   readonly summary?: string
   readonly cost?: number
+  readonly script?: RunRecord["script"]
+  readonly result?: RunRecord["result"]
+  readonly calls?: RunRecord["calls"]
+  readonly limits?: RunRecord["limits"]
 }
 
 /**
@@ -243,7 +263,7 @@ async function remind(input: ExecuteInput, action: Extract<JobAction, { type: "r
 }
 
 /** A prompt or a command, then the wait against the timeout, then the outcome and the summary. */
-async function run(input: ExecuteInput, sessionID: string, action: Exclude<JobAction, { type: "remind" }>): Promise<Finished> {
+async function run(input: ExecuteInput, sessionID: string, action: Exclude<JobAction, { type: "remind" | "script" }>): Promise<Finished> {
   const { job, clock, session } = input
   // The kill switch can arrive between the slot being taken and the turn starting. Checking it here, before and after
   // the turn is asked for, means a pause never pays for a model call it cannot stop (`bounded` covers the rest).
@@ -336,3 +356,120 @@ export async function summaryOf(session: Pick<Session, "context">, sessionID: st
 }
 
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+/** A slot a script job could not run, with the code and the one act that unlocks it. */
+async function skipScript(input: ExecuteInput, key: string, skipReason: "unapproved" | "revoked", code: string, what: string, next: string): Promise<RunResult> {
+  const message = jobsError(code, what, next).message
+  const record = await putRun(input.storage, {
+    job: input.job.id,
+    slot: key,
+    status: "skipped",
+    reason: skipReason,
+    late: input.late,
+    attempt: input.attempt,
+    token: input.token,
+    startedAt: input.clock.now(),
+    endedAt: input.clock.now(),
+    error: message,
+  })
+  return { claimed: true, status: "skipped", record, error: message }
+}
+
+/**
+ * A script job's run: re-resolve, re-check the approval, build the run session from the granted manifest, and run the
+ * confined runtime. Nothing here calls a model, and nothing outside the manifest is reachable from the guest.
+ */
+async function executeScript(input: ExecuteInput, script: Script): Promise<RunResult> {
+  const { job, clock, storage } = input
+  const key = slotISO(input.slot)
+  const directory = job.target.directory ?? input.location
+  const state = await readState(storage, job.id)
+  if (input.scripts === undefined || input.tool === undefined || input.rpc === undefined) {
+    return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} cannot run here because the script runtime is not available.`, `Restart OpenCode, then approve the script again with /jobs-approve ${job.id}.`)
+  }
+  const gate = input.scripts
+  const tools = input.tool
+  const rpc = input.rpc
+  let resolved
+  try {
+    resolved = await gate.resolve(script.uses, job.agent, directory)
+  } catch (error) {
+    return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} could not re-resolve its manifest (${reason(error)}).`, `Approve it again with the jobs_approve tool or /jobs-approve ${job.id}.`)
+  }
+  if (!approvalMatches(state.approval, script, resolved)) {
+    return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} has changed since it was approved, or its tools resolve differently now.`, `Approve it again with the jobs_approve tool or /jobs-approve ${job.id}.`)
+  }
+  const revoked = denied(resolved)
+  if (revoked.length > 0) {
+    const names = revoked.map((tool) => `${tool.method} (${tool.action})`).join(", ")
+    return skipScript(input, key, "revoked", "JOBS_SCRIPT_REVOKED", `The script ${JSON.stringify(job.id)} uses tools its agent now denies: ${names}.`, `Remove the deny rule for those tools, or point the job at an agent that allows them, then approve it again.`)
+  }
+  // The kill switch can arrive between the claim and the session.
+  if (await paused(input)) return { claimed: true, status: "interrupted" }
+
+  const limits = limitsOf(script)
+  const timeoutMs = Math.min(script.timeoutMs ?? job.policy.timeoutMs, job.policy.timeoutMs)
+  const controller = new AbortController()
+  let stopped = false
+  const stop = () => {
+    stopped = true
+    controller.abort()
+  }
+  input.signal?.addEventListener("abort", stop, { once: true })
+  let sessionID: string | undefined
+  try {
+    const parentID = await jobsParent({ storage, session: input.session, directory })
+    const created = await openJobSession({ session: input.session, job, directory, parentID, run: key, slot: input.slot, permissions: scriptSessionRules(resolved, SELF_DENIES) })
+    sessionID = created.id
+    const startedAt = clock.now()
+    await putRun(storage, {
+      job: job.id,
+      slot: key,
+      status: "running",
+      late: input.late,
+      attempt: input.attempt,
+      token: input.token,
+      sessionID,
+      startedAt,
+      script: { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), uses: [...script.uses] },
+    })
+    input.onSession?.({
+      slot: input.slot,
+      sessionID,
+      interrupt: async () => {
+        stopped = true
+        controller.abort()
+        await input.session.interrupt({ sessionID: created.id }).catch(() => undefined)
+      },
+    })
+    const bridge = createBridge({ rpc, tool: tools, session: input.session, agent: input.agents, sessionID, agentID: job.agent, manifest: resolved })
+    const outcome = await runScript({ code: script.code, allowed: new Set(resolved.map((tool) => tool.method)), limits, timeoutMs, bridge, signal: controller.signal, now: clock.now })
+    const interrupted = stopped || input.signal?.aborted === true
+    const status: RunStatus = outcome.ok ? "succeeded" : interrupted ? "interrupted" : outcome.limits.timedOut ? "timed_out" : "failed"
+    return await complete(input, key, startedAt, sessionID, {
+      status,
+      script: { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), uses: [...script.uses] },
+      result: outcome.ok ? { ok: true, value: outcome.value } : { ok: false, error: outcome.error },
+      calls: outcome.calls,
+      limits: outcome.limits,
+    })
+  } catch (error) {
+    if (sessionID !== undefined) forgetJobSession(sessionID)
+    if (!input.active()) return { claimed: true, status: "running", ...(sessionID === undefined ? {} : { sessionID }), abandoned: true }
+    const failed = await putRun(storage, {
+      job: job.id,
+      slot: key,
+      status: "failed",
+      late: input.late,
+      attempt: input.attempt,
+      token: input.token,
+      ...(sessionID === undefined ? {} : { sessionID }),
+      startedAt: clock.now(),
+      endedAt: clock.now(),
+      error: reason(error),
+    })
+    return { claimed: true, status: "failed", record: failed, ...(sessionID === undefined ? {} : { sessionID }), error: reason(error) }
+  } finally {
+    input.signal?.removeEventListener("abort", stop)
+  }
+}

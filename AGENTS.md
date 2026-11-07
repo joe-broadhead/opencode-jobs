@@ -52,10 +52,11 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   `unguardedAgents` and `nextStep`, under those names. Status names jobs, agents, times and outcomes, never a prompt or
   a transcript, and cuts a failure's reason to one line of 160 characters with `src/redact.ts`.
 - **`src/constants.ts` has no imports at all**: `scripts/check.mjs` loads it with Node's type stripping.
-- **The tools RPC.** `src/host/tools-rpc.ts` is a copy of a module shared by several plugins. Change only its block
-  between the `PLUGIN-SPECIFIC` markers here; change the rest in the shared copy first. Only reads become methods:
-  never a write, a pause or an unknown tool. Keep the RPC id `jobs.scheduler.tools` and its method names stable:
-  scripts call them by name.
+- **The tools RPC.** `src/host/tools-rpc.ts` is a copy of the v2 module shared by several plugins (shared-part hash
+  `5bb87ba0…`), synced with `shared-v2/sync-copy.mjs`. Change only its block between the `PLUGIN-SPECIFIC` markers here;
+  change the rest in the shared copy first. Every known tool is a method with a class, and the rule is resolved before
+  dispatch: only `allow` runs, so a run session's grants are the only path to a write. Keep the RPC id
+  `jobs.scheduler.tools` and its method names stable: scripts call them by name.
 - **State is OpenCode's.** Jobs, their runtime state and their run records live in `ctx.storage`, one key per job and
   per run, written only by the leader. Nothing else is written: no file outside `ctx.storage`, and job files are read,
   never edited.

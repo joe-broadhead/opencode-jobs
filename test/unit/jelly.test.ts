@@ -1,4 +1,4 @@
-// The Jelly declaration: the nine keys Jelly reads, the twelve tools with the action and effect each one has, and the
+// The Jelly declaration: the nine keys Jelly reads, the fourteen tools with the action and effect each one has, and the
 // one skill. A declaration a reviewer can check against the live tool table without loading the plugin.
 import { describe, expect, test } from "bun:test"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
@@ -40,10 +40,10 @@ describe("the jelly declaration", () => {
     expect(jelly.skills).toEqual(["jobs"])
   })
 
-  test("lists exactly the twelve tools, each with the action the default rules name", () => {
+  test("lists exactly the fourteen tools, each with the action the default rules name", () => {
     const tools = jelly.tools
-    expect(tools).toHaveLength(12)
-    expect(new Set(tools.map((tool) => tool.name)).size).toBe(12)
+    expect(tools).toHaveLength(14)
+    expect(new Set(tools.map((tool) => tool.name)).size).toBe(14)
     for (const name of Object.keys(SCHEMAS) as ToolName[]) {
       const id = toolId(name)
       const entry = tools.find((tool) => tool.permission === id)
