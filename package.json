@@ -1,7 +1,6 @@
 {
   "name": "@joe-broadhead/opencode-jobs",
   "version": "0.0.0",
-  "private": true,
   "description": "Unofficial OpenCode plugin that runs agent prompts, slash commands and reminders on cron, interval and one-off schedules, inside OpenCode, with run history and unattended permissions",
   "keywords": [
     "opencode",
