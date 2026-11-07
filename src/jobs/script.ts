@@ -83,8 +83,6 @@ export interface ScriptApproval {
   readonly at: number
   /** The host permission request id, when the assert answered one. */
   readonly requestID?: string
-  /** `once` for the create or update that approved it; the saved rule is the host's own, per exact digest. */
-  readonly decision: "once" | "always"
   readonly resolved: readonly ResolvedTool[]
 }
 

@@ -16,12 +16,11 @@ const RULES = [{ action: "*", resource: "*", effect: "allow" as const }]
 const SCRIPT: Script = { code: 'const r = await tools.host.mem({ content: "x" }); return r', uses: ["host:mem"] }
 const RESOLVED: readonly ResolvedTool[] = [{ method: "host:mem", action: "mem", class: "unclassified", kind: "host", effect: "allow" }]
 
-const approvalOf = (script: Script, resolved: readonly ResolvedTool[] = RESOLVED, decision: "once" | "always" = "once"): ScriptApproval => ({
+const approvalOf = (script: Script, resolved: readonly ResolvedTool[] = RESOLVED): ScriptApproval => ({
   sourceHash: sourceHash(script.code),
   manifestDigest: manifestDigest(script.uses),
   digest: digestOf(script),
   at: START,
-  decision,
   resolved,
 })
 
@@ -65,7 +64,7 @@ describe("creating a script job", () => {
     const { input, storage } = actions(scripts)
     const job = await createJob(input, { name: "Memory", schedule: { every: "1h" }, action: { type: "script", script: SCRIPT } }, call)
     expect(job.agent).toBe("build")
-    expect((await readState(storage.storage, job.id)).approval).toMatchObject({ digest: digestOf(SCRIPT), decision: "once" })
+    expect((await readState(storage.storage, job.id)).approval).toMatchObject({ digest: digestOf(SCRIPT) })
     expect(scripts.approved).toHaveLength(1)
     const asked = scripts.approved[0] as { source?: unknown; agent: string }
     expect(asked.agent).toBe("build")

@@ -111,6 +111,8 @@ export type JobCode =
   | "JOBS_TARGET_MISSING"
   | "JOBS_SCRIPT_UNKNOWN_TOOL"
   | "JOBS_SCRIPT_DENIED"
+  | "JOBS_SCRIPT_HOST_TOOL"
+  | "JOBS_SCRIPT_FAMILY_TOOL"
 
 /**
  * Why a job definition was refused: the code and next step, and the field at fault, so a file job's error can name the

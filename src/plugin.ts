@@ -68,6 +68,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         tool: ctx.tool,
         agent: ctx.agent,
         plugin: ctx.plugin,
+        mcp: ctx.mcp,
         location: ctx.location.directory,
         permission: ctx.permission,
         now: () => clock.now(),

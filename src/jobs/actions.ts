@@ -116,7 +116,14 @@ async function scriptApproval(input: ActionInput, job: Job, call: ApprovalCall |
   }
   // An update that leaves the source, the manifest and the resolution unchanged keeps the approval it already had.
   if (previous !== undefined && approvalMatches(previous, job.action.script, resolved)) return previous
-  return input.scripts.approve({ sessionID: call.sessionID, agent: call.agent, script: job.action.script, resolved, ...(call.messageID === undefined || call.id === undefined ? {} : { source: { messageID: call.messageID, id: call.id } }) })
+  return input.scripts.approve({
+    sessionID: call.sessionID,
+    agent: call.agent,
+    script: job.action.script,
+    resolved,
+    job: job.id,
+    ...(call.messageID === undefined || call.id === undefined ? {} : { source: { messageID: call.messageID, id: call.id } }),
+  })
 }
 
 /** Creates a job from the model's or a person's input: validated, guarded (or approved), and stored. */

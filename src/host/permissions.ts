@@ -104,9 +104,13 @@ export const agentBlockJSON = (agent: string) => JSON.stringify(agentBlock(agent
 const matches = (pattern: string, value: string) =>
   new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`).test(value)
 
-/** The effect of `rules` for a call that names no resource: the last matching rule wins, and no match asks. */
-export function evaluate(rules: readonly Rule[], action: string): Rule["effect"] {
-  return rules.findLast((rule) => matches(rule.action, action) && matches(rule.resource, "*"))?.effect ?? "ask"
+/**
+ * The effect of `rules` for one call: the last rule whose action and resource match wins, and no match asks. A tool
+ * call's resource is `"*"`; the resource is named so a future resource-scoped call cannot silently match a rule written
+ * for another resource (SR-15).
+ */
+export function evaluate(rules: readonly Rule[], action: string, resource = "*"): Rule["effect"] {
+  return rules.findLast((rule) => matches(rule.action, action) && matches(rule.resource, resource))?.effect ?? "ask"
 }
 
 /** A tool no agent block names, so the effect for it is what a tool added tomorrow would get. */

@@ -174,6 +174,8 @@ Run `/jobs-status` first. Its last line is the next step.
 | Agents OpenCode no longer lists | A plugin update can leave OpenCode's running plugin with a stale agent list, so jobs that name a configuration agent do not run. Run `opencode reload` in a terminal, or restart OpenCode; jobs resume on their own. |
 | `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, so the job is refused rather than run into prompts. Paste the block `/jobs-status` prints. |
 | `JOBS_AGENT_MISSING` | OpenCode no longer lists the job's agent here, which can happen after a plugin update. Run `opencode reload` in a terminal, or restart OpenCode; the next slot runs once it is back. |
+| `JOBS_SCRIPT_HOST_TOOL` | A `host:` entry names OpenCode's own shell, file, network or task tool. A script reaches MCP servers and plugin tools only. Remove it. |
+| `JOBS_SCRIPT_FAMILY_TOOL` | A `host:` entry names a tool a loaded plugin serves through its tools RPC. Use `<plugin id>.<method>`, so its shaping and budgets apply. |
 | `JOBS_SCRIPT_DENIED` | The job's agent denies a tool the script's manifest names. A session allow beats an agent deny, so the script is refused rather than granted it. Remove the deny rule for that tool, or point the job at an agent that allows it. |
 | `JOBS_SCRIPT_UNKNOWN_TOOL` | A manifest entry is not a method the plugin's tools RPC describes, or a tool the host lists. Use `<plugin id>.<method>` or `host:<tool id>`, then approve the script again. |
 | `JOBS_SCRIPT_UNAPPROVED` | The script's source, its manifest or a tool's class changed since it was approved, so the slot was skipped. Approve it again with the `jobs_approve` tool or `/jobs-approve <job>`. |

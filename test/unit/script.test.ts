@@ -72,7 +72,7 @@ describe("the approval binding", () => {
   })
 
   test("matches only the same hashes, tools, actions and classes", () => {
-    const approval = { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), digest: digestOf(script), at: NOW, decision: "once" as const, resolved }
+    const approval = { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), digest: digestOf(script), at: NOW, resolved }
     expect(approvalMatches(approval, script, resolved)).toBe(true)
     expect(approvalMatches(undefined, script, resolved)).toBe(false)
     expect(approvalMatches(approval, { ...script, code: "return 2" }, resolved)).toBe(false)

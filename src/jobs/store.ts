@@ -212,7 +212,7 @@ export async function readState(storage: Storage, id: string): Promise<JobState>
 function asApproval(value: unknown): ScriptApproval | undefined {
   if (!isObject(value)) return undefined
   if (typeof value.sourceHash !== "string" || typeof value.manifestDigest !== "string" || typeof value.digest !== "string") return undefined
-  if (typeof value.at !== "number" || (value.decision !== "once" && value.decision !== "always") || !Array.isArray(value.resolved)) return undefined
+  if (typeof value.at !== "number" || !Array.isArray(value.resolved)) return undefined
   const resolved = value.resolved.flatMap((entry) => {
     if (!isObject(entry) || typeof entry.method !== "string" || typeof entry.action !== "string" || typeof entry.class !== "string") return []
     if (entry.kind !== "family" && entry.kind !== "host") return []
@@ -224,7 +224,6 @@ function asApproval(value: unknown): ScriptApproval | undefined {
     manifestDigest: value.manifestDigest,
     digest: value.digest,
     at: value.at,
-    decision: value.decision,
     ...(typeof value.requestID === "string" ? { requestID: value.requestID } : {}),
     resolved: resolved as ScriptApproval["resolved"],
   }

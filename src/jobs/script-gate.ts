@@ -40,6 +40,7 @@ export interface ScriptHost {
   readonly tool: Pick<Plugin.Context["tool"], "list">
   readonly agent: Pick<Plugin.Context["agent"], "get">
   readonly plugin: Pick<Plugin.Context["plugin"], "list">
+  readonly mcp: Pick<Plugin.Context["mcp"], "list">
   /** The leader's directory: the agent and the loaded plugins are that location's. */
   readonly location: string
   readonly permission: { readonly assert: Assert }
@@ -50,10 +51,42 @@ export interface ScriptGate {
   /** Resolves every entry for the agent; an unknown method throws `JOBS_SCRIPT_UNKNOWN_TOOL`. */
   resolve(entries: readonly string[], agentID: string, directory?: string): Promise<readonly ResolvedTool[]>
   /** Resolves, records the approval through the host's one prompt, and returns it. */
-  approve(input: { sessionID: string; agent: string; script: Script; resolved: readonly ResolvedTool[]; source?: { readonly messageID: string; readonly id: string } }): Promise<ScriptApproval>
+  approve(input: {
+    sessionID: string
+    agent: string
+    script: Script
+    resolved: readonly ResolvedTool[]
+    source?: { readonly messageID: string; readonly id: string }
+    /** The job whose script this is, for the "where to read it" line; absent for a one-off tool call. */
+    job?: string
+  }): Promise<ScriptApproval>
 }
 
+/** How much source the approval prompt carries; the rest is named by `where`. */
+const SOURCE_HEAD = 8192
+
 const CLASSES: readonly MethodClass[] = ["read", "write", "send", "export", "destructive", "unclassified"]
+
+/**
+ * OpenCode's own capability tools, by id and by name. They are the host's shell, file, network, task and prompt
+ * surfaces; a script must never reach them, because the guest's confinement claim (no filesystem, shell or network)
+ * would be false. The structural rule below refuses them too; this list is the second layer SR-2 asks for.
+ */
+const CORE_TOOLS: ReadonlySet<string> = new Set([
+  "bash", "shell", "edit", "write", "patch", "multiedit", "read", "list", "glob", "grep",
+  "webfetch", "websearch", "fetch", "task", "subagent", "skill", "question", "todo", "todowrite", "todoread",
+  "bash_output", "kill_bash",
+])
+
+/** True for a tool whose registration is OpenCode's own rather than a plugin's or an MCP server's. */
+function isCoreTool(tool: { readonly id: string; readonly name: string; readonly options?: { readonly namespace?: string } }, servers: ReadonlySet<string>): boolean {
+  if (CORE_TOOLS.has(tool.id) || CORE_TOOLS.has(tool.name)) return true
+  const namespace = tool.options?.namespace
+  // A plugin names its namespace; OpenCode's own tools use `opencode`, or no namespace at all.
+  if (namespace === "opencode") return true
+  const mcp = [...servers].some((server) => tool.id === server || tool.id.startsWith(`${server}_`))
+  return !mcp && namespace === undefined
+}
 const classOf = (value: unknown): MethodClass => (typeof value === "string" && (CLASSES as readonly string[]).includes(value) ? (value as MethodClass) : "unclassified")
 
 /** A plugin id and a method from a manifest entry, split at the last dot. */
@@ -76,7 +109,7 @@ function contract(id: string, methods: readonly string[]) {
 
 /** The `describe` output, as the lookup reads it. */
 interface Described {
-  readonly methods?: readonly { readonly name?: unknown; readonly action?: unknown; readonly class?: unknown; readonly description?: unknown }[]
+  readonly methods?: readonly { readonly name?: unknown; readonly tool?: unknown; readonly action?: unknown; readonly class?: unknown; readonly description?: unknown }[]
 }
 
 export function createScriptGate(host: ScriptHost): ScriptGate {
@@ -109,28 +142,81 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
     return found.length === 1 ? found[0] : undefined
   }
 
-  const hostTool = async (id: string): Promise<MethodInfo | undefined> => {
+  const servers = async (): Promise<ReadonlySet<string>> => {
+    const listed = (await host.mcp.list().catch(() => ({ data: [] as { name?: string; status?: { status?: string } }[] }))) as { data?: readonly { name?: string; status?: { status?: string } }[] }
+    return new Set((listed.data ?? []).flatMap((entry) => (typeof entry.name === "string" ? [entry.name] : [])))
+  }
+
+  /** The family method a tool id serves, if a loaded plugin's describe lists it: `host:` must not bypass shaping. */
+  const familyFor = async (id: string, directory: string): Promise<string | undefined> => {
+    const listed = (await host.plugin.list({ location: { directory } } as never).catch(() => ({ data: [] }))) as { data?: readonly { id?: string }[] }
+    const candidates = (listed.data ?? []).flatMap((entry) => (typeof entry.id === "string" ? [entry.id] : [])).slice(0, 24)
+    for (const plugin of candidates) {
+      try {
+        const client = host.rpc(contract(plugin, []) as never) as unknown as Record<string, (body: unknown, options?: unknown) => Promise<unknown>>
+        const answer = (await client.describe?.({})) as Described & { readonly methods?: readonly { readonly name?: unknown; readonly tool?: unknown; readonly action?: unknown }[] }
+        const found = answer.methods?.find((method) => method.tool === id || method.action === id)
+        if (found !== undefined && typeof found.name === "string") return `${plugin}.${found.name}`
+      } catch {
+        // A plugin without a tools RPC is not a family server for this tool.
+      }
+    }
+    return undefined
+  }
+
+  const hostTool = async (id: string, directory: string): Promise<MethodInfo | undefined> => {
     const tool = (await host.tool.list()).find((entry) => entry.id === id || entry.name === id)
     if (tool === undefined) return undefined
+    const status = tool as { readonly id: string; readonly name: string; readonly description?: string; readonly options?: { readonly namespace?: string; readonly permission?: string } }
+    if (isCoreTool(status, await servers())) {
+      throw new JobInputError(
+        "JOBS_SCRIPT_HOST_TOOL",
+        "action.script.uses",
+        `The manifest names OpenCode's own tool ${JSON.stringify(id)}; a script may not use the host's shell, file, network or task tools.`,
+        `Remove it. A script reaches MCP servers and plugin tools only, by exact id; a family's tool is called as "<plugin id>.<method>", where its shaping and budget apply.`,
+      )
+    }
+    const family = await familyFor(id, directory)
+    if (family !== undefined) {
+      throw new JobInputError(
+        "JOBS_SCRIPT_FAMILY_TOOL",
+        "action.script.uses",
+        `The manifest names ${JSON.stringify(id)} as a host tool, but a loaded plugin serves it as the family method ${JSON.stringify(family)}.`,
+        `Use ${JSON.stringify(family)} instead, so that plugin's shaping and budgets apply.`,
+      )
+    }
     return {
       method: `host:${tool.id}`,
-      action: tool.options?.permission ?? tool.id,
+      action: status.options?.permission ?? tool.id,
       class: "unclassified",
       kind: "host",
-      ...(typeof tool.description === "string" ? { description: tool.description } : {}),
+      ...(typeof status.description === "string" ? { description: status.description } : {}),
     }
   }
 
   const lookup = async (entry: string, directory: string): Promise<MethodInfo | undefined> =>
-    entry.startsWith("host:") ? hostTool(entry.slice("host:".length)) : family(split(entry).plugin, split(entry).method, directory)
+    entry.startsWith("host:") ? hostTool(entry.slice("host:".length), directory) : family(split(entry).plugin, split(entry).method, directory)
 
-  /** Every name the lookup can see, for the nearest-names hint on an unknown entry. */
-  const known = async (): Promise<string[]> => {
+  /** Every name the lookup can see, for the nearest-names hint on an unknown entry: host tools and family methods. */
+  const known = async (directory: string): Promise<string[]> => {
     const tools = await host.tool.list().then(
       (listed) => listed.map((entry) => `host:${entry.id}`),
       () => [],
     )
-    return tools
+    const listed = (await host.plugin.list({ location: { directory } } as never).catch(() => ({ data: [] }))) as { data?: readonly { id?: string }[] }
+    const candidates = (listed.data ?? []).flatMap((entry) => (typeof entry.id === "string" ? [entry.id] : [])).slice(0, 24)
+    const family = await Promise.all(
+      candidates.map(async (plugin) => {
+        try {
+          const client = host.rpc(contract(plugin, []) as never) as unknown as Record<string, (body: unknown, options?: unknown) => Promise<unknown>>
+          const answer = (await client.describe?.({})) as Described
+          return (answer.methods ?? []).flatMap((method) => (typeof method.name === "string" ? [`${plugin}.${method.name}`] : []))
+        } catch {
+          return []
+        }
+      }),
+    )
+    return [...tools, ...family.flat()]
   }
 
   const resolve = async (entries: readonly string[], agentID: string, directory = host.location): Promise<readonly ResolvedTool[]> => {
@@ -153,7 +239,7 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
       resolved.push({ ...found, effect: evaluate(rules, found.action) })
     }
     if (unknown.length > 0) {
-      const names = await known()
+      const names = await known(directory)
       const hint = unknown
         .map((entry) => {
           const tail = entry.startsWith("host:") ? entry.slice(5) : split(entry).method
@@ -175,6 +261,8 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
     const source = sourceHash(input.script.code)
     const manifest = manifestDigest(input.script.uses)
     const digest = digestOf(input.script)
+    const bytes = Buffer.byteLength(input.script.code, "utf8")
+    const head = input.script.code.slice(0, SOURCE_HEAD)
     await host.permission.assert({
       sessionID: input.sessionID,
       agent: input.agent,
@@ -182,9 +270,14 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
       resources: [approvalResource(digest)],
       save: [approvalResource(digest)],
       metadata: {
+        digest,
         sourceHash: source,
         manifestDigest: manifest,
-        bytes: Buffer.byteLength(input.script.code, "utf8"),
+        bytes,
+        // What the person approves: the source itself, a clear head when it is long, and where the rest is (SR-5).
+        script: head,
+        truncated: head.length < input.script.code.length,
+        where: input.job === undefined ? "the tool call's input" : `the jobs_get tool, job ${JSON.stringify(input.job)}`,
         tools: input.resolved.map((tool) => ({ method: tool.method, class: tool.class, effect: tool.effect, ...(tool.description === undefined ? {} : { description: tool.description }) })),
         writes: reachesOf(input.resolved),
       },
@@ -195,7 +288,6 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
       manifestDigest: manifest,
       digest,
       at: host.now(),
-      decision: "once",
       resolved: input.resolved,
     }
   }
