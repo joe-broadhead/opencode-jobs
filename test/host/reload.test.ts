@@ -106,6 +106,16 @@ async function reloadWithAgents(host: Host): Promise<void> {
     if (attempt > 0) await Bun.sleep(1_000)
     await reloadAndLead(host, host.setups())
     if ((await host.worker().report.status()).missingAgents.length === 0) return
+    await Bun.sleep(1_500)
+  }
+  // The other restoring action the status names: a restart, which always rebuilds the agent view. Its boot has the
+  // same race, so the reload retries once more after it.
+  await host.restart()
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if ((await host.worker().report.status()).missingAgents.length === 0) return
+    await reloadAndLead(host, host.setups())
+    if ((await host.worker().report.status()).missingAgents.length === 0) return
+    await Bun.sleep(1_500)
   }
   throw new Error("the in-place reload left the plugin's agent view without its configuration agents")
 }

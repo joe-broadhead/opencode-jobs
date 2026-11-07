@@ -101,16 +101,27 @@ export async function startHost(input: HostInput = {}) {
     ...input.config,
   }
   const { OpenCode } = (await import(pathToFileURL(join(SDK, "dist", "index.js")).href)) as typeof import("@opencode/sdk")
-  const client: Client = (await OpenCode.create({
-    plugins: [withOptions, probe, ...(input.plugins ?? [])],
-    // An embedded host reports "unknown" unless told, and the plugin's host guard refuses that.
-    app: { version: HOST_VERSION },
-    config: { content: JSON.stringify(config), directory: join(base, "config"), project: false, claude: false },
-    database: { path: join(base, "opencode.db") },
-    models: { fetch: false },
-    fs: { filewatcher: false },
-    log: { level: "error" },
-  })) as Client
+  const create = () =>
+    OpenCode.create({
+      plugins: [withOptions, probe, ...(input.plugins ?? [])],
+      // An embedded host reports "unknown" unless told, and the plugin's host guard refuses that.
+      app: { version: HOST_VERSION },
+      config: { content: JSON.stringify(config), directory: join(base, "config"), project: false, claude: false },
+      database: { path: join(base, "opencode.db") },
+      models: { fetch: false },
+      fs: { filewatcher: false },
+      log: { level: "error" },
+    }) as Promise<Client>
+  let client = await create()
+  const ready = async () => {
+    await until("the jobs plugin is ready", async () => {
+      const { data: plugins } = await client.plugin.list({ location })
+      const state = plugins.find((plugin) => plugin.id === jobs.id)?.state
+      if (state?.status === "failed") throw new Error(`the jobs plugin failed: ${JSON.stringify(state)}`)
+      const enabled = input.options?.enabled !== false
+      return state?.status === "active" && probes.has(work) && (!enabled || workers.has(work))
+    })
+  }
   const location = { directory: work }
   const host = {
     client,
@@ -152,6 +163,12 @@ export async function startHost(input: HostInput = {}) {
       })
       return { probe: () => host.probe(directory), worker: () => host.worker(directory) }
     },
+    /** Restarts the whole embedded host on the same database and project, as a process restart does. */
+    async restart() {
+      await client.close()
+      client = await create()
+      await ready()
+    },
     async close() {
       await client.close()
       mock.stop()
@@ -159,13 +176,7 @@ export async function startHost(input: HostInput = {}) {
     },
   }
   try {
-    await until("the jobs plugin is ready", async () => {
-      const { data: plugins } = await client.plugin.list({ location })
-      const state = plugins.find((plugin) => plugin.id === jobs.id)?.state
-      if (state?.status === "failed") throw new Error(`the jobs plugin failed: ${JSON.stringify(state)}`)
-      const enabled = input.options?.enabled !== false
-      return state?.status === "active" && probes.has(work) && (!enabled || workers.has(work))
-    })
+    await ready()
   } catch (error) {
     await host.close().catch(() => undefined)
     throw error
