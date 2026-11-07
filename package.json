@@ -1,7 +1,7 @@
 {
   "name": "@joe-broadhead/opencode-jobs",
   "version": "0.0.0",
-  "description": "Unofficial OpenCode plugin that runs agent prompts, slash commands and reminders on cron, interval and one-off schedules, inside OpenCode, with run history and unattended permissions",
+  "description": "Unofficial OpenCode plugin that runs agent prompts, slash commands, reminders and no-model scripts on cron, interval and one-off schedules, inside OpenCode, with run history and unattended permissions",
   "keywords": [
     "opencode",
     "opencode-plugin",
@@ -90,7 +90,7 @@
   },
   "jelly": {
     "title": "Jobs",
-    "summary": "Run prompts, slash commands and reminders on a schedule, inside OpenCode.",
+    "summary": "Run prompts, slash commands, reminders and no-model scripts on a schedule, inside OpenCode.",
     "icon": "assets/icon.svg",
     "tools": [
       {
