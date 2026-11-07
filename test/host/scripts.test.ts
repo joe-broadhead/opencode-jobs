@@ -337,7 +337,8 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       await worker.runner.settle()
       await until("the record is interrupted", async () => (await scanRuns(worker.storage, id)).some((entry) => entry.status === "interrupted"), 10_000)
       expect(Date.now() - started).toBeLessThan(5_000)
-      expect(slowAborted).toBe(true)
+      // The RPC handler's abort listener runs when the interrupted call unwinds; the record may be written first.
+      await until("the in-flight call saw the abort", async () => slowAborted, 5_000)
     } finally {
       await host.close()
     }
