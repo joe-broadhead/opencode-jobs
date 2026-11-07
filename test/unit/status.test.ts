@@ -144,7 +144,7 @@ describe("the status text", () => {
       "- OpenCode: 2.2.6 (untested; supported range >=2.2.3 <2.3.0)",
     )
     expect(formatStatus(buildStatus(facts({ host: { version: "2.3.0", range: ">=2.2.3 <2.3.0", tested: false } })))).toContain(
-      "It is outside the supported range; the plugin runs because allowUntestedHost is true. If a job misbehaves, use OpenCode 2.2.3, 2.2.4 or 2.2.5.",
+      "It is outside the supported range; the plugin runs because allowUntestedHost is true. If a job misbehaves, use OpenCode 2.2.3, 2.2.4, 2.2.5 or 2.2.6.",
     )
   })
 
