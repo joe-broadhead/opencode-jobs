@@ -31,6 +31,7 @@ describe("the status model", () => {
       recentRuns: [],
       failures: [],
       unguardedAgents: [],
+      missingAgents: [],
       problems: [],
       nextStep: NOTHING_TO_DO,
     })
@@ -52,6 +53,16 @@ describe("the status model", () => {
     expect(text).toContain('Paste this for "reviewer" into opencode.json:')
     expect(text).toContain('"effect": "deny"')
     expect(status.nextStep).toBe('Give the agent "reviewer" the read-only block, starting with the blanket deny, or point its job at an agent that has it.')
+  })
+
+  test("says when the host no longer lists an agent, and how to bring it back", () => {
+    const status = buildStatus(facts({ missingAgents: ["jobs"], jobs: { total: 3, paused: 0, expiring: 0, invalidFiles: 1 } }))
+    expect(status.missingAgents).toEqual(["jobs"])
+    const text = formatStatus(status)
+    expect(text).toContain("- Agents OpenCode no longer lists: jobs — jobs that name one do not run, which can happen after a plugin update; run \"opencode reload\" in a terminal, or restart OpenCode.")
+    expect(status.nextStep).toBe('Run "opencode reload" in a terminal (or restart OpenCode); jobs resume on their own once the agent is back.')
+    expect(compactStatus(status).missingAgents).toBe(1)
+    expect(formatCompact(compactStatus(status), 3)).toContain("1 agent are no longer listed")
   })
 
   test("takes its next step from the first problem, which is a coded message", () => {
@@ -154,6 +165,7 @@ describe("the compact status the model reads", () => {
       jobs: { total: 12, paused: 2, expiring: 1, invalidFiles: 0 },
       paused: true,
       unguardedAgents: 2,
+      missingAgents: 0,
       nextStep: "Run /jobs-pause again to resume every job.",
     })
     const text = formatCompact(compact, status.jobs.total)

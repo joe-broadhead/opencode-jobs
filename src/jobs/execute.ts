@@ -103,9 +103,10 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
   // A reminder's session is the person's, so the record names it but never owns it.
   if (action.type === "remind") return complete(input, key, clock.now(), action.sessionID, await remind(input, action, slotISO(slot)), false)
 
-  // A run needs an agent that denies by default (D7). One that has become unguarded since the job was created is
-  // refused per slot rather than run into a denial: the slot is recorded as skipped, with the code and the block to
-  // paste, and the schedule moves on.
+  // A run needs an agent the host lists and that denies by default (D7). One that has become unguarded since the job was
+  // created, or that the host no longer lists, is refused per slot rather than run: the slot is recorded as skipped, with
+  // the code and the next step, and the schedule moves on. The check runs again on every slot, so the slot after the
+  // agent is back runs normally.
   // The agent is the target directory's configuration. Only a job that targets another directory says so explicitly:
   // the leader's own location is what an omitted location resolves, and a host between reloads resolves it more reliably.
   const target = job.target.directory
@@ -115,7 +116,7 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
       job: job.id,
       slot: key,
       status: "skipped",
-      reason: "unguarded",
+      reason: refusal.code === "JOBS_AGENT_MISSING" ? "missing" : "unguarded",
       late: input.late,
       attempt: input.attempt,
       token: input.token,

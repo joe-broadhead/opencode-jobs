@@ -23,6 +23,7 @@ const status = (overrides = {}) => ({
   recentRuns: [],
   failures: [],
   unguardedAgents: [],
+  missingAgents: [],
   problems: [],
   nextStep: "Nothing to do.",
   ...overrides,

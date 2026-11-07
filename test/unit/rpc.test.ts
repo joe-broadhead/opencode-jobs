@@ -13,7 +13,7 @@ function report(overrides: Partial<Report> = {}): Report {
   const run = { job: "morning", name: "Morning", slot: "2026-12-06T09:00:00.000Z", status: "succeeded" as const, late: false, attempt: 1, summary: "ok" }
   return {
     status: async () => buildStatus(facts),
-    compact: async () => ({ state: "ready", jobs: { total: 1, paused: 0, expiring: 0, invalidFiles: 0 }, paused: false, unguardedAgents: 0, nextStep: "Nothing to do." }),
+    compact: async () => ({ state: "ready", jobs: { total: 1, paused: 0, expiring: 0, invalidFiles: 0 }, paused: false, unguardedAgents: 0, missingAgents: 0, nextStep: "Nothing to do." }),
     list: async () => [job],
     history: async () => [run],
     source: async () => ({ files: { jobs: [], invalid: [], refused: [] }, jobs: [], agents: [], known: true }),

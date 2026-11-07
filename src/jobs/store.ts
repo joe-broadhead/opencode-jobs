@@ -54,7 +54,7 @@ export interface JobState {
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "timed_out" | "interrupted" | "skipped" | "missed"
 export type RunOutcome = "succeeded" | "failed" | "interrupted"
-export type SkipReason = "overlap" | "expired" | "ended" | "unguarded"
+export type SkipReason = "overlap" | "expired" | "ended" | "unguarded" | "missing"
 
 /** One run, keyed by the job and the slot it belongs to. The slot is the planned time, before jitter. */
 export interface RunRecord {

@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import type { Plugin } from "@opencode/plugin"
-import { AGENT_BLOCK, agentBlock, agentBlockJSON, DEFAULT_AGENT, evaluate, guardAgent, isGuarded, refusalFor, unguardedAgents, type AgentInfo, type Rule } from "../../src/host/permissions.js"
+import { AGENT_BLOCK, agentBlock, agentBlockJSON, DEFAULT_AGENT, evaluate, guardAgent, isGuarded, missingAgents, refusalFor, unguardedAgents, type AgentInfo, type Rule } from "../../src/host/permissions.js"
 
 const allow: Rule = { action: "*", resource: "*", effect: "allow" }
 const deny: Rule = { action: "*", resource: "*", effect: "deny" }
@@ -71,11 +71,12 @@ describe("the guarded-agent rule", () => {
 })
 
 describe("the refusal a job gets", () => {
-  test("names an agent that does not exist, and the block to paste", () => {
+  test("names an agent the host does not list, and the reload that brings it back", () => {
     const refusal = refusalFor([], "build")
-    expect(refusal?.code).toBe("JOBS_AGENT_UNGUARDED")
-    expect(refusal?.what).toBe('There is no agent named "build", so a job cannot run as it.')
-    expect(refusal?.nextStep).toContain("/jobs-status")
+    expect(refusal?.code).toBe("JOBS_AGENT_MISSING")
+    expect(refusal?.what).toBe('OpenCode no longer lists the agent "build" here, so a job cannot run as it. This can happen after a plugin update.')
+    expect(refusal?.nextStep).toContain("opencode reload")
+    expect(refusal?.message).toStartWith("JOBS_AGENT_MISSING: ")
   })
 
   test("names an agent that does not deny by default, and the blanket deny it needs", () => {
@@ -109,14 +110,17 @@ describe("the refusal a job gets", () => {
     expect(refusal?.nextStep).toStartWith("Restart OpenCode")
     expect(refusal?.what).not.toContain("does not deny by default")
     const missing = { get: async () => Promise.reject(Object.assign(new Error("Agent not found"), { _tag: "Agent.NotFoundError" })) } as unknown as Pick<Plugin.Context["agent"], "get">
-    expect((await guardAgent(missing, "jobs"))?.code).toBe("JOBS_AGENT_UNGUARDED")
+    expect((await guardAgent(missing, "jobs"))?.code).toBe("JOBS_AGENT_MISSING")
     const guarded = { get: async () => ({ location: { directory: "/work" }, data: agent("jobs", [allow, ...AGENT_BLOCK]) }) } as unknown as Pick<Plugin.Context["agent"], "get">
     expect(await guardAgent(guarded, "jobs")).toBeUndefined()
   })
 
   test("lists only the agents the jobs name that are not guarded, once each", () => {
     const agents = [agent("build", [allow]), agent("jobs", [allow, ...AGENT_BLOCK]), agent("reviewer", [allow, { action: "read", resource: "*", effect: "allow" }])]
-    expect(unguardedAgents(agents, ["build", "jobs", "reviewer", "build", "gone"])).toEqual(["build", "reviewer", "gone"])
+    expect(unguardedAgents(agents, ["build", "jobs", "reviewer", "build", "gone"])).toEqual(["build", "reviewer"])
     expect(unguardedAgents(agents, ["jobs"])).toEqual([])
+    // A name the list does not hold is missing, not unguarded: the two need different actions.
+    expect(missingAgents(agents, ["build", "jobs", "reviewer", "gone", "gone"])).toEqual(["gone"])
+    expect(missingAgents(agents, ["build"])).toEqual([])
   })
 })

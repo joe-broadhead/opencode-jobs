@@ -7,7 +7,7 @@
  * its id.
  */
 import type { Plugin } from "@opencode/plugin"
-import { refusalFor, unguardedAgents, type AgentInfo } from "../host/permissions.js"
+import { missingAgents as missingFrom, refusalFor, unguardedAgents, type AgentInfo } from "../host/permissions.js"
 import {
   buildStatus,
   compactStatus,
@@ -109,6 +109,9 @@ export async function readSource(input: Omit<ReportInput, "host" | "enabled" | "
     now: input.clock.now(),
     timezone: input.timezone,
     projects: [input.location],
+    // A refused file is cached with the agent list it was read against: when the host's list changes (an agent comes
+    // back, or one disappears), the files are parsed again, so recovery needs no file change and no restart (DR-22).
+    agents: listed.known ? listed.agents.map((agent) => agent.id || agent.name).sort().join(",") : "unknown",
     ...(guard === undefined ? {} : { guard }),
   }
   const scan = () => readJobFiles(sources).catch(() => ({ jobs: [], invalid: [], refused: [] }))
@@ -178,6 +181,11 @@ export function createReport(input: ReportInput): Report {
     }
     nextRuns.sort((left, right) => left.at - right.at)
 
+    // A file's refusal is evidence about the agent at read time, even if the host lists it again now: the row stays
+    // until the next scan clears the refusal, which is what makes a transient stale view visible instead of silent.
+    const named = jobs.map((job) => job.agent)
+    const refusedMissing = files.refused.filter((entry) => entry.code === "JOBS_AGENT_MISSING").map((entry) => entry.agent)
+    const refusedUnguarded = files.refused.filter((entry) => entry.code === "JOBS_AGENT_UNGUARDED").map((entry) => entry.agent)
     const counts: JobsCount = { total: jobs.length, paused: pausedJobs, expiring, invalidFiles: files.invalid.length }
     const runner = await readRunner(input.storage).catch(() => undefined)
     const beat = await readBeat(input.storage).catch(() => undefined)
@@ -196,7 +204,8 @@ export function createReport(input: ReportInput): Report {
       nextRuns: nextRuns.slice(0, NEXT),
       recentRuns: records.slice(0, RECENT).map((record) => runView(record, names)),
       failures: failuresOf(records, names),
-      unguardedAgents: known ? unguardedAgents(agents, [...jobs.map((job) => job.agent), ...files.refused]) : [],
+      unguardedAgents: known ? [...new Set([...unguardedAgents(agents, named), ...refusedUnguarded])] : [],
+      missingAgents: known ? [...new Set([...missingFrom(agents, named), ...refusedMissing])] : [],
       ...(known ? {} : { agentsUnknown: true }),
       problems: [...(input.problems ?? []), ...files.invalid.map((file) => file.message)].map((problem) => cut(oneLine(problem), 400)).slice(0, MAX_PROBLEMS),
     })
