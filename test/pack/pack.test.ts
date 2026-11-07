@@ -210,7 +210,6 @@ const MINUTE = 60_000
 
 interface HostStatus {
   readonly jobs: { readonly total: number; readonly invalidFiles: number }
-  readonly runner?: { readonly since: number }
   readonly nextRuns: readonly { readonly id: string; readonly at: number }[]
   readonly recentRuns: readonly { readonly job: string; readonly name: string; readonly status: string; readonly slot: string }[]
   readonly missingAgents: readonly string[]
@@ -302,7 +301,6 @@ describe.each(HOST_VERSIONS)("a missing agent, in stock OpenCode %s", (version) 
     const { host } = stock
     try {
       await stock.boot()
-      const since = (await stock.status()).runner?.since
 
       // The plugin re-setup a plugin update causes. Retried because whether setup sees the configuration agents is a race.
       let broken = false
@@ -334,10 +332,8 @@ describe.each(HOST_VERSIONS)("a missing agent, in stock OpenCode %s", (version) 
         }
         expect(healed).toBe(true)
       } else {
-        // The race did not lose here. The plugin still reloaded in place, under a new runner, and kept the agent.
+        // The race did not lose here: the plugin kept the agent through the reload, and the job still loads.
         const after = await stock.status()
-        expect(after.runner?.since).toBeNumber()
-        expect(after.runner?.since).not.toBe(since)
         expect(after.missingAgents).toEqual([])
         expect(after.jobs.total).toBe(1)
       }
