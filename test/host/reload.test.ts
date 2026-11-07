@@ -94,6 +94,19 @@ async function reloadAndLead(host: Host, setups: number): Promise<void> {
   await until("the plugin reloads and its leader leads", async () => host.setups() > setups && host.leader().isLeader, 30_000)
 }
 
+/**
+ * Reloads until the new instance's own agent view is whole. The in-place reload is a race — sometimes the new setup
+ * runs before the location has registered its configuration agents — and a stale view would skip the slot under test.
+ * The upstream failure and its handling are asserted against the stock host in `test/pack`, not here.
+ */
+async function reloadWithAgents(host: Host): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await reloadAndLead(host, host.setups())
+    if ((await host.worker().report.status()).missingAgents.length === 0) return
+  }
+  throw new Error("the in-place reload left the plugin's agent view without its configuration agents")
+}
+
 describe(`reload and stall recovery in OpenCode ${HOST_VERSION}`, () => {
   test("an overdue slot survives an in-place reload, runs once, and the cadence continues", async () => {
     const manual = manualClock(START)
@@ -104,8 +117,7 @@ describe(`reload and stall recovery in OpenCode ${HOST_VERSION}`, () => {
       await plan(host, job, 1)
       // The slots at 09:01 and 09:02 fall due and a bundle update reloads the plugin before any pass reaches them.
       manual.set(START + 4 * MINUTE + 30_000)
-      const setups = host.setups()
-      await reloadAndLead(host, setups)
+      await reloadWithAgents(host)
       const second = host.worker()
       expect(first.leader.isLeader).toBe(false)
       expect(second.leader.token).not.toBe(first.leader.token)
@@ -179,8 +191,7 @@ describe(`reload and stall recovery in OpenCode ${HOST_VERSION}`, () => {
 
       const oldBeats = first.keepAlive.beats
       expect(oldBeats).toBeGreaterThanOrEqual(0)
-      const setups = host.setups()
-      await reloadAndLead(host, setups)
+      await reloadWithAgents(host)
       const second = host.worker()
       expect(first.leader.isLeader).toBe(false)
       // The old instance has no keep-alive and no runner at all: its timers were released on cleanup.
@@ -241,8 +252,7 @@ describe(`reload and stall recovery in OpenCode ${HOST_VERSION}`, () => {
       // The run is finalised, so its session has left the registry: a backstop with nothing left to protect.
       expect(isJobSession(runSession!)).toBe(false)
 
-      const setups = host.setups()
-      await reloadAndLead(host, setups)
+      await reloadWithAgents(host)
       expect(first.leader.isLeader).toBe(false)
       // The old instance has no runner at all after its step down: nothing of it can tick.
       expect(() => first.runner).toThrow("the runner is not running")
