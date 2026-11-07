@@ -79,12 +79,12 @@ contains exactly the `files` whitelist, with fewer than 30 entries and at most 1
 `index.js` and `tui.js`, with no relative import, dynamic `import()` or `require()`; and that they import only modules
 OpenCode provides. It installs the tarball next to the host packages that OpenCode 2.2.3 provides, imports both entry
 points under Bun, then installs the tarball alone and loads it with `opencode serve` from stock OpenCode 2.2.3, 2.2.4
-and 2.2.5, asserting that the plugin is active and that the status RPC answers. On each, it takes the job's agent out
-of the configuration and reloads, and asserts that the job fails closed with `JOBS_AGENT_MISSING`, runs nothing across a
-slot, and runs the next slot exactly once when the agent is back. It then reloads the plugin in place, as
-`opencode plugin update` does. Whether that leaves the plugin without the agent is a host race that some machines
-never lose; when it does, the test asserts the same fail-closed state and recovery, and either way that the next slot
-runs exactly once.
+and 2.2.5, asserting that the plugin is active and that the status RPC answers. On each, it then reloads the plugin in place, as
+`opencode plugin update` does. Whether that leaves the plugin without the job's agent is a host race that some machines
+never lose: when it does, the test asserts that the job fails closed with `JOBS_AGENT_MISSING`, runs nothing and
+recovers; when it does not, that the plugin reloaded and kept the agent. It then takes the agent out of the
+configuration and reloads, so every machine asserts that the job fails closed, runs nothing across a slot, and runs the
+next slot exactly once when the agent is back.
 
 To use `opencode` binaries you already have, set `OPENCODE_BIN_2_2_3`, `OPENCODE_BIN_2_2_4` and `OPENCODE_BIN_2_2_5`:
 
