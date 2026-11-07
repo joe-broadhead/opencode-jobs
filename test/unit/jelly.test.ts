@@ -5,16 +5,27 @@ import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { DEFAULT_RULES, evaluate } from "../../src/host/permissions.js"
 import { DESCRIPTIONS, SCHEMAS, toolId, type ToolName } from "../../src/jobs/tools.js"
 import { TUI_ID } from "../../src/constants.js"
+import { declarationProblems, docProblems } from "../support/jelly-kit.js"
 
 const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
   files: string[]
   jelly: Record<string, unknown> & { tools: { name: string; permission: string; effect: string; readOnly: boolean }[]; skills: string[]; rpc: unknown[]; views: unknown[] }
 }
 const jelly = pkg.jelly
+const ROOT = new URL("../../", import.meta.url)
 const READ: readonly string[] = ["status", "list", "get", "history"]
 const PAUSE: readonly string[] = ["pause", "pause_all"]
 
 describe("the jelly declaration", () => {
+  // The shared kit checks the declaration against Jelly's plugin authors' standard; the tests below add what only Jobs
+  // declares.
+  test("follows the plugin authors' standard, with the effects the plugin's own default rules give", () => {
+    const registered = (Object.keys(SCHEMAS) as ToolName[]).map(toolId)
+    const effectOf = (permission: string) => evaluate([{ action: "*", resource: "*", effect: "allow" }, ...DEFAULT_RULES], permission)
+    expect(declarationProblems(ROOT, { effectOf, registered })).toEqual([])
+    expect(docProblems(ROOT)).toEqual([])
+  })
+
   test("has the nine keys Jelly reads, and nothing it would refuse", () => {
     expect(Object.keys(jelly).sort()).toEqual(["contributes", "icon", "rpc", "signIns", "skills", "summary", "title", "tools", "views"].sort())
     expect(jelly.title).toBe("Jobs")
