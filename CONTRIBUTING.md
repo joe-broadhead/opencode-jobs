@@ -84,7 +84,7 @@ points under Bun, then installs the tarball alone and loads it with `opencode se
 and 2.2.5, asserting that the plugin is active and that the status RPC answers. On each, it then reloads the plugin in place, as
 `opencode plugin update` does. Whether that leaves the plugin without the job's agent is a host race that some machines
 never lose: when it does, the test asserts that the job fails closed with `JOBS_AGENT_MISSING`, runs nothing and
-recovers; when it does not, that the plugin reloaded and kept the agent. It then takes the agent out of the
+recovers; when it does not, that the plugin kept the agent. It then takes the agent out of the
 configuration and reloads, so every machine asserts that the job fails closed, runs nothing across a slot, and runs the
 next slot exactly once when the agent is back.
 
