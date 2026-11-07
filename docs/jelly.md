@@ -26,8 +26,9 @@ service, so there is no vendor logo to fetch and the package carries no vendor m
 
 ## Tools
 
-12 tools are declared (4 read-only). Six ask: `jobs.create`, `jobs.update`, `jobs.delete`,
-`jobs.run_now`, `jobs.resume` and `jobs.extend`. `jelly.tools` lists each with the permission
+14 tools are declared (4 read-only). Ten ask: `jobs.create`, `jobs.update`, `jobs.delete`,
+`jobs.run_now`, `jobs.resume`, `jobs.extend`, `jobs.approve` and `jobs.run_script`; `jobs.pause` and
+`jobs.pause_all` are allowed because pausing only stops work. `jelly.tools` lists each with the permission
 action it checks, whether it asks and whether it is read-only:
 
 | Tool | Permission | Effect | Read-only |
@@ -44,6 +45,8 @@ action it checks, whether it asks and whether it is read-only:
 | `jobs.run_now` | `jobs_run_now` | ask | no |
 | `jobs.resume` | `jobs_resume` | ask | no |
 | `jobs.extend` | `jobs_extend` | ask | no |
+| `jobs.approve` | `jobs_approve` | ask | no |
+| `jobs.run_script` | `jobs_run_script` | ask | no |
 
 The plugin inserts its default rules into every agent that has a base allow, so in Jelly these
 effects hold without a person pasting anything: reads and pauses run, and every change asks.
