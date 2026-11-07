@@ -34,7 +34,8 @@ What a run can do is the agent's own `permissions`, and nothing else:
    weakens a deny. The documented profile is read-only and starts with a blanket deny, because an agent's own rules are
    applied after OpenCode's base rule that allows everything.
 2. **A job whose agent does not deny by default is refused**, at create and again when a slot starts, with
-   `JOBS_AGENT_UNGUARDED` and the block to paste. It is not run into a prompt that would be denied every time, and it is
+   `JOBS_AGENT_UNGUARDED` and the block to paste, or `JOBS_AGENT_MISSING` when the host no longer lists it. It is not
+   run into a prompt that would be denied every time, and it is
    not run at all.
 3. **A run never asks.** Two `evaluate` hooks exist, and only these. One turns an `ask` inside a session this plugin
    created for a run into a deny, in the plugin's own words, so an unattended run cannot wait for an approval; the other

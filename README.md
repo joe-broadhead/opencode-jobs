@@ -104,7 +104,8 @@ and nothing that writes. Add a rule only when a job needs it, and add it to that
 | anything a job's own run does | the agent's rules; a run never asks |
 
 A job whose agent does not deny by default is refused with `JOBS_AGENT_UNGUARDED`, and `/jobs-status` prints the block
-to paste for that agent.
+to paste for that agent. A job whose agent the host no longer lists — which a plugin update can cause — is refused with
+`JOBS_AGENT_MISSING`; `/jobs-status` names it and says how to bring it back.
 
 A run never asks. If a tool the agent asks about is called inside a job's session, the plugin denies it with
 `JOBS_UNATTENDED` and the run carries on, so a job can never sit waiting for an approval nobody is there to give. The plugin has **two** `evaluate` hooks: this one, on a session it created for a run, and the tools RPC's, on one of its own script calls in flight. Neither ever turns a deny into anything, and neither touches a session it did not create.
@@ -162,7 +163,9 @@ Run `/jobs-status` first. Its last line is the next step.
 | The status says every job is paused | `/jobs-pause` or `jobs_pause_all` was used. Run `/jobs-pause` again; the slots that fell due meanwhile run once, as a late run, or are recorded as missed. |
 | The Runner row says it stopped | The location was unloaded, or the service restarted. Open a project to load it again: the missed slot runs once within the catch-up window. Set `experimental.location_idle_timeout` above `keepAliveMinutes` if it keeps happening. |
 | Agents without default rules | A job's agent does not deny by default. Paste the block `/jobs-status` prints for that agent. |
-| `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, or does not exist, so the job is refused rather than run into prompts. Paste the block `/jobs-status` prints. |
+| Agents OpenCode no longer lists | A plugin update can leave OpenCode's running plugin with a stale agent list, so jobs that name a configuration agent do not run. Run `opencode reload` in a terminal, or restart OpenCode; jobs resume on their own. |
+| `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, so the job is refused rather than run into prompts. Paste the block `/jobs-status` prints. |
+| `JOBS_AGENT_MISSING` | OpenCode no longer lists the job's agent here, which can happen after a plugin update. Run `opencode reload` in a terminal, or restart OpenCode; the next slot runs once it is back. |
 | `JOBS_UNATTENDED` | A run tried a tool its agent asks about. Nothing waits: the call was denied. A read the job needs goes in its agent's own `permissions`; a write belongs with a person, not a run. |
 | `JOBS_ALLOW_WIDENS` | A job's `allow` list holds an `allow` entry. Move the grant to the job agent's own `permissions`. |
 | `JOBS_INVALID_SCHEDULE` | The schedule names two kinds or none, or the cron expression, interval or zone is wrong. The message names the field. |

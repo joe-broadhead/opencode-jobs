@@ -22,9 +22,11 @@ Reach for something else when:
 - **Read the tool's own description first.** `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_run_now`,
   `jobs_resume` and `jobs_extend` write, and writing asks for approval; the prompt is the yes. Describe the change and
   whom it reaches in one sentence, then make the one call. Don't ask in chat as well, and don't wait for a yes.
-- **Name the agent.** `agent: "jobs"` is the documented read-only agent. If it is not there, `jobs_create` refuses with
-  `JOBS_AGENT_UNGUARDED`; `/jobs-status` prints the block to paste into `opencode.json`, and the person pastes it.
-  Never add an `allow` rule to get a job through an approval: a run cannot answer one.
+- **Name the agent.** `agent: "jobs"` is the documented read-only agent. If it exists but does not deny by default,
+  `jobs_create` refuses with `JOBS_AGENT_UNGUARDED`; `/jobs-status` prints the block to paste into `opencode.json`, and
+  the person pastes it. If the host no longer lists it — which a plugin update can cause — the refusal is
+  `JOBS_AGENT_MISSING`, and the next step is `opencode reload` in a terminal, or a restart. Never add an `allow` rule to
+  get a job through an approval: a run cannot answer one.
 - **A model-created job expires after seven days.** `jobs_extend` moves the expiry, and it asks.
 
 ## The calls
@@ -73,6 +75,8 @@ would run as that session's agent. No write, and no `jobs_run_now`, is a method:
   recent failures and the agents that need the block.
 - `JOBS_AGENT_UNGUARDED`: the job's agent does not deny by default. Paste the block status prints, or point the job at
   an agent that has it.
+- `JOBS_AGENT_MISSING`: the host no longer lists the job's agent, which a plugin update can cause. Run `opencode reload`
+  in a terminal, or restart OpenCode; jobs resume on their own.
 - `JOBS_UNATTENDED`: a run called a tool its agent asks about, and the call was denied. A read the job needs can be
   added to the agent's own permissions; a write belongs with a person, not a run.
 - `JOBS_DISABLED`: every job is paused, or that one is. `/jobs-pause` resumes every job.

@@ -22,6 +22,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - The options `enabled`, `allowUntestedHost` and `timezone`.
 - The read-only agent profile every job runs as, documented with the blanket deny that makes it closed, and refused
   with `JOBS_AGENT_UNGUARDED` when a job's agent does not deny by default.
+- Fail-closed recovery for a stale agent view: a plugin update can leave the running plugin without the project's and
+  global configuration agents. A job that names one is refused with `JOBS_AGENT_MISSING`, its slot is recorded `skipped`
+  with reason `missing`, status names the agent with one next step (`opencode reload`, or a restart), and the agent list
+  is re-checked every slot, so jobs resume with no further action once it is back.
 - Unattended safety: a run never waits for a permission prompt, and a tool its agent asks about is denied in the job's
   session with `JOBS_UNATTENDED` and recorded. The evaluate hook that does it is matched to the plugin's own run
   sessions, and only ever tightens.

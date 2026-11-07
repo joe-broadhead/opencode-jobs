@@ -35,7 +35,8 @@ rare, and the record decides the slot when it happens.
 
 ## What a run does
 
-1. Check that the job's agent still denies by default, or record the slot as skipped with `JOBS_AGENT_UNGUARDED`.
+1. Check that the job's agent is listed and still denies by default, or record the slot as skipped with
+   `JOBS_AGENT_MISSING` (reason `missing`) or `JOBS_AGENT_UNGUARDED`.
 2. Create the run's session as that agent, as a child of the one parked `Jobs` parent, with the job's deny-only rules
    and the metadata that marks it as a run session.
 3. Prompt it, or run its command, or post a reminder.
@@ -76,6 +77,13 @@ host tests (`test/host/reload.test.ts`) prove, on every tested release:
   one pass; it never needs a restart.
 - **The loop never spins.** A computed wait of zero with nothing started is slept as the 30-second cap instead, and a
   finished run rings the doorbell, so a held slot is picked up the moment capacity frees.
+- **A stale agent view fails closed and is named.** A plugin-only reload, which is what `opencode plugin update` does,
+  can re-run `setup` before the location has registered its configuration agents: the new instance then keeps a stale
+  agent view that lists the built-ins but none of the project or global agents, while the host's own location API still
+  lists them. Job files that name one are refused with `JOBS_AGENT_MISSING`, every slot is `skipped` with the reason
+  `missing` rather than run, and status names the agent with the one restoring action (`opencode reload`, or a restart).
+  The file watch's signature includes the agent list, so a transient empty list is re-read as soon as the agents appear
+  and jobs resume with no user action; a permanently stale instance says so instead of stopping silently.
 
 ## Liveness
 
