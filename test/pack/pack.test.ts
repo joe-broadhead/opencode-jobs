@@ -220,8 +220,20 @@ describe.each(HOST_VERSIONS)("a plugin-only reload, in stock OpenCode %s", (vers
         ".opencode/jobs/status.md": "---\nname: Status\nschedule:\n  every: 1 minute\naction:\n  type: command\n  name: jobs-status\nagent: jobs\n---\n",
       },
     })
-    const status = async () => (await host.api<{ output: HostStatus }>("POST", `/api/rpc/${PLUGIN_ID}/status`, { input: {} })).output
-    const sessions = async () => (await host.api<{ data: readonly { readonly id: string }[] }>("GET", "/api/session")).data.length
+    // `opencode reload` can close the socket for a moment (2.2.3 in particular), so a transient reset is retried, not
+    // read as a failed assertion.
+    const retry = async <T>(read: () => Promise<T>): Promise<T> => {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return await read()
+        } catch (error) {
+          if (attempt >= 20 || !/ECONNRESET|ECONNREFUSED|socket connection was closed/i.test(String(error))) throw error
+          await Bun.sleep(1_000)
+        }
+      }
+    }
+    const status = async () => retry(async () => (await host.api<{ output: HostStatus }>("POST", `/api/rpc/${PLUGIN_ID}/status`, { input: {} })).output)
+    const sessions = async () => retry(async () => (await host.api<{ data: readonly { readonly id: string }[] }>("GET", "/api/session")).data.length)
     const loaded = async () => (await status()).jobs.total === 1
     try {
       await host.until("the server answers", async () => ((await status()) ? true : undefined), 180_000)
