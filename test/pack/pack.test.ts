@@ -425,12 +425,16 @@ async function serve(version: string, installed: string, options: { readonly nam
   expect(paths.length).toBeGreaterThan(5)
   expect(paths.filter(([, path]) => !path?.startsWith(base + sep))).toEqual([])
 
-  const port = await freePort()
+  let port = await freePort()
   let log = ""
-  const server = spawn(binary, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] })
-  server.stdout.on("data", (chunk) => void (log += chunk))
-  server.stderr.on("data", (chunk) => void (log += chunk))
-  const exited = new Promise((done) => server.once("exit", done))
+  const spawnServer = () => {
+    const child = spawn(binary, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] })
+    child.stdout.on("data", (chunk) => void (log += chunk))
+    child.stderr.on("data", (chunk) => void (log += chunk))
+    return child
+  }
+  let server = spawnServer()
+  let exited = new Promise((done) => server.once("exit", done))
 
   const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
   /** The response's status and parsed body, whatever the status. */
@@ -470,7 +474,20 @@ async function serve(version: string, installed: string, options: { readonly nam
   }
   // `opencode reload` on this host: the smallest action that rebuilds a stale agent view.
   const reload = () => run(binary, ["reload", "--server", `http://127.0.0.1:${port}`], directory, env)
-  return { api, request, until, close, reload, directory, log: () => log }
+  // A restart: the other restoring action, and the one that always rebuilds the agent view.
+  const restart = async () => {
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM")
+      const timer = setTimeout(() => server.exitCode === null && server.kill("SIGKILL"), 10_000)
+      await exited
+      clearTimeout(timer)
+    }
+    port = await freePort()
+    log = ""
+    server = spawnServer()
+    exited = new Promise((done) => server.once("exit", done))
+  }
+  return { api, request, until, close, reload, restart, directory, log: () => log }
 }
 
 // The files a `files` entry should put in the tarball. dist/ must hold exactly the two bundles, so stale or foreign
