@@ -111,14 +111,15 @@ A job's action may be a script instead of a prompt:
 ```yaml
 action:
   type: script
-  uses:
-    - x.posts.get_users_bookmarks
-    - host:mem_mem_remember
-  code: |
-    const page = await tools.x.posts.get_users_bookmarks({ max_results: 100 });
-    return { items: page.data?.length ?? 0 };
-  timeoutMs: 5m
-  limits: { maxCalls: 150, memoryMb: 64, maxOutputBytes: 65536 }
+  script:
+    uses:
+      - x.posts.get_users_bookmarks
+      - host:mem_mem_remember
+    code: |
+      const page = await tools.x.posts.get_users_bookmarks({ max_results: 100 });
+      return { items: page.data?.length ?? 0 };
+    timeoutMs: 5m
+    limits: { maxCalls: 150, memoryMb: 64, maxOutputBytes: 65536 }
 ```
 
 `uses` is the manifest and the script's whole reach: a family method (`<plugin id>.<method>`) or a host tool

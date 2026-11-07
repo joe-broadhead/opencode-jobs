@@ -95,30 +95,31 @@ schedule: { cron: "0 9 * * 0", tz: Europe/Amsterdam }
 agent: build
 action:
   type: script
-  uses:
-    - x.posts.get_users_bookmarks
-    - x.posts.get_users_me
-    - host:mem_mem_remember
-  code: |
-    const me = await tools.x.posts.get_users_me({});
-    const seen = new Set();
-    let saved = 0;
-    let cursor;
-    do {
-      const page = await tools.x.posts.get_users_bookmarks({ max_results: 100, pagination_token: cursor });
-      for (const item of page.data ?? []) {
-        if (!item.id || seen.has(item.id)) continue;
-        seen.add(item.id);
-        await tools.host.mem_mem_remember({
-          content: `X bookmark by ${item.author_id ?? "unknown"}: ${item.text ?? ""} — https://x.com/i/web/status/${item.id}`,
-          kind: "fact",
-          task: "*",
-        });
-        saved += 1;
-      }
-      cursor = page.meta?.next_token;
-    } while (cursor);
-    return { saved, author: me.data?.username ?? null };
+  script:
+    uses:
+      - x.posts.get_users_bookmarks
+      - x.posts.get_users_me
+      - host:mem_mem_remember
+    code: |
+      const me = await tools.x.posts.get_users_me({});
+      const seen = new Set();
+      let saved = 0;
+      let cursor;
+      do {
+        const page = await tools.x.posts.get_users_bookmarks({ max_results: 100, pagination_token: cursor });
+        for (const item of page.data ?? []) {
+          if (!item.id || seen.has(item.id)) continue;
+          seen.add(item.id);
+          await tools.host.mem_mem_remember({
+            content: `X bookmark by ${item.author_id ?? "unknown"}: ${item.text ?? ""} — https://x.com/i/web/status/${item.id}`,
+            kind: "fact",
+            task: "*",
+          });
+          saved += 1;
+        }
+        cursor = page.meta?.next_token;
+      } while (cursor);
+      return { saved, author: me.data?.username ?? null };
 ```
 
 - **The manifest is the whole reach.** `uses` names every method the script may call; the runtime refuses anything

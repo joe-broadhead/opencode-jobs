@@ -4,6 +4,8 @@ import { describe, expect, test } from "bun:test"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { parse } from "yaml"
+import { parseScriptDefinition } from "../../src/jobs/model.js"
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url))
 // Everything a user or the model reads about the current release.
@@ -97,13 +99,21 @@ describe("docs", () => {
     for (const field of ["`version`", "`host`", "`state`", "`unguardedAgents`", "`nextStep`"]) expect(guide).toContain(field)
   })
 
-  test("no script example names the guarded jobs profile, which would deny every manifest tool", () => {
+  test("every script example parses with the real parser, and none names the guarded jobs profile", () => {
+    let examples = 0
     for (const file of ["README.md", "docs/scripting.md", "docs/configuration.md", "skills/jobs/SKILL.md"]) {
-      for (const [, block] of text(file).matchAll(/```(?:ya?ml|json)\n([\s\S]*?)```/g)) {
+      for (const [, block] of text(file).matchAll(/```(?:ya?ml|markdown)\n([\s\S]*?)```/g)) {
         if (!/["']?type["']?\s*:\s*["']?script/.test(block)) continue
-        expect({ file, guarded: /agent["']?\s*:\s*["']?jobs["']?/.test(block) }).toEqual({ file, guarded: false })
+        examples += 1
+        // A full job file is front matter; a fragment is the action itself.
+        const body = block.replace(/^---\n/, "").replace(/\n---\s*$/, "")
+        const parsed = parse(body) as { agent?: unknown; action?: { type?: unknown; script?: unknown } }
+        expect({ file, agent: parsed.agent }).not.toEqual({ file, agent: "jobs" })
+        expect(() => parseScriptDefinition(parsed.action?.script)).not.toThrow()
       }
     }
+    // The two walkthroughs and the configuration fragment are examples; if the docs lose them, the test must notice.
+    expect(examples).toBeGreaterThanOrEqual(2)
   })
 
   test("the README names every code the plugin raises in its troubleshooting table, and no other", () => {
