@@ -250,7 +250,11 @@ describe.each(HOST_VERSIONS)("a plugin-only reload, in stock OpenCode %s", (vers
       for (let attempt = 0; attempt < 4 && !broken; attempt += 1) {
         appendFileSync(join(installed, "dist", "index.js"), "\n// reload\n")
         await Bun.sleep(6_000)
-        broken = (await status()).missingAgents.includes("jobs")
+        const seen = await status()
+        broken = seen.missingAgents.includes("jobs")
+        console.log(`DIAG ${version} attempt ${attempt}: ${JSON.stringify(seen)}`)
+        console.log(`DIAG ${version} host agents: ${JSON.stringify(await host.api("GET", "/api/agent").catch((error: unknown) => String(error))).slice(0, 600)}`)
+        console.log(`DIAG ${version} log: ${host.log().slice(-1500)}`)
       }
       expect(broken).toBe(true)
 
