@@ -122,8 +122,11 @@ export function isGuarded(rules: readonly Rule[]): boolean {
 
 /** Why a job could not run as an agent: what is wrong, without the code or the next step. */
 export interface AgentRefusal {
-  /** Unguarded or missing: the job's agent needs the block. Agents unknown: the host could not be asked. */
-  readonly code: "JOBS_AGENT_UNGUARDED" | "JOBS_AGENTS_UNKNOWN"
+  /**
+   * Missing: the host does not list the agent, which a plugin update can cause (see the README). Unguarded: the agent
+   * exists but does not deny by default. Agents unknown: the host could not be asked at all.
+   */
+  readonly code: "JOBS_AGENT_UNGUARDED" | "JOBS_AGENT_MISSING" | "JOBS_AGENTS_UNKNOWN"
   readonly what: string
   readonly nextStep: string
   /** The coded message, for a caller that has no path of its own. */
@@ -136,6 +139,22 @@ const UNKNOWN_NEXT = "Restart OpenCode, then run /jobs-status again. Nothing run
 const nextStep = (agent: string) =>
   `Give the agent ${JSON.stringify(agent)} the read-only block, starting with {"action":"*","resource":"*","effect":"deny"}, or point the job at an agent that has it. Run /jobs-status to print the block.`
 
+/**
+ * The next step when the host no longer lists the agent. A plugin reload can leave the running plugin with a stale agent
+ * view (the host's own API still lists them), and the smallest action that rebuilds it is a configuration reload; a
+ * restart always works. Jobs re-check every slot, so they resume without another command.
+ */
+export const MISSING_NEXT = 'Run "opencode reload" in a terminal (or restart OpenCode); jobs resume on their own once the agent is back.'
+
+/** The refusal for an agent a known agent list does not contain: it cannot be run now, and nothing is guessed. */
+export function missingRefusal(agent: string): AgentRefusal {
+  return agentRefusal(
+    `OpenCode no longer lists the agent ${JSON.stringify(agent)} here, so a job cannot run as it. This can happen after a plugin update.`,
+    MISSING_NEXT,
+    "JOBS_AGENT_MISSING",
+  )
+}
+
 /** One refusal, with its code, so the message and the code cannot drift apart. */
 function agentRefusal(what: string, next: string, code: AgentRefusal["code"] = "JOBS_AGENT_UNGUARDED"): AgentRefusal {
   return { code, what, nextStep: next, message: messageOf(code, what, next) }
@@ -144,13 +163,14 @@ function agentRefusal(what: string, next: string, code: AgentRefusal["code"] = "
 /** The coded message, by hand for each code, because the code is part of the text and must be documented. */
 function messageOf(code: AgentRefusal["code"], what: string, next: string): string {
   if (code === "JOBS_AGENTS_UNKNOWN") return errorText("JOBS_AGENTS_UNKNOWN", what, next)
+  if (code === "JOBS_AGENT_MISSING") return errorText("JOBS_AGENT_MISSING", what, next)
   return errorText("JOBS_AGENT_UNGUARDED", what, next)
 }
 
 /** The refusal for one agent id, or undefined when the agent exists and denies by default. */
 export function refusalFor(agents: readonly AgentInfo[], id: string): AgentRefusal | undefined {
   const agent = agents.find((candidate) => candidate.id === id || candidate.name === id)
-  if (agent === undefined) return agentRefusal(`There is no agent named ${JSON.stringify(id)}, so a job cannot run as it.`, nextStep(id))
+  if (agent === undefined) return missingRefusal(id)
   if (isGuarded(agent.permissions)) return undefined
   return agentRefusal(`The agent ${JSON.stringify(id)} does not deny by default, so a job under it would ask on every write and be denied every time.`, nextStep(id))
 }
@@ -193,16 +213,27 @@ export async function guardAgent(agent: Pick<Plugin.Context["agent"], "get">, id
       continue
     }
     if (info === null) {
-      last = agentRefusal(`There is no agent named ${JSON.stringify(id)}, so a job cannot run as it.`, nextStep(id))
+      last = missingRefusal(id)
       continue
     }
     if (directory === undefined) return refusalFor([info], id)
     return refusalFor([info], id)
   }
-  return last ?? agentRefusal(`There is no agent named ${JSON.stringify(id)}, so a job cannot run as it.`, nextStep(id))
+  return last ?? missingRefusal(id)
 }
 
-/** The agents the job list names that are not guarded, in the order they are first named. */
+/** True when a known agent list holds this agent under its id or its name. */
+const holds = (agents: readonly AgentInfo[], id: string) => agents.some((candidate) => candidate.id === id || candidate.name === id)
+
+/**
+ * The agents the job list names that exist but are not guarded, in the order they are first named. An agent the list
+ * does not contain is `missingAgents`, not an unguarded one: the two need different actions.
+ */
 export function unguardedAgents(agents: readonly AgentInfo[], wanted: readonly string[]): string[] {
-  return [...new Set(wanted.filter((id) => refusalFor(agents, id) !== undefined))]
+  return [...new Set(wanted.filter((id) => holds(agents, id) && refusalFor(agents, id) !== undefined))]
+}
+
+/** The agents the job list names that a known agent list does not contain: they cannot run until the host lists them. */
+export function missingAgents(agents: readonly AgentInfo[], wanted: readonly string[]): string[] {
+  return [...new Set(wanted.filter((id) => !holds(agents, id)))]
 }

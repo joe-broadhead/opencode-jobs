@@ -1,6 +1,6 @@
 import { COMMAND_STEM, errorText, TESTED_HOSTS } from "./constants.js"
 import { isSupportedHost, type HostCheck } from "./host-version.js"
-import { AGENT_BLOCK, agentBlockJSON, type Rule } from "./host/permissions.js"
+import { AGENT_BLOCK, agentBlockJSON, MISSING_NEXT, type Rule } from "./host/permissions.js"
 import type { PauseRecord, RunStatus, SkipReason } from "./jobs/store.js"
 import { shortReason } from "./redact.js"
 import { VERSION } from "./version.js"
@@ -72,6 +72,8 @@ export interface StatusFacts {
   readonly liveness?: LivenessView
   /** Agents whose own rules would run a job tool without asking; empty when there are none. */
   readonly unguardedAgents?: readonly string[]
+  /** Agents a job names that the host no longer lists, so their jobs cannot run; empty when there are none. */
+  readonly missingAgents?: readonly string[]
   /** The host could not say which agents exist, so nothing ran and nothing can be said about them. */
   readonly agentsUnknown?: boolean
   /** The kill switch, when every job is paused. */
@@ -103,6 +105,8 @@ export interface Status {
   readonly failures: readonly FailureView[]
   /** Agents where a job tool would run without asking; empty when there are none. */
   readonly unguardedAgents: readonly string[]
+  /** Agents a job names that the host no longer lists, which a plugin update can cause; empty when there are none. */
+  readonly missingAgents: readonly string[]
   /** True when the host's agent list could not be read: nothing runs, and the row says so. */
   readonly agentsUnknown?: boolean
   /** The read-only block, present with unguarded agents: the paste-ready profile for the agent named. */
@@ -120,6 +124,7 @@ const RESUME = `Run /${COMMAND_STEM}-pause again to resume every job.`
 
 export function buildStatus(facts: StatusFacts): Status {
   const agents = facts.unguardedAgents ?? []
+  const missing = facts.missingAgents ?? []
   const status = {
     version: VERSION,
     state: facts.enabled ? ("ready" as const) : ("disabled" as const),
@@ -132,6 +137,7 @@ export function buildStatus(facts: StatusFacts): Status {
     recentRuns: facts.recentRuns ?? [],
     failures: facts.failures ?? [],
     unguardedAgents: agents,
+    missingAgents: missing,
     ...(facts.agentsUnknown === true ? { agentsUnknown: true } : {}),
     ...(agents.length === 0 ? {} : { permissionsBlock: AGENT_BLOCK.map((rule) => ({ ...rule })) }),
     problems: facts.problems ?? [],
@@ -142,6 +148,8 @@ export function buildStatus(facts: StatusFacts): Status {
 function nextStepOf(status: Omit<Status, "nextStep">): string {
   if (status.state === "disabled") return ENABLE
   if (status.paused !== undefined) return RESUME
+  // A missing agent explains every refused file and skipped slot below it, so its one action comes first.
+  if (status.missingAgents.length > 0) return MISSING_NEXT
   // A problem reads `CODE: What happened. Next step: What to do.`; its own next step becomes the status's.
   const problem = status.problems[0]?.split(" Next step: ")[1]
   if (problem) return problem
@@ -231,6 +239,7 @@ export function formatStatus(status: Status) {
     `- Recent runs: ${recentText(status.recentRuns)}`,
     `- Failures needing attention: ${failureText(status.failures)}`,
     ...agentRows(status),
+    ...missingRows(status),
     `- OpenCode: ${hostText(status)}`,
     `- Next step: ${status.nextStep}`,
   ].join("\n")
@@ -245,6 +254,17 @@ function agentRows(status: Status): string[] {
   return [row, ...agents.map((agent) => `  Paste this for ${JSON.stringify(agent)} into opencode.json:\n${agentBlockJSON(agent)}`)]
 }
 
+/**
+ * The agents the host no longer lists: the row a person reads after a plugin update, with the smallest action that
+ * restores them. It is present only when it has something to say, because a healthy status keeps its rows.
+ */
+function missingRows(status: Status): string[] {
+  const { missingAgents: agents } = status
+  if (agents.length === 0) return []
+  const names = agents.join(", ")
+  return [`- Agents OpenCode no longer lists: ${names} — jobs that name one do not run, which can happen after a plugin update; run "opencode reload" in a terminal, or restart OpenCode.`]
+}
+
 /** What the model's `jobs_status` tool returns: state, counts, the number of agents to fix, and the one next step. */
 export interface CompactStatus {
   readonly state: State
@@ -252,6 +272,8 @@ export interface CompactStatus {
   readonly paused: boolean
   /** How many agents need the read-only block; the names and the block are in `/jobs-status`. */
   readonly unguardedAgents: number
+  /** How many agents the host no longer lists; their jobs do not run until a reload or a restart. */
+  readonly missingAgents: number
   /** The host could not say which agents exist; nothing runs until it can. */
   readonly agentsUnknown?: boolean
   readonly nextStep: string
@@ -263,6 +285,7 @@ export function compactStatus(status: Status): CompactStatus {
     jobs: status.jobs,
     paused: status.paused !== undefined,
     unguardedAgents: status.unguardedAgents.length,
+    missingAgents: status.missingAgents.length,
     ...(status.agentsUnknown === true ? { agentsUnknown: true } : {}),
     nextStep: status.nextStep,
   }
@@ -271,7 +294,7 @@ export function compactStatus(status: Status): CompactStatus {
 /** The compact view as one line of text: the tool's content, with a pointer at the full report. */
 export function formatCompact(status: CompactStatus, total: number): string {
   const counts = total === 0 ? "no jobs yet" : `${total} jobs, ${status.jobs.paused} paused, ${status.jobs.expiring} expiring`
-  return `Jobs: ${counts}. ${status.paused ? "Every job is paused. " : ""}${status.unguardedAgents === 0 ? "" : `${status.unguardedAgents} agent${status.unguardedAgents === 1 ? "" : "s"} need the read-only block. `}Next step: ${status.nextStep} Run /${COMMAND_STEM}-status for the full report.`
+  return `Jobs: ${counts}. ${status.paused ? "Every job is paused. " : ""}${status.unguardedAgents === 0 ? "" : `${status.unguardedAgents} agent${status.unguardedAgents === 1 ? "" : "s"} need the read-only block. `}${status.missingAgents === 0 ? "" : `${status.missingAgents} agent${status.missingAgents === 1 ? "" : "s"} are no longer listed, so their jobs do not run. `}Next step: ${status.nextStep} Run /${COMMAND_STEM}-status for the full report.`
 }
 
 const strings = { type: "array", items: { type: "string" } }
@@ -305,7 +328,7 @@ const RUN = {
 /** The status RPC's output: the shared fields, with jobs' own beside them. */
 export const STATUS_OUTPUT = {
   type: "object",
-  required: ["version", "state", "host", "jobs", "runner", "liveness", "nextRuns", "recentRuns", "failures", "unguardedAgents", "problems", "nextStep"],
+  required: ["version", "state", "host", "jobs", "runner", "liveness", "nextRuns", "recentRuns", "failures", "unguardedAgents", "missingAgents", "problems", "nextStep"],
   properties: {
     version: { type: "string" },
     state: { enum: ["ready", "disabled"] },
@@ -340,6 +363,7 @@ export const STATUS_OUTPUT = {
       items: { type: "object", required: ["name", "code", "count"], properties: { name: { type: "string" }, code: { type: "string" }, count: { type: "integer", minimum: 1 } } },
     },
     unguardedAgents: strings,
+    missingAgents: strings,
     agentsUnknown: { type: "boolean" },
     permissionsBlock: { type: "array", items: rule },
     problems: strings,

@@ -98,6 +98,7 @@ describe("the reads", () => {
       jobs: { total: 0, paused: 0, expiring: 0, invalidFiles: 0 },
       paused: false,
       unguardedAgents: 0,
+      missingAgents: 0,
       nextStep: "Nothing to do.",
     })
     expect(result.text).toContain("Jobs: no jobs yet.")

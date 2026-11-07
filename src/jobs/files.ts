@@ -19,11 +19,17 @@ export interface InvalidFile {
   readonly message: string
 }
 
+/** An agent the guard refused for a file, and why: missing needs a reload, unguarded needs the read-only block. */
+export interface RefusedAgent {
+  readonly agent: string
+  readonly code: string
+}
+
 export interface JobFiles {
   readonly jobs: readonly Job[]
   readonly invalid: readonly InvalidFile[]
-  /** The agents a job named that the guard refused, once each: status reports them with the block to paste. */
-  readonly refused: readonly string[]
+  /** The agents a job file named that the guard refused, once each, with the refusal's code. */
+  readonly refused: readonly RefusedAgent[]
 }
 
 export interface JobFileSources {
@@ -34,6 +40,11 @@ export interface JobFileSources {
   readonly projects: readonly string[]
   /** The global folder. `~/.config/opencode/jobs` when absent. */
   readonly global?: string
+  /**
+   * The agent ids the host lists now, sorted and joined, or `"unknown"`: part of the watch signature, so a refused file
+   * is parsed again when the agent list changes and a job returns without a file change (DR-22).
+   */
+  readonly agents?: string
   /**
    * Why a job's agent cannot run it, when it cannot: the guarded-agent check at create (D7). A file whose agent is
    * refused never becomes a job, so it is listed like any other invalid file, with the code and the line.
@@ -52,7 +63,7 @@ export const MAX_FILE_BYTES = 256 * 1024
  * What the watch compares to decide whether to parse again: every job file's path, modification time and size, in the
  * project folder and the global one. An unreadable folder counts as absent, so the next scan notices a file arriving.
  */
-export async function jobFileSignature(sources: Pick<JobFileSources, "projects" | "global">): Promise<string> {
+export async function jobFileSignature(sources: Pick<JobFileSources, "projects" | "global" | "agents">): Promise<string> {
   const global = sources.global ?? join(homedir(), ".config", "opencode", "jobs")
   const folders = [...sources.projects.map((project) => join(project, ".opencode", "jobs")), global]
   const parts: string[] = []
@@ -63,14 +74,15 @@ export async function jobFileSignature(sources: Pick<JobFileSources, "projects" 
       if (info !== undefined) parts.push(`${join(folder, entry.name)}:${info.mtimeMs}:${info.size}`)
     }
   }
-  return parts.join("|")
+  // The agent list is part of the signature: a file refused for a missing agent is read again when it comes back.
+  return [...parts, `agents:${sources.agents ?? "unknown"}`].join("|")
 }
 
 /** Every job file of every known project and the global folder, parsed and validated. */
 export async function readJobFiles(sources: JobFileSources): Promise<JobFiles> {
   const invalid: InvalidFile[] = []
   const jobs: Job[] = []
-  const refused: string[] = []
+  const refused: RefusedAgent[] = []
   const byId = new Map<string, string>()
   // The guard is asked once per file, and its refusals are remembered for status, whichever files they came from.
   const given = sources.guard
@@ -79,7 +91,7 @@ export async function readJobFiles(sources: JobFileSources): Promise<JobFiles> {
       ? undefined
       : (agent) => {
           const refusal = given(agent)
-          if (refusal !== undefined && !refused.includes(agent)) refused.push(agent)
+          if (refusal !== undefined && !refused.some((entry) => entry.agent === agent)) refused.push({ agent, code: refusal.code })
           return refusal
         }
   const global = sources.global ?? join(homedir(), ".config", "opencode", "jobs")

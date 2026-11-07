@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { CLAIM_SETTLE, execute } from "../../src/jobs/execute.js"
-import { parseJob, type Job } from "../../src/jobs/model.js"
+import { MINUTE, parseJob, type Job } from "../../src/jobs/model.js"
 import { getRun, type Storage } from "../../src/jobs/store.js"
 import { agentsFake, memoryStorage, sessionFake, settle, testClock } from "./fake.js"
 
@@ -37,6 +37,22 @@ const input = () => {
         active: () => active.current,
         ...more,
       } as never),
+  }
+}
+
+/** An agent domain that can lose and regain an agent, the way a plugin update leaves one stale and `opencode reload` fixes it. */
+function flakyAgents() {
+  const present = { jobs: false }
+  const info = { id: "jobs", name: "jobs", mode: "primary" as const, hidden: false, permissions: [{ action: "*", resource: "*", effect: "deny" as const }] }
+  return {
+    present,
+    domain: {
+      list: async () => ({ location: { directory: "/work" }, data: present.jobs ? [info] : [] }),
+      get: async ({ agentID }: { agentID: string }) => {
+        if (!present.jobs) throw Object.assign(new Error(`Agent not found: ${agentID}`), { _tag: "Agent.NotFoundError" })
+        return { location: { directory: "/work" }, data: info }
+      },
+    } as unknown as ReturnType<typeof agentsFake>,
   }
 }
 
@@ -254,12 +270,26 @@ describe("the agent a run needs", () => {
     expect(record?.error).toStartWith("JOBS_AGENT_UNGUARDED: ")
   })
 
-  test("a slot whose agent is gone is refused with the same code", async () => {
+  test("the next slot runs once the host lists the agent again, with no other action", async () => {
+    const setup = input()
+    const flaky = flakyAgents()
+    const first = await setup.run({ agents: flaky.domain })
+    expect(first.status).toBe("skipped")
+    expect(setup.session.created).toHaveLength(0)
+    // The agent is back on the next slot: the same check, on a fresh read, lets the run through exactly once.
+    flaky.present.jobs = true
+    const second = await setup.run({ agents: flaky.domain, slot: START + 5 * MINUTE })
+    expect(second.status).toBe("succeeded")
+    expect(setup.session.created).toHaveLength(2)
+  })
+
+  test("a slot whose agent is gone is refused as missing, not unguarded", async () => {
     const setup = input()
     const result = await setup.run({ agents: agentsFake({ missing: ["jobs"] }) })
     expect(result.status).toBe("skipped")
+    expect((result as { record?: { reason?: string } }).record?.reason).toBe("missing")
     expect(setup.session.created).toHaveLength(0)
-    expect((await getRun(setup.storage.storage, "five", new Date(START).toISOString()))?.error).toContain("There is no agent named")
+    expect((await getRun(setup.storage.storage, "five", new Date(START).toISOString()))?.error).toContain("JOBS_AGENT_MISSING")
   })
 
   test("a lookup that fails for another reason refuses the slot: nothing runs while the agents are unknown", async () => {
