@@ -8,7 +8,7 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { spawn, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { arch, platform } from "node:os"
 import { basename, dirname, join, relative, resolve, sep } from "node:path"
@@ -303,14 +303,7 @@ describe.each(HOST_VERSIONS)("a missing agent, in stock OpenCode %s", (version) 
     try {
       await stock.boot()
 
-      // Drop the agent from the project config and reload the location: deterministic, where a plugin-only re-setup is
-      // a race. The plugin's file scan then cannot resolve the job's agent, which is the state a plugin update leaves.
-      const configPath = join(host.directory, "opencode.json")
-      const config = JSON.parse(readFileSync(configPath, "utf8")) as { agents?: unknown } & Record<string, unknown>
-      const agents = config.agents
-      delete config.agents
-      writeFileSync(configPath, JSON.stringify(config))
-      await host.api("POST", "/api/location/reload").catch(() => undefined)
+      // The plugin re-setup a plugin update causes. Retried because whether setup sees the configuration agents is a race.
       let broken = false
       for (let attempt = 0; attempt < 4 && !broken; attempt += 1) {
         const before = await stock.baseline()
@@ -432,16 +425,12 @@ async function serve(version: string, installed: string, options: { readonly nam
   expect(paths.length).toBeGreaterThan(5)
   expect(paths.filter(([, path]) => !path?.startsWith(base + sep))).toEqual([])
 
-  let port = await freePort()
+  const port = await freePort()
   let log = ""
-  const spawnServer = () => {
-    const child = spawn(binary, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] })
-    child.stdout.on("data", (chunk) => void (log += chunk))
-    child.stderr.on("data", (chunk) => void (log += chunk))
-    return child
-  }
-  let server = spawnServer()
-  let exited = new Promise((done) => server.once("exit", done))
+  const server = spawn(binary, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] })
+  server.stdout.on("data", (chunk) => void (log += chunk))
+  server.stderr.on("data", (chunk) => void (log += chunk))
+  const exited = new Promise((done) => server.once("exit", done))
 
   const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
   /** The response's status and parsed body, whatever the status. */
@@ -481,20 +470,7 @@ async function serve(version: string, installed: string, options: { readonly nam
   }
   // `opencode reload` on this host: the smallest action that rebuilds a stale agent view.
   const reload = () => run(binary, ["reload", "--server", `http://127.0.0.1:${port}`], directory, env)
-  // A restart: the other restoring action, and the one that always rebuilds the agent view.
-  const restart = async () => {
-    if (server.exitCode === null && server.signalCode === null) {
-      server.kill("SIGTERM")
-      const timer = setTimeout(() => server.exitCode === null && server.kill("SIGKILL"), 10_000)
-      await exited
-      clearTimeout(timer)
-    }
-    port = await freePort()
-    log = ""
-    server = spawnServer()
-    exited = new Promise((done) => server.once("exit", done))
-  }
-  return { api, request, until, close, reload, restart, directory, log: () => log }
+  return { api, request, until, close, reload, directory, log: () => log }
 }
 
 // The files a `files` entry should put in the tarball. dist/ must hold exactly the two bundles, so stale or foreign
