@@ -26,8 +26,9 @@ service, so there is no vendor logo to fetch and the package carries no vendor m
 
 ## Tools
 
-`jelly.tools` lists the twelve tools with the permission action each one checks, whether it asks
-and whether it is read-only:
+12 tools are declared (4 read-only). Six ask: `jobs.create`, `jobs.update`, `jobs.delete`,
+`jobs.run_now`, `jobs.resume` and `jobs.extend`. `jelly.tools` lists each with the permission
+action it checks, whether it asks and whether it is read-only:
 
 | Tool | Permission | Effect | Read-only |
 | --- | --- | --- | --- |
