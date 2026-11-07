@@ -8,10 +8,10 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { spawn, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { arch, platform } from "node:os"
-import { basename, join, relative, resolve, sep } from "node:path"
+import { basename, dirname, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { PLUGIN_ID, SUPPORTED_HOST, TESTED_HOSTS, TUI_ID } from "../../src/constants.js"
 
@@ -196,6 +196,109 @@ describe.each(HOST_VERSIONS)("installed alone, in stock OpenCode %s", (version) 
 })
 
 /**
+ * The failure the soak found: a plugin-only reload, which is what `opencode plugin update` does, can leave the running
+ * plugin with a stale agent view — the host's own API still lists the project's configuration agents, but the plugin
+ * does not. Jobs must fail closed, say what happened, and resume with no further action once the agents are back. The
+ * break is a race, so the test retries the bundle change until it loses, as the real update can.
+ */
+interface HostStatus {
+  readonly jobs: { readonly total: number; readonly invalidFiles: number }
+  readonly recentRuns: readonly { readonly job: string; readonly name: string; readonly status: string; readonly slot: string }[]
+  readonly missingAgents: readonly string[]
+  readonly unguardedAgents: readonly string[]
+  readonly nextStep: string
+  readonly problems: readonly string[]
+}
+
+describe.each(HOST_VERSIONS)("a plugin-only reload, in stock OpenCode %s", (version) => {
+  test("a dropped agent fails closed, says so, and the next slot runs once after opencode reload", async () => {
+    const installed = installedPackage(false)
+    const host = await serve(version, installed, {
+      name: "agent-reload",
+      config: { agents: { jobs: { description: "The jobs agent", mode: "primary", permissions: [{ action: "*", resource: "*", effect: "deny" }] } } },
+      files: {
+        ".opencode/jobs/status.md": "---\nname: Status\nschedule:\n  every: 1 minute\naction:\n  type: command\n  name: jobs-status\nagent: jobs\n---\n",
+      },
+    })
+    const status = async () => (await host.api<{ output: HostStatus }>("POST", `/api/rpc/${PLUGIN_ID}/status`, { input: {} })).output
+    const sessions = async () => (await host.api<{ data: readonly { readonly id: string }[] }>("GET", "/api/session")).data.length
+    const loaded = async () => (await status()).jobs.total === 1
+    try {
+      await host.until("the server answers", async () => ((await status()) ? true : undefined), 180_000)
+      // The same race can lose at boot. The status names the action, so the test uses it.
+      for (let attempt = 0; attempt < 30 && !(await loaded()); attempt += 1) {
+        if ((await status()).missingAgents.includes("jobs")) host.reload()
+        await Bun.sleep(2_000)
+      }
+      expect(await loaded()).toBe(true)
+      const before = await sessions()
+
+      // The plugin re-setup a plugin update causes. Retried because whether setup sees the configuration agents is a race.
+      let broken = false
+      for (let attempt = 0; attempt < 4 && !broken; attempt += 1) {
+        appendFileSync(join(installed, "dist", "index.js"), "\n// reload\n")
+        await Bun.sleep(6_000)
+        broken = (await status()).missingAgents.includes("jobs")
+      }
+      expect(broken).toBe(true)
+
+      const down = await status()
+      expect(down.missingAgents).toEqual(["jobs"])
+      expect(down.unguardedAgents).toEqual([])
+      expect(down.nextStep).toContain("opencode reload")
+      expect(down.problems.some((problem) => problem.startsWith("JOBS_AGENT_MISSING: "))).toBe(true)
+      expect(down.jobs.invalidFiles).toBe(1)
+
+      // While the row is up, nothing runs and nothing is written.
+      expect((await status()).recentRuns.filter((run) => run.status === "succeeded" || run.status === "running")).toEqual([])
+      expect(await sessions()).toBe(before)
+
+      // Either the next file scan finds the agents again (auto-recovery, no user action), or they stay missing past a
+      // scheduled slot; then the status row's own action restores them. The test accepts either, and proves both that
+      // nothing ran while broken and that the next slot runs exactly once after recovery.
+      let healed = false
+      const waitUntil = Date.now() + 75_000
+      while (Date.now() < waitUntil && !healed) {
+        healed = await loaded()
+        if (!healed) await Bun.sleep(3_000)
+      }
+      if (!healed) {
+        // A whole slot passed while the agent was missing: nothing ran, and nothing was written.
+        expect((await status()).recentRuns.filter((run) => run.status === "succeeded" || run.status === "running")).toEqual([])
+        expect(await sessions()).toBe(before)
+        for (let attempt = 0; attempt < 4 && !healed; attempt += 1) {
+          host.reload()
+          await Bun.sleep(8_000)
+          healed = await loaded()
+        }
+      }
+      expect(healed).toBe(true)
+
+      // The next slot runs once, and creates one session: the run's own.
+      const deadline = Date.now() + 180_000
+      while (Date.now() < deadline && !(await status()).recentRuns.some((run) => run.status === "succeeded")) await Bun.sleep(3_000)
+      const slots = (runs: readonly { readonly slot: string; readonly status: string }[]) => runs.filter((run) => run.status === "succeeded").map((run) => run.slot)
+      const final = await status()
+      const first = slots(final.recentRuns)
+      if (first.length === 0) throw new Error(`the recovered job never ran: ${JSON.stringify(final)}; sessions ${await sessions()}`)
+      // Every slot ran once, and the run wrote: a session exists that did not before (one shared parent is allowed).
+      expect(new Set(first).size).toBe(first.length)
+      expect(await sessions()).toBeGreaterThan(before)
+      // No slot runs twice, even as the following ones arrive.
+      await Bun.sleep(20_000)
+      const later = slots((await status()).recentRuns)
+      expect(new Set(later).size).toBe(later.length)
+      expect(await sessions()).toBeGreaterThanOrEqual(before + later.length)
+      expect(await sessions()).toBeLessThanOrEqual(before + later.length + 1)
+    } catch (error) {
+      throw new Error(`${(error as Error).message}\n--- opencode ${version} log ---\n${host.log().slice(-3000)}`)
+    } finally {
+      await host.close()
+    }
+  }, 600_000)
+})
+
+/**
  * OPENCODE_BIN_<version>, or the unmodified npm release with its platform binary, installed with scripts disabled.
  * Installed once per version: several describe blocks serve the same release.
  */
@@ -226,14 +329,18 @@ async function freePort(): Promise<number> {
  * `opencode serve` on its own port and password, in an environment that holds only its temp root and is offline, with
  * a project that loads the installed package.
  */
-async function serve(version: string, installed: string) {
+async function serve(version: string, installed: string, options: { readonly name?: string; readonly config?: Record<string, unknown>; readonly files?: Readonly<Record<string, string>> } = {}) {
   const binary = stockBinary(version)
-  const base = join(work, `stock-${version}`)
+  const base = join(work, `stock-${version}${options.name === undefined ? "" : `-${options.name}`}`)
   const directory = join(base, "project")
   // Keep the built-in local providers from probing their default ports.
   const providers = { lmstudio: { settings: { baseURL: "" } }, ollama: { settings: { baseURL: "" } }, vllm: { settings: { baseURL: "" } } }
   mkdirSync(directory, { recursive: true })
-  writeFileSync(join(directory, "opencode.json"), JSON.stringify({ plugins: [installed], providers }))
+  writeFileSync(join(directory, "opencode.json"), JSON.stringify({ plugins: [installed], providers, ...options.config }))
+  for (const [path, body] of Object.entries(options.files ?? {})) {
+    mkdirSync(dirname(join(directory, path)), { recursive: true })
+    writeFileSync(join(directory, path), body)
+  }
   const password = randomUUID()
   const env = { ...isolated(base), ...OFFLINE, PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8", OPENCODE_PASSWORD: password }
 
@@ -286,7 +393,9 @@ async function serve(version: string, installed: string) {
     await exited
     clearTimeout(timer)
   }
-  return { api, request, until, close, directory, log: () => log }
+  // `opencode reload` on this host: the smallest action that rebuilds a stale agent view.
+  const reload = () => run(binary, ["reload", "--server", `http://127.0.0.1:${port}`], directory, env)
+  return { api, request, until, close, reload, directory, log: () => log }
 }
 
 // The files a `files` entry should put in the tarball. dist/ must hold exactly the two bundles, so stale or foreign
