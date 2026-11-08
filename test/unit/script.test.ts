@@ -31,8 +31,8 @@ const tool = (method: string, action: string, effect: ResolvedTool["effect"] = "
 
 describe("the script action", () => {
   test("parses in a job file or a tool call, with unique uses and resolved limits", () => {
-    const parsed = job({ type: "script", script: { code: "return 1", uses: ["x.posts.a", "x.posts.a", "host:mem_mem_remember"], limits: { maxCalls: 5 } } })
-    expect(parsed.action).toMatchObject({ type: "script", script: { code: "return 1", uses: ["x.posts.a", "host:mem_mem_remember"], limits: { maxCalls: 5 } } })
+    const parsed = job({ type: "script", script: { code: "return 1", uses: ["x.posts.a", "x.posts.a", "host:mem_remember"], limits: { maxCalls: 5 } } })
+    expect(parsed.action).toMatchObject({ type: "script", script: { code: "return 1", uses: ["x.posts.a", "host:mem_remember"], limits: { maxCalls: 5 } } })
     expect(parsed.agent).toBe("build")
     expect(limitsOf((parsed.action as { script: Script }).script)).toEqual({ ...SCRIPT_DEFAULTS, maxCalls: 5 })
   })
@@ -59,8 +59,8 @@ describe("the script action", () => {
 })
 
 describe("the approval binding", () => {
-  const script: Script = { code: "return 1", uses: ["x.posts.a", "host:mem_mem_remember"] }
-  const resolved = [tool("x.posts.a", "x_get_a"), tool("host:mem_mem_remember", "mem_remember", "ask", "unclassified")]
+  const script: Script = { code: "return 1", uses: ["x.posts.a", "host:mem_remember"] }
+  const resolved = [tool("x.posts.a", "x_get_a"), tool("host:mem_remember", "mem_remember", "ask", "unclassified")]
 
   test("is the source and the manifest, sorted and order-insensitive, and never the classification", () => {
     const source = sourceHash(script.code)

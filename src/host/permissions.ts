@@ -43,13 +43,8 @@ export const AGENT_BLOCK: readonly Rule[] = [
 /** The agent the documented block names, and the agent a job runs as when nothing else is set. */
 export const DEFAULT_AGENT: string = "jobs"
 
-/**
- * The rules this plugin inserts into every agent after its base allow (S3): every `jobs_` tool asks, and the reads and
- * the two pauses are allowed. Reads never change anything, and pausing is always safe; everything else is a change
- * that a person approves. Inserted after the base `* * allow` and before the agent's own rules, so a later rule wins.
- */
-export const DEFAULT_RULES: readonly Rule[] = [
-  { action: "jobs_*", resource: "*", effect: "ask" },
+/** The reads and the two pauses: allowed under `ask-changes` and `read-only`. */
+const READ_AND_PAUSE: readonly Rule[] = [
   { action: "jobs_status", resource: "*", effect: "allow" },
   { action: "jobs_list", resource: "*", effect: "allow" },
   { action: "jobs_get", resource: "*", effect: "allow" },
@@ -57,6 +52,27 @@ export const DEFAULT_RULES: readonly Rule[] = [
   { action: "jobs_pause", resource: "*", effect: "allow" },
   { action: "jobs_pause_all", resource: "*", effect: "allow" },
 ]
+
+/** The four reads: allowed under `read-only`. */
+const READS: readonly Rule[] = READ_AND_PAUSE.slice(0, 4)
+
+/**
+ * The rules this plugin inserts into every agent after its base allow, by the family `access` option (R18):
+ *
+ * - `all`: every `jobs_` tool is allowed, like every other plugin's tools by default;
+ * - `ask-changes`: every `jobs_` tool asks, and the reads and the two pauses are allowed;
+ * - `read-only`: the reads are allowed, and every change (including a pause) is denied.
+ *
+ * Inserted after the base `* * allow` and before the agent's own rules, so a later rule wins.
+ */
+export function defaultRules(access: "all" | "ask-changes" | "read-only"): readonly Rule[] {
+  if (access === "all") return [{ action: "jobs_*", resource: "*", effect: "allow" }]
+  if (access === "read-only") return [{ action: "jobs_*", resource: "*", effect: "deny" }, ...READS]
+  return [{ action: "jobs_*", resource: "*", effect: "ask" }, ...READ_AND_PAUSE]
+}
+
+/** The block for the default access (`all`). */
+export const DEFAULT_RULES: readonly Rule[] = defaultRules("all")
 
 const BASE_ALLOW: Rule = { action: "*", resource: "*", effect: "allow" }
 
@@ -66,13 +82,13 @@ const same = (left: Rule, right: Rule) => left.action === right.action && left.r
  * True when the default rules appear as one contiguous block anywhere after the agent's first base allow. Other
  * plugins insert their blocks at the same place, so the block need not come first.
  */
-export function hasDefaultRules(rules: readonly Rule[]): boolean {
+export function hasDefaultRules(rules: readonly Rule[], block: readonly Rule[] = DEFAULT_RULES): boolean {
   const base = rules.findIndex((rule) => same(rule, BASE_ALLOW))
   if (base === -1) return false
   return rules.some(
     (_, start) =>
       start > base &&
-      DEFAULT_RULES.every((rule, offset) => {
+      block.every((rule, offset) => {
         const candidate = rules[start + offset]
         return candidate !== undefined && same(candidate, rule)
       }),
@@ -84,10 +100,11 @@ export function hasDefaultRules(rules: readonly Rule[]): boolean {
  * last match wins, so no agent's own deny or allow is weakened. An agent without a base allow gets nothing: there,
  * unlisted actions are not allowed anyway, and the block's asks would change a default deny into a prompt.
  */
-export function insertDefaultRules(rules: Rule[]): void {
+export function insertDefaultRules(rules: Rule[], access: "all" | "ask-changes" | "read-only" = "all"): void {
   const base = rules.findIndex((rule) => same(rule, BASE_ALLOW))
-  if (base === -1 || hasDefaultRules(rules)) return
-  rules.splice(base + 1, 0, ...DEFAULT_RULES.map((rule) => ({ ...rule })))
+  const block = defaultRules(access)
+  if (base === -1 || hasDefaultRules(rules, block)) return
+  rules.splice(base + 1, 0, ...block.map((rule) => ({ ...rule })))
 }
 
 

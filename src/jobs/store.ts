@@ -240,6 +240,7 @@ function asApproval(value: unknown): ScriptApproval | undefined {
     ...(typeof value.requestID === "string" ? { requestID: value.requestID } : {}),
     resolved: resolved as ScriptApproval["resolved"],
     files,
+    ...(value.approved === "auto" || value.approved === "prompt" ? { approved: value.approved } : {}),
   }
 }
 

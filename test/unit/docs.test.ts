@@ -18,7 +18,8 @@ function raised(): string[] {
   const sources = files("src").filter((name) => name.endsWith(".ts"))
   // The job model raises its codes through `fail`, which builds a JobInputError, so every JOBS_ literal it holds counts;
   // the tools RPC has its own `fail` and its own codes, which scripting.md documents.
-  const job = /"(JOBS_[A-Z_]+)"/g
+  // The bare literal and the `"CODE: message"` form the runtime's reason strings use.
+  const job = /"(JOBS_[A-Z_]+)(?:"|:)/g
   const shared = /(?:jobsError|errorText)\(\s*"([A-Z][A-Z_]+)"/g
   const found = sources.flatMap((name) => [...text(name).matchAll(name.startsWith("src/jobs/") ? job : shared)].map((match) => match[1]!))
   return [...new Set(found)].sort()
@@ -85,7 +86,7 @@ describe("docs", () => {
     const guide = flat("docs/scripting.md")
     expect(guide).toContain("`<plugin id>.tools`")
     expect(guide).toContain("`describe`")
-    expect(guide).toContain("`host:mem_mem_remember`")
+    expect(guide).toContain("`host:mem_remember`")
     expect(guide).toContain("opencode api post /api/rpc/x.posts.tools/describe")
     expect(guide).toContain("## The `script` action")
     expect(guide).toContain("x-opencode-directory")

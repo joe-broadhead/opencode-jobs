@@ -247,7 +247,7 @@ describe("a job's notify target", () => {
 })
 
 describe("the agent a run needs", () => {
-  test("a slot whose agent does not deny by default is refused and recorded, and no session is made", async () => {
+  test("a slot whose agent does not deny by default still runs: R18 makes it a status warning", async () => {
     const storage = memoryStorage()
     const session = sessionFake({ answer: "ok", autoFinish: true, outcome: "succeeded" })
     const result = await execute({
@@ -263,12 +263,10 @@ describe("the agent a run needs", () => {
       late: false,
       active: () => true,
     })
-    expect(result).toMatchObject({ claimed: true, status: "skipped" })
-    expect(session.created).toHaveLength(0)
-    const record = await getRun(storage.storage, "five", new Date(START).toISOString())
-    expect(record).toMatchObject({ status: "skipped", reason: "unguarded" })
-    expect(record?.error).toStartWith("JOBS_AGENT_UNGUARDED: ")
+    expect(result.status).toBe("succeeded")
+    expect(session.created.length).toBeGreaterThan(0)
   })
+
 
   test("the next slot runs once the host lists the agent again, with no other action", async () => {
     const setup = input()

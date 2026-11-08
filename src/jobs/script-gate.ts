@@ -62,6 +62,8 @@ export interface ScriptGate {
     source?: { readonly messageID: string; readonly id: string }
     /** The job whose script this is, for the "where to read it" line; absent for a one-off tool call. */
     job?: string
+    /** `auto` under the access policy: record the digest and the resolved tools without prompting (R18). */
+    approved?: "auto" | "prompt"
   }): Promise<ScriptApproval>
 }
 
@@ -268,7 +270,8 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
     const files = input.files ?? []
     const bytes = Buffer.byteLength(input.script.code, "utf8")
     const head = input.script.code.slice(0, SOURCE_HEAD)
-    await host.permission.assert({
+    const approved = input.approved ?? "prompt"
+    if (approved === "prompt") await host.permission.assert({
       sessionID: input.sessionID,
       agent: input.agent,
       action: "jobs_script",
@@ -297,6 +300,7 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
       at: host.now(),
       resolved: input.resolved,
       files,
+      approved,
     }
   }
 

@@ -145,4 +145,21 @@ describe("a script job file's body", () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  test("an unknown key's error points at that key's own line, not its parent (GAP-22)", async () => {
+    const { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } = await import("node:fs")
+    const root = realpathSync(mkdtempSync(join(realpathSync("/tmp"), "jobs-line-")))
+    try {
+      mkdirSync(join(root, ".opencode", "jobs"), { recursive: true })
+      writeFileSync(
+        join(root, ".opencode", "jobs", "odd.md"),
+        "---\nname: Odd\nschedule:\n  every: 1h\n  minutes: 5\nagent: build\naction:\n  type: prompt\n  text: x\n---\n",
+      )
+      const { invalid } = await readJobFiles({ now: NOW, timezone: "UTC", projects: [root] })
+      expect(invalid[0]?.message).toContain(":5: ")
+      expect(invalid[0]?.message).toContain("\"minutes\"")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

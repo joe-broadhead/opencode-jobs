@@ -170,7 +170,7 @@ describe("the script gate's resolve", () => {
 })
 
 describe("the host: route", () => {
-  const mem = { id: "mem_mem_remember", name: "mem_remember", description: "Store one fact.", options: { namespace: "mem", permission: "mem_remember" } }
+  const mem = { id: "mem_remember", name: "mem_remember", description: "Store one fact.", options: { namespace: "mem", permission: "mem_remember" } }
   const mcp = { id: "srv_probe", name: "probe", description: "An MCP read." }
 
   test("refuses OpenCode's own shell, file and network tools by registration, even when the agent allows them", async () => {
@@ -186,8 +186,8 @@ describe("the host: route", () => {
     }
     // An MCP tool and a plugin tool are admitted: they have a server prefix or a plugin namespace.
     const admitted = makeGate({ tools: [...core, mem, mcp], servers: ["srv"] })
-    const resolved = await admitted.gate.resolve(["host:mem_mem_remember", "host:srv_probe"], "build")
-    expect(resolved.map((tool) => [tool.method, tool.kind])).toEqual([["host:mem_mem_remember", "host"], ["host:srv_probe", "host"]])
+    const resolved = await admitted.gate.resolve(["host:mem_remember", "host:srv_probe"], "build")
+    expect(resolved.map((tool) => [tool.method, tool.kind])).toEqual([["host:mem_remember", "host"], ["host:srv_probe", "host"]])
   })
 
   test("refuses a family-served tool, with the family method as the next step", async () => {

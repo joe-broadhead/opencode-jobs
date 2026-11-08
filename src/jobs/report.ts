@@ -73,7 +73,7 @@ export interface JobView {
   /** A refused file's coded message, with its path and the line at fault. */
   readonly message?: string
   /** A script job's digest, its tools and whether the stored approval still covers it. */
-  readonly script?: { readonly digest: string; readonly tools: readonly string[]; readonly approvedAt?: number; readonly needsApproval: boolean }
+  readonly script?: { readonly digest: string; readonly tools: readonly string[]; readonly approvedAt?: number; readonly approved?: "auto" | "prompt"; readonly needsApproval: boolean }
 }
 
 /** What `jobs_history` and the RPC's `history` return. */
@@ -166,6 +166,7 @@ export function createReport(input: ReportInput): Report {
               digest: digestOf(job.action.script),
               tools: [...job.action.script.uses],
               ...(state.approval === undefined ? {} : { approvedAt: state.approval.at }),
+              ...(state.approval?.approved === undefined ? {} : { approved: state.approval.approved }),
               needsApproval: !approvalCurrent(state.approval, job.action.script),
             },
           }
@@ -278,8 +279,11 @@ export function runView(record: RunRecord, names: ReadonlyMap<string, string>, s
     attempt: record.attempt,
     ...(record.reason === undefined ? {} : { reason: record.reason }),
     ...(record.count === undefined ? {} : { count: record.count }),
+    ...(record.sessionID === undefined ? {} : { sessionID: record.sessionID }),
+    ...(record.cost === undefined ? {} : { cost: record.cost }),
     ...(record.script === undefined ? {} : { script: record.script }),
-    ...(record.calls === undefined ? {} : { calls: record.calls.length }),
+    ...(record.error === undefined ? {} : { error: record.error }),
+    ...(record.calls === undefined ? {} : { calls: record.calls, callCount: record.calls.length }),
     ...(record.limits === undefined ? {} : { limits: record.limits }),
     ...(record.files === undefined ? {} : { files: record.files }),
     ...(summaries && record.summary !== undefined ? { summary: jobOutput(record.summary, { name, at: record.slot }) } : {}),
@@ -297,7 +301,7 @@ function scriptSummary(
   jobs: readonly Job[],
   states: ReadonlyMap<string, JobState>,
   records: readonly RunRecord[],
-): { readonly approved: number; readonly unapproved: number; readonly names: readonly string[]; readonly revoked: readonly string[] } | undefined {
+): { readonly approved: number; readonly unapproved: number; readonly names: readonly string[]; readonly revoked: readonly string[]; readonly automatic: number } | undefined {
   const scripts = jobs.flatMap((job) => (job.action.type === "script" ? [{ id: job.id, script: job.action.script }] : []))
   if (scripts.length === 0) return undefined
   const latest = new Map<string, RunRecord>()
@@ -305,7 +309,8 @@ function scriptSummary(
   const stale = scripts.filter((entry) => !approvalCurrent(states.get(entry.id)?.approval, entry.script)).map((entry) => entry.id)
   const revoked = scripts.filter((entry) => latest.get(entry.id)?.reason === "revoked").map((entry) => entry.id)
   const names = [...new Set([...stale, ...revoked])]
-  return { approved: scripts.length - names.length, unapproved: names.length, names, revoked }
+  const automatic = scripts.filter((entry) => states.get(entry.id)?.approval?.approved === "auto").length
+  return { approved: scripts.length - names.length, unapproved: names.length, names, revoked, automatic }
 }
 
 /**

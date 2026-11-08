@@ -73,6 +73,20 @@ const SCRIPT = {
   properties: {
     code: { type: "string", description: "The JavaScript the script runs. It has no network, files, process or timers; its only outside access is `tools`." },
     uses: { type: "array", items: { type: "string" }, description: 'Every tool the script calls, as "<plugin id>.<method>" or "host:<tool id>". The manifest is the script\'s whole reach.' },
+    files: {
+      type: "object",
+      description: "Files the script may read before the run and write after it, by name. A relative path resolves against the job's directory; a write is committed only on success.",
+      additionalProperties: {
+        type: "object",
+        required: ["path"],
+        properties: {
+          path: { type: "string" },
+          mode: { enum: ["read", "write", "readwrite"] },
+          format: { enum: ["json", "text"] },
+          maxBytes: { type: "integer", minimum: 1 },
+        },
+      },
+    },
     timeoutMs: { type: "string", description: 'A per-run wall clock, such as "5m"; capped by the job\'s policy timeout.' },
     limits: {
       type: "object",

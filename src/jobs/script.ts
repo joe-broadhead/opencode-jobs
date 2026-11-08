@@ -80,12 +80,16 @@ export interface ResolvedTool {
 /** One call the script made: no input and no output, only what the record needs (D-C). */
 export interface ScriptCall {
   readonly method: string
+  /** The method's class from its `describe`, when the manifest resolved one. */
+  readonly class?: string
   /** When the call started, as an instant. */
   readonly at: number
   readonly ms: number
   readonly outcome: "ok" | "refused" | "error" | "aborted"
   /** The size of the result the guest received, in bytes. */
   readonly bytes: number
+  /** A coded failure's code, the first `CODE:` in the error, never its payload. */
+  readonly code?: string
 }
 
 /** Which limit, if any, ended a run. */
@@ -120,7 +124,13 @@ export interface ScriptApproval {
   readonly resolved: readonly ResolvedTool[]
   /** The files as resolved and shown at approval; a run re-resolves them and compares. */
   readonly files: readonly ResolvedFile[]
+  /** `auto` when the access policy approved it without a prompt; `prompt` when a person answered the one assert. */
+  readonly approved?: "auto" | "prompt"
 }
+
+/** The manifest's worst class: any method beyond `read`, or a declared file that writes, is a change (R18/GAP-21). */
+export const worstClass = (resolved: readonly ResolvedTool[], files: readonly ResolvedFile[] = []): "read" | "change" =>
+  resolved.some((tool) => tool.class !== "read") || files.some((file) => file.mode !== "read") ? "change" : "read"
 
 /** One narrowed rule, as the run session takes it. */
 export interface Rule {

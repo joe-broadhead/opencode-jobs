@@ -54,11 +54,20 @@ export interface RunView {
   readonly summary?: string
   /** A script run's source and manifest digests and its tools, never its code. */
   readonly script?: { readonly sourceHash: string; readonly manifestDigest: string; readonly uses: readonly string[] }
-  /** A script run's call count, and which limit ended it. */
-  readonly calls?: number
+  /** The session the run used, and what the host reported it cost. */
+  readonly sessionID?: string
+  readonly cost?: number
+  /** A failed run's coded error: its code and first line, redacted. */
+  readonly error?: string
+  /** A script run's per-call rows: method, class, start, duration, outcome, bytes and a failure's code, never payloads. */
+  readonly calls?: readonly { readonly method: string; readonly class?: string; readonly at: number; readonly ms: number; readonly outcome: string; readonly bytes: number; readonly code?: string }[]
+  /** How many calls the run made. */
+  readonly callCount?: number
   readonly limits?: { readonly timedOut: boolean; readonly memoryExceeded: boolean; readonly callLimit: boolean; readonly outputTruncated: boolean }
   /** A script run's result, framed as script output; present only where summaries are. */
   readonly result?: string
+  /** A script run's declared files: name, path, mode, bytes and hashes, never the content. */
+  readonly files?: readonly { readonly name: string; readonly path: string; readonly mode: string; readonly bytesRead: number; readonly bytesWritten: number; readonly sha256Before?: string; readonly sha256After?: string }[]
 }
 
 /** A job whose recent runs failed, with the code and how many times. */
@@ -76,6 +85,8 @@ export interface ScriptJobsView {
   readonly names: readonly string[]
   /** The jobs whose latest run was skipped because a tool is now denied. */
   readonly revoked: readonly string[]
+  /** How many approvals the access policy made automatically (R18). */
+  readonly automatic: number
 }
 
 /** What status is built from: the host check, the options, and the store's report. */
@@ -297,7 +308,8 @@ function scriptRows(status: Status): string[] {
   if (scripts === undefined) return []
   const waiting = scripts.unapproved === 0 ? "none" : `${scripts.names.join(", ")} (approve again with /${COMMAND_STEM}-approve <job>)`
   const denied = scripts.revoked.length === 0 ? "" : `; a tool is now denied for ${scripts.revoked.join(", ")}`
-  return [`- Script jobs: ${scripts.approved} approved, ${scripts.unapproved} needing approval${scripts.unapproved === 0 ? "" : `: ${waiting}`}${denied}`]
+  const auto = scripts.automatic === 0 ? "" : ` (${scripts.automatic} automatically)`
+  return [`- Script jobs: ${scripts.approved} approved${auto}, ${scripts.unapproved} needing approval${scripts.unapproved === 0 ? "" : `: ${waiting}`}${denied}`]
 }
 
 /** What the model's `jobs_status` tool returns: state, counts, the number of agents to fix, and the one next step. */
@@ -361,7 +373,11 @@ const RUN = {
     attempt: { type: "integer", minimum: 1 },
     count: { type: "integer", minimum: 1 },
     script: { type: "object" },
-    calls: { type: "integer", minimum: 0 },
+    sessionID: { type: "string" },
+    cost: { type: "number", minimum: 0 },
+    error: { type: "string" },
+    calls: { type: "array" },
+    callCount: { type: "integer", minimum: 0 },
     limits: { type: "object" },
     result: { type: "string" },
     files: { type: "array" },
@@ -409,8 +425,8 @@ export const STATUS_OUTPUT = {
     missingAgents: strings,
     scriptJobs: {
       type: "object",
-      required: ["approved", "unapproved", "names"],
-      properties: { approved: { type: "integer", minimum: 0 }, unapproved: { type: "integer", minimum: 0 }, names: strings, revoked: strings },
+      required: ["approved", "unapproved", "names", "revoked", "automatic"],
+      properties: { approved: { type: "integer", minimum: 0 }, unapproved: { type: "integer", minimum: 0 }, names: strings, revoked: strings, automatic: { type: "integer", minimum: 0 } },
     },
     agentsUnknown: { type: "boolean" },
     permissionsBlock: { type: "array", items: rule },

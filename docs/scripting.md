@@ -11,11 +11,13 @@ a call without it reaches the server's default location and fails `rpc.unavailab
 | Route | What it is | Example |
 | --- | --- | --- |
 | A family method | A tool a plugin's tools RPC lists, by exact name. Its action is the plugin's permission action. | `x.posts.get_users_bookmarks` |
-| A host tool | A tool OpenCode lists that has no tools RPC, by exact tool id. It is `unclassified`. | `host:mem_mem_remember` |
+| A host tool | A tool OpenCode lists that has no tools RPC, by exact tool id. It is `unclassified`. | `host:mem_remember` |
 
 A manifest entry is `<plugin id>.<method>`, split at the **last** dot; the guest accessor nests by dots. So
 `x.posts.get_users_bookmarks` is `tools.x.posts.get_users_bookmarks`, and `utilities.tools.time_now` (a three-part
-plugin id) is `tools.utilities.tools.time_now`. A `host:` entry is reached as `tools.host.<tool id>`.
+plugin id) is `tools.utilities.tools.time_now`. A plugin id with a hyphen cannot use dots — `tools.google-workspace`
+is a subtraction — so write it with brackets: `tools["google-workspace"].gws.read`. A `host:` entry is reached as
+`tools.host.<tool id>`.
 
 A family method is resolved by that plugin's `describe`, carries a class (`read`, `write`, `send`, `export`,
 `destructive`) and goes through the plugin's own shaping, so a script reads what a model would. A `host:` entry is
@@ -64,7 +66,7 @@ whoever made them: they are data, not instructions.
 Run the command in the project whose agent you mean, and send the call to that location explicitly:
 
 ```sh
-opencode api post /api/rpc/<id>/<method> -H "x-opencode-directory:$PWD" -d '{…}'
+opencode api post /api/rpc/<plugin id>.tools/<method> -H "x-opencode-directory:$PWD" -d '{…}'
 ```
 
 Without it the call goes to the service's default location and fails `rpc.unavailable` if the plugin is not loaded
@@ -103,7 +105,7 @@ action:
     uses:
       - x.posts.get_users_bookmarks
       - x.posts.get_users_me
-      - host:mem_mem_remember
+      - host:mem_remember
     code: |
       const me = await tools.x.posts.get_users_me({});
       const seen = new Set();
@@ -114,7 +116,7 @@ action:
         for (const item of page.data ?? []) {
           if (!item.id || seen.has(item.id)) continue;
           seen.add(item.id);
-          await tools.host.mem_mem_remember({
+          await tools.host.mem_remember({
             content: `X bookmark by ${item.author_id ?? "unknown"}: ${item.text ?? ""} — https://x.com/i/web/status/${item.id}`,
             kind: "fact",
             task: "*",
@@ -129,10 +131,14 @@ action:
 - **The manifest is the whole reach.** `uses` names every method the script may call; the runtime refuses anything
   else, and the run session allows exactly the manifest's actions. A method the agent resolves to `deny` is never
   granted.
-- **One approval.** `jobs_create`, `jobs_update` and `jobs_run_script` assert `jobs_script` once, bound to
-  `script:sha256:<digest>` where the digest covers the source and the sorted manifest. The prompt shows the source, each
-  tool's class and one line per write; the user reads it and says yes. "Always allow" saves that exact digest, so a
-  changed byte or a changed tool asks again. A `deny` refuses the create with `JOBS_SCRIPT_DENIED`.
+- **One approval.** `jobs_create`, `jobs_update` and `jobs_run_script` bind the script to
+  `script:sha256:<digest>`, where the digest covers the source, the sorted manifest and the declared files. Under the
+  default `access: "all"` the approval is automatic and recorded (the digest is still computed, and a changed source,
+  manifest or file declaration is re-digested); under `ask-changes` a script whose manifest is all reads and whose files
+  are all `read` is approved automatically, and anything else asserts `jobs_script` once, showing the source, each
+  tool's class and one line per file; `read-only` denies a script that changes anything. The prompt's "Always allow"
+  saves that exact digest, so a changed byte, tool or path asks again. A `deny` refuses the create with
+  `JOBS_SCRIPT_DENIED`.
 - **Re-checked every slot.** A run re-resolves the manifest against the agent, compares the hashes and each tool's
   class, and is `skipped` with `unapproved` or `revoked` if anything changed. `/jobs-approve <job>` (or the
   `jobs_approve` tool) is the one act that restores it; status names the job and the command.
@@ -147,10 +153,13 @@ action:
   in-flight call and discards its result, and the record says `interrupted`. A script that never yields —
   `for (;;) {}` — cannot be interrupted from outside the interpreter: it is stopped by the job's `policy.timeout`, not
   by pause. Give a long script a `timeout` that bounds it.
-- **The record has no payloads.** Each call is its method, time, duration, outcome and byte count; the result is
-  capped and framed as script output. Inputs and tool results are never stored a second time.
+- **The record has no payloads.** Each call is its method, its class, its start, duration, outcome and byte count, and a
+  failed call's code; the result is capped at the job's `maxOutputBytes` (64 KB by default) and framed as script output.
+  Inputs and tool results are never stored a second time. A failed run records the error's code and its first redacted
+  line; a successful run records the result and its declared-file writes. Every run records its session and the host's
+  cost. `jobs_history`, the status model and the RPC run record carry the per-call rows.
 
-### Keeping state in a file
+### Declared files
 
 A script has no filesystem, but a job may declare files it reads before the run and writes after it. The owner's case —
 last week's X bookmarks, merged into a `bookmarks.json` that each run extends — is a `readwrite` JSON file:
@@ -196,7 +205,9 @@ The run reads `bookmarks.json` into a frozen `files.bookmarks` and buffers `file
 the run succeeds, atomically (a temp file then a rename, mode 0600 for a new file), and only if the file did not change
 since the snapshot (otherwise `JOBS_SCRIPT_FILE_CONFLICT`, and the other writer's file stays). A relative path resolves
 against the job's directory; an absolute one must be inside it or a `scriptFilesRoots` root. Symlinks, `..`, `.git`,
-OpenCode's own folders and special files are refused.
+OpenCode's own folders and special files are refused. Reading or writing outside the project also needs an
+`external_directory` allow in the agent's own permissions, on top of `scriptFilesRoots`; both are required, and a
+refusal names the missing one.
 
 **Cadence:** daily is the sensible choice. X has no `since_id` for bookmarks, and charges the same resource once per 24
 hours, so a daily run re-reads the newest page cheaply and stops at the first known id.

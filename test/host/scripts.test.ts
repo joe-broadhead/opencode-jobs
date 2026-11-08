@@ -84,7 +84,7 @@ const memlike = Plugin.define({
   async setup(ctx) {
     await ctx.tool.transform((editor) => {
       editor.add({
-        name: "mem_remember",
+        name: "remember",
         description: "Store one durable fact.",
         input: { type: "object", properties: { content: { type: "string" } }, required: ["content"], additionalProperties: false },
         output: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
@@ -138,13 +138,13 @@ const CODE = `
   const page = await tools.scripts.family.family_read({ max_results: 100 });
   let saved = 0;
   for (const item of page.items) {
-    await tools.host.mem_mem_remember({ content: item.text });
+    await tools.host.mem_remember({ content: item.text });
     saved += 1;
   }
   return { saved, page: page.page };
 `
 
-const USES = ["scripts.family.family_read", "host:mem_mem_remember"]
+const USES = ["scripts.family.family_read", "host:mem_remember"]
 
 type Tool = { id: string; execute: (input: unknown, call: unknown) => Promise<{ output?: unknown }> }
 
@@ -173,7 +173,8 @@ async function reply(host: Host, sessionID: string, action: string, decision: "o
 }
 
 async function newHost(options: { loop?: boolean } = {}) {
-  return startHost({ ...(options.loop === false ? { loop: false } : {}), config: GUARDED_CONFIG, plugins: [family, memlike] })
+  // `ask-changes` keeps these stocks exercising the one prompt for a change; the `all` auto path is unit-tested.
+  return startHost({ ...(options.loop === false ? { loop: false } : {}), config: GUARDED_CONFIG, options: { access: "ask-changes" }, plugins: [family, memlike] })
 }
 
 const jobSpec = (script: { code: string; uses: string[] }, at: number) => ({
@@ -183,12 +184,12 @@ const jobSpec = (script: { code: string; uses: string[] }, at: number) => ({
   action: { type: "script", script },
 })
 
-/** Creates the job through the tool, answering its two prompts, and returns it. */
-async function create(host: Host, sessionID: string, spec: Record<string, unknown>) {
+/** Creates the job through the tool and returns it; `prompt` is false for an all-read script under ask-changes. */
+async function create(host: Host, sessionID: string, spec: Record<string, unknown>, prompt = true) {
   const create = await tool(host, "jobs_create")
   const pending = create.execute(spec, toolCall(sessionID, "call_create"))
-  // One prompt per script act: the digest-bound jobs_script assert (SR-4).
-  await reply(host, sessionID, "jobs_script")
+  // One prompt per changing script act: the digest-bound jobs_script assert (SR-4, R18).
+  if (prompt) await reply(host, sessionID, "jobs_script")
   const result = (await pending) as { output?: { job?: { id?: string } } }
   const id = result.output?.job?.id
   if (id === undefined) throw new Error(`jobs_create returned no job: ${JSON.stringify(result)}`)
@@ -220,10 +221,10 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       expect(record.result).toEqual({ ok: true, value: { saved: 2, page: "next" } })
       expect(record.calls?.map((call) => [call.method, call.outcome])).toEqual([
         ["scripts.family.family_read", "ok"],
-        ["host:mem_mem_remember", "ok"],
-        ["host:mem_mem_remember", "ok"],
+        ["host:mem_remember", "ok"],
+        ["host:mem_remember", "ok"],
       ])
-      expect(Object.keys(record.calls?.[0] ?? {}).sort()).toEqual(["at", "bytes", "method", "ms", "outcome"])
+      expect(Object.keys(record.calls?.[0] ?? {}).sort()).toEqual(["at", "bytes", "class", "method", "ms", "outcome"])
 
       // The run session: the agent, a blanket deny, one allow per granted action, then the job-state denies.
       const run = await host.client.session.get({ sessionID: record.sessionID! })
@@ -258,7 +259,7 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       const session = await host.client.session.create({ location: host.location, agent: AGENT })
       const due = Date.now() + 3_000
       const code = "const r = await tools.scripts.family.family_write({ text: 'not in the manifest' }); return r;"
-      const id = await create(host, session.id, jobSpec({ code, uses: ["scripts.family.family_read"] }, due))
+      const id = await create(host, session.id, jobSpec({ code, uses: ["scripts.family.family_read"] }, due), false)
       const before = familyCalls.filter((call) => call.method === "write").length
       const worker = host.worker()
       await until("the slot is due", async () => Date.now() >= due)
@@ -325,7 +326,7 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       const session = await host.client.session.create({ location: host.location, agent: AGENT })
       const due = Date.now() + 3_000
       const code = "const r = await tools.scripts.family.family_slow({ ms: 60_000 }); return r;"
-      const id = await create(host, session.id, jobSpec({ code, uses: ["scripts.family.family_slow"] }, due))
+      const id = await create(host, session.id, jobSpec({ code, uses: ["scripts.family.family_slow"] }, due), false)
       const worker = host.worker()
       await until("the slot is due", async () => Date.now() >= due)
       const tick = worker.runner.tick(Date.now())
@@ -361,7 +362,7 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       const code = "for (let i = 0; i < 5; i += 1) { await tools.scripts.family.family_read({ max_results: 1 }); } return 'done';"
       const spec = jobSpec({ code, uses: ["scripts.family.family_read"] }, due)
       spec.action.script = { ...spec.action.script, limits: { maxCalls: 2 } } as never
-      const id = await create(host, session.id, spec)
+      const id = await create(host, session.id, spec, false)
       const worker = host.worker()
       await until("the slot is due", async () => Date.now() >= due)
       await worker.runner.tick(Date.now())
@@ -387,8 +388,8 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       expect(await host.client.permission.list({ sessionID: session.id })).toEqual([])
 
       const run = await tool(host, "jobs_run_script")
+      // An all-read one-off is approved automatically under ask-changes, so no prompt appears.
       const oneoff = run.execute({ code: "return 1", uses: ["scripts.family.family_read"], agent: AGENT }, toolCall(session.id, "call_once_2"))
-      await reply(host, session.id, "jobs_script")
       await oneoff
       expect(await host.client.permission.list({ sessionID: session.id })).toEqual([])
     } finally {
@@ -482,7 +483,6 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       const jobsBefore = (await host.worker().storage.scan({ prefix: "job/" })).entries.length
       const run = await tool(host, "jobs_run_script")
       const pending = run.execute({ code: "return { ok: true }", uses: ["scripts.family.family_read"], agent: AGENT }, toolCall(session.id, "call_oneoff"))
-      await reply(host, session.id, "jobs_script")
       const result = (await pending) as { output?: { ok?: boolean; value?: unknown; digest?: string } }
       expect(result.output).toMatchObject({ ok: true, value: { ok: true } })
       expect(result.output?.digest).toMatch(/^[0-9a-f]{64}$/)

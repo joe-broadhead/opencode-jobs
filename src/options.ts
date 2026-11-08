@@ -15,9 +15,15 @@ export interface Options {
   readonly keepAliveMinutes: number
   /** Extra directories a script's declared files may live in, besides the job's own directory. Absolute paths. */
   readonly scriptFilesRoots: readonly string[]
+  /** How much Jobs and its scripts may do without asking: `all`, `ask-changes` or `read-only` (R18). */
+  readonly access: Access
 }
 
-export const DEFAULT_OPTIONS: Options = { enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2, keepAliveMinutes: 20, scriptFilesRoots: [] }
+/** The family access policy: every tool allowed, changes asked, or reads only. */
+export type Access = "all" | "ask-changes" | "read-only"
+export const ACCESS_VALUES: readonly Access[] = ["all", "ask-changes", "read-only"]
+
+export const DEFAULT_OPTIONS: Options = { enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2, keepAliveMinutes: 20, scriptFilesRoots: [], access: "all" }
 
 /** The most runs a person may allow at once: the option is a cost bound, not a throughput knob. */
 export const MAX_CONCURRENCY = 8
@@ -33,6 +39,7 @@ const ACCEPTED = {
   concurrency: `a whole number from 1 to ${MAX_CONCURRENCY} (2 by default)`,
   keepAliveMinutes: `a whole number of minutes from ${MIN_KEEPALIVE_MINUTES} to ${MAX_KEEPALIVE_MINUTES} (20 by default)`,
   scriptFilesRoots: "a list of absolute directory paths (none by default)",
+  access: 'one of "all", "ask-changes" or "read-only" ("all" by default)',
 } as const
 
 const invalid = (problem: string) =>
@@ -55,6 +62,7 @@ export function parseOptions(raw: unknown): Options {
     concurrency: count(input),
     keepAliveMinutes: keepAlive(input),
     scriptFilesRoots: roots(input),
+    access: access(input),
   }
 }
 
@@ -96,6 +104,13 @@ function roots(input: Record<string, unknown>): readonly string[] {
   }
   if (roots.length > 8) throw invalid(`The option "scriptFilesRoots" accepts at most 8 roots, found ${roots.length}`)
   return roots
+}
+
+function access(input: Record<string, unknown>): Access {
+  if (!Object.hasOwn(input, "access")) return "all"
+  const value = input.access
+  if (value !== "all" && value !== "ask-changes" && value !== "read-only") throw invalid(`The option "access" must be ${ACCEPTED.access}, found ${describe(value)}`)
+  return value
 }
 
 function zone(input: Record<string, unknown>): string | null {

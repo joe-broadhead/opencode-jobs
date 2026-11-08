@@ -132,49 +132,49 @@
       {
         "name": "jobs.create",
         "permission": "jobs_create",
-        "effect": "ask",
+        "effect": "allow",
         "readOnly": false
       },
       {
         "name": "jobs.update",
         "permission": "jobs_update",
-        "effect": "ask",
+        "effect": "allow",
         "readOnly": false
       },
       {
         "name": "jobs.delete",
         "permission": "jobs_delete",
-        "effect": "ask",
+        "effect": "allow",
         "readOnly": false
       },
       {
         "name": "jobs.run_now",
         "permission": "jobs_run_now",
-        "effect": "ask",
+        "effect": "allow",
         "readOnly": false
       },
       {
         "name": "jobs.resume",
         "permission": "jobs_resume",
-        "effect": "ask",
+        "effect": "allow",
         "readOnly": false
       },
       {
         "name": "jobs.extend",
         "permission": "jobs_extend",
-        "effect": "ask",
+        "effect": "allow",
         "readOnly": false
       },
       {
         "name": "jobs.approve",
         "permission": "jobs_approve",
-        "effect": "ask",
+        "effect": "allow",
         "readOnly": false
       },
       {
         "name": "jobs.run_script",
         "permission": "jobs_run_script",
-        "effect": "ask",
+        "effect": "allow",
         "readOnly": false
       }
     ],

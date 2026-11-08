@@ -29,14 +29,15 @@ Vulnerabilities in OpenCode itself are out of scope. Report those to the OpenCod
 
 What a run can do is the agent's own `permissions`, and nothing else:
 
-1. **A job names one agent**, and that agent's rules are the run's profile. The plugin inserts one block of rules that
-   ask — `jobs_*` asks, and the four reads and the two pauses are allowed — after each agent's base rule, and it never
-   weakens a deny. The documented profile is read-only and starts with a blanket deny, because an agent's own rules are
+1. **Every tool is allowed by default.** OpenCode's base rule allows everything, and the plugin's block follows the
+   `access` option: `all` (the default) allows every `jobs_` tool; `ask-changes` asks for a change and allows the reads
+   and pauses; `read-only` allows the reads and denies every change. The block never weakens a deny you set. A job
+   names one agent, and that agent's rules are the run's profile: with a default agent, a run can use every tool the
+   agent can. The documented profile is read-only and starts with a blanket deny, because an agent's own rules are
    applied after OpenCode's base rule that allows everything.
-2. **A job whose agent does not deny by default is refused**, at create and again when a slot starts, with
-   `JOBS_AGENT_UNGUARDED` and the block to paste, or `JOBS_AGENT_MISSING` when the host no longer lists it. It is not
-   run into a prompt that would be denied every time, and it is
-   not run at all.
+2. **A job whose agent does not deny by default is a warning, not a refusal.** It runs, and `/jobs-status` names it
+   with the read-only block to paste. Treat that warning seriously: such a job's runs can use every tool its agent can,
+   including writes and sends. A job whose agent the host no longer lists is still refused with `JOBS_AGENT_MISSING`.
 3. **A run never asks.** Two `evaluate` hooks exist, and only these. One turns an `ask` inside a session this plugin
    created for a run into a deny, in the plugin's own words, so an unattended run cannot wait for an approval; the other
    turns an `ask` on one of the tools RPC's own script calls in flight into a deny, because no one can answer it. Each
@@ -45,12 +46,24 @@ What a run can do is the agent's own `permissions`, and nothing else:
    repository's forbidden-API scan to their two files and to the bundle that inlines both.
 4. **A run cannot schedule.** Inside a job session, the session's own rules deny creating, updating, deleting,
    extending, resuming and running a job, so a prompt that asks for one cannot grow the schedule.
-5. **Changing a job needs a person.** Creating, updating, deleting, running and resuming a job ask for approval, and
-   the prompt is the yes. Pausing is always allowed.
+5. **Changing a job follows `access`.** Under the default `all`, the tools that create, update, delete, run and
+   resume a job are allowed without a prompt, and their changes are recorded in the run records and status. Under
+   `ask-changes` they ask, and the prompt is the yes; under `read-only` they are denied. Pausing is allowed under `all`
+   and `ask-changes`, because it only stops work.
 6. **The kill switch** stops every job at once, and is never silent: `/jobs-pause` posts what it did into the session,
    and status says every job is paused and how to resume them. The `enabled` option stops the runner at setup instead.
 7. **Job output is labelled.** A summary, a reminder and a notice are framed as output from a scheduled job, not as an
    instruction from the person.
+
+## What runs unattended
+
+With the default `access: "all"`, a script job is approved without a prompt, and so is an all-read script under
+`ask-changes`. The digest, the resolved tools and the declared files are recorded, an audit line records the automatic
+approval, and a changed source, manifest or file declaration is re-digested and approved again under the same policy.
+The files a script may touch are the job's declared files only, under the path policy in
+[docs/scripting.md](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md#declared-files); a write
+is committed only after a successful run, atomically, and never over a file that changed since the run read it.
+An `ask` with nobody present still becomes a `deny`.
 
 ## Scripts
 

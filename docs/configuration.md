@@ -31,26 +31,25 @@ is fixed.
 
 ## Permissions
 
-The plugin inserts nothing that grants anything, and it never weakens a rule you set. It inserts one block of rules that
-**ask**, directly after each agent's base `* * allow`:
+**Every tool is allowed by default.** The plugin inserts nothing that grants anything, and it never weakens a rule you
+set: OpenCode's base `* * allow` is the grant. Jobs inserts one block directly after it, chosen by the `access` option:
 
 ```json
 [
-  { "action": "jobs_*", "resource": "*", "effect": "ask" },
-  { "action": "jobs_status", "resource": "*", "effect": "allow" },
-  { "action": "jobs_list", "resource": "*", "effect": "allow" },
-  { "action": "jobs_get", "resource": "*", "effect": "allow" },
-  { "action": "jobs_history", "resource": "*", "effect": "allow" },
-  { "action": "jobs_pause", "resource": "*", "effect": "allow" },
-  { "action": "jobs_pause_all", "resource": "*", "effect": "allow" }
+  { "action": "jobs_*", "resource": "*", "effect": "allow" }
 ]
 ```
 
-Every later rule still wins, because the last match wins, so an agent's own `deny` or `allow` is untouched. An agent
-without a base allow gets nothing: there, unlisted tools are not allowed anyway, and the block's `ask` would turn a
-deny into a prompt. **Pausing every job runs without asking**, because it only stops work: it is the one documented
-exception to "a change asks", and it is the kill switch. Resuming asks, like every other change, and the prompt is the
-yes.
+That is `all`, the default. With `"access": "ask-changes"` the block is `jobs_* ask` plus the four reads
+(`jobs_status`, `jobs_list`, `jobs_get`, `jobs_history`) and the two pauses (`jobs_pause`, `jobs_pause_all`) allowed;
+with `"access": "read-only"` it is `jobs_* deny` plus the four reads allowed. Every later rule still wins, because the
+last match wins, so an agent's own `deny` or `allow` is untouched.
+
+The access option also decides a script's approval: `all` approves automatically (the digest and the audit record are
+still kept); `ask-changes` approves an all-read script with no file writes automatically and asks once per version for
+anything else; `read-only` allows the all-read case and denies the rest. **An `ask` with nobody present becomes a
+`deny`**, so a run never waits. Pausing every job needs no prompt under `all` or `ask-changes`, because it only stops
+work; under `read-only` even a pause is denied.
 
 A job runs as the agent it names, and that agent's own `permissions` are the whole profile. The read-only profile to
 start from, pasted into `opencode.json`:
@@ -114,7 +113,7 @@ action:
   script:
     uses:
       - x.posts.get_users_bookmarks
-      - host:mem_mem_remember
+      - host:mem_remember
     code: |
       const page = await tools.x.posts.get_users_bookmarks({ max_results: 100 });
       return { items: page.data?.length ?? 0 };
@@ -143,9 +142,12 @@ it. A script job may omit `agent`; it then runs as `build`. Its agent's rules mu
 A script that never yields is stopped by the job's timeout, not by pause: pause aborts an in-flight call, but a
 synchronous loop is only interrupted by the deadline. Set `policy.timeout` to the bound the script needs.
 
-The approval is one prompt at create or update, bound to `script:sha256:<digest>` of the source and the sorted manifest.
-The record keeps each call's method, outcome, duration and size, never its input or result; the result is capped and
-framed as script output. `/jobs-pause` aborts a run mid-call.
+Under the default `access: "all"` the approval is automatic and recorded; `ask-changes` asks once for a script that
+changes something; `read-only` denies it. It is bound to `script:sha256:<digest>` of the source, the sorted manifest and
+the declared files.
+The record keeps each call's method, class, start, outcome, duration, size and a failure's code, never its input or
+result; the result is capped at `maxOutputBytes` and framed as script output. It also keeps the run's `sessionID` and
+`cost`. `/jobs-pause` aborts a run mid-call.
 
 `jobs_run_script` runs one script once with the same approval and keeps no job. `jobs_approve` (and `/jobs-approve <job>`)
 re-approves a script job after a change.
@@ -165,8 +167,9 @@ re-approves a script job after a change.
 - **Agents unknown.** If the host cannot list its agents, nothing runs: the slot is recorded `skipped` with
   `JOBS_AGENTS_UNKNOWN`, and status says the agent list could not be read. It never guesses a block to paste for an
   agent that may be fine.
-- **A run cannot schedule.** Inside a job session, the session's own rules deny `jobs_create`, `jobs_update`,
-  `jobs_delete`, `jobs_resume`, `jobs_extend` and `jobs_run_now`.
+- **A run cannot schedule.** Inside a job session, the session's own rules deny all eight that create, change or
+  multiply jobs: `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_resume`, `jobs_extend`, `jobs_run_now`,
+  `jobs_approve` and `jobs_run_script`.
 - **The kill switch.** `/jobs-pause`, the `jobs_pause_all` tool and the palette's "Jobs: Pause or resume every job"
   (which asks first) all set one state: nothing new starts, and a run in flight is interrupted. Resuming asks, and
   `jobs_resume` with `{ "all": true }` is the tool for it. Status says every job is paused and how to resume.
@@ -175,7 +178,8 @@ re-approves a script job after a change.
 
 ## Tools
 
-Twelve tools, namespace `jobs_`. Reads are allowed by the default rules; every other tool asks.
+Fourteen tools, namespace `jobs_`. With the default `access` (`all`) every one is allowed, like every other plugin's
+tools; `access: "ask-changes"` makes the changes ask, and `"read-only"` denies them.
 
 | Tool | What it does |
 | --- | --- |
@@ -191,6 +195,8 @@ Twelve tools, namespace `jobs_`. Reads are allowed by the default rules; every o
 | `jobs_run_now` | Runs a job once, now, as a manual run with its own slot: the schedule is untouched. An expired job is refused with `JOBS_EXPIRED`. |
 | `jobs_resume` | Resumes a paused job, or every job with `{ "all": true }`. It asks. |
 | `jobs_extend` | Moves a job's expiry. |
+| `jobs_approve` | Re-approves a script job after its source, manifest or declared files change, and prints the new digest. |
+| `jobs_run_script` | Runs one script once, with the same approval and no job kept: the ad-hoc route. |
 
 A job created with the tool — by the model or by a person — expires after seven days unless `expires` is set, and
 status counts it as expiring. `jobs_extend` is the deliberate act that keeps it.
@@ -205,6 +211,7 @@ never expires on its own.
 | `/jobs-status` | Posts the report into the session. |
 | `/jobs-pause` | Pauses every job at once, or resumes them. |
 | `/jobs-run <id>` | Runs a job now. Typing it is the approval for that run. |
+| `/jobs-approve <id>` | Re-approves a script job after a source, manifest or file change. |
 
 Typing a command is a person's own act. The model's `jobs_run_now` tool asks instead, because there the prompt is the
 yes.
@@ -296,8 +303,9 @@ Both are read-only, and both answer a `STATUS_UNAVAILABLE` failure with a `nextS
 The fields every plugin of this family shares are `version`, `host` (`version`, `range`, `tested`), `state`,
 `unguardedAgents` and `nextStep`. Jobs has no service to connect to, so `state` is `ready`, or `disabled` when the
 `enabled` option is `false`. Its own fields sit beside them: `jobs`, `runner`, `liveness`, `paused`, `nextRuns`,
-`recentRuns`, `failures`, `missingAgents`, `scriptJobs`, `permissionsBlock` and `problems`. A run's `files` lists each
-declared file's name, path, mode, bytes and hashes, never the content. `missingAgents` names the
+`recentRuns`, `failures`, `missingAgents`, `scriptJobs`, `permissionsBlock` and `problems`. A run carries its
+`sessionID` and `cost`; a script run also carries its per-call rows (method, class, start, duration, outcome, bytes and
+a failure's code), its `error`, and its declared `files` (name, path, mode, bytes and hashes), never the content. `missingAgents` names the
 agents a job uses that the host no longer lists, and `scriptJobs` counts the script jobs approved and waiting for a new
 approval; both are empty or absent when there are none.
 
@@ -324,6 +332,9 @@ its code and shown in status; it is not thrown at you.
 | `JOBS_SCRIPT_FILE_CONFLICT` | The write target changed after the snapshot. | Nothing is written; let the next run read it. |
 | `JOBS_SCRIPT_FILE_MODE` | The script wrote a `read` file. | Declare it `write` or `readwrite`, then approve again. |
 | `JOBS_SCRIPT_BODY_IGNORED` | A script job file has a body, which is not a prompt. | Remove the body or move it into the code. |
+| `JOBS_SCRIPT_LIMIT` | The script hit a call, memory, output or wall-clock limit. | Raise the limit, or make the script smaller. |
+| `JOBS_SCRIPT_FAILED` | The script threw, or one of its calls failed. | Read the error in the run record, fix the script or its tool, then approve it again if it changed. |
+| `JOBS_SCRIPT_INTERRUPTED` | The run was interrupted: the kill switch, a shutdown, or a leader change. | Run it again with `jobs_run_now`, or wait for the next slot. |
 | `JOBS_SCRIPT_HOST_TOOL` | A `host:` entry names OpenCode's own shell, file, network or task tool, which a script may not reach. | Remove it; a script reaches MCP servers and plugin tools only. |
 | `JOBS_SCRIPT_FAMILY_TOOL` | A `host:` entry names a tool a loaded plugin serves through its tools RPC. | Use `<plugin id>.<method>` instead, so the plugin's shaping and budgets apply. |
 | `JOBS_SCRIPT_DENIED` | The job's agent denies a tool the script's manifest names. A session allow beats an agent deny, so the script is refused rather than granted it. | Remove the deny rule for that tool, or point the job at an agent that allows it. |

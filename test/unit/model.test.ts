@@ -91,6 +91,14 @@ describe("the job model", () => {
     // An interval has no zone of its own, so a deadline written as a wall clock uses the plugin's.
     expect(job({ schedule: { every: "1h" }, ends: { at: "2026-12-01T00:00" } }, { timezone: "Europe/London" }).ends.at).toBe(Date.parse("2026-12-01T00:00:00Z"))
   })
+
+  test("accepts tz beside every, and reads an anchor in that zone (GAP-22)", () => {
+    const parsed = job({ schedule: { every: "1h", tz: "America/New_York", anchor: "2026-12-01T00:00" } }, { timezone: "UTC" })
+    expect(parsed.schedule.kind).toBe("every")
+    // The interval is fixed; the zone anchors the wall clock the anchor names.
+    expect(parsed.schedule).toMatchObject({ everyMs: 3_600_000, anchorMs: Date.parse("2026-12-01T05:00:00Z") })
+    expect(() => job({ schedule: { every: "1h", tz: "Mars/Olympus" } }, { timezone: "UTC" })).toThrow("JOBS_INVALID_SCHEDULE")
+  })
 })
 
 describe("the job rules", () => {

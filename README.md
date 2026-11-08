@@ -80,7 +80,8 @@ action:
 
 The manifest is read as `<plugin id>.<method>`, split at the last dot, so `utilities.tools.time_now` is
 `tools.utilities.tools.time_now`. A `readwrite` file is snapshotted before the run and written after it, atomically and
-only on success. [Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md) has the
+only on success. A file outside the project needs both a `scriptFilesRoots` entry and an `external_directory` allow in
+the agent's permissions. [Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md) has the
 approval flow, the two routes (family methods and `host:<tool id>`), the file policy, the limits, and the full
 bookmarks walkthrough with the daily cadence.
 
@@ -103,11 +104,21 @@ is a full file to copy.
 
 ## Permissions
 
-This plugin ships no agent profile of its own and inserts no grant into any agent. It inserts one block of *rules that
-ask*: after each agent's base rule, `jobs_*` asks, and the four reads and the two pauses are allowed. Everything a job
-may actually do comes from the agent the job names.
+**Every tool is allowed by default.** OpenCode's base rule allows everything, and Jobs adds no grant of its own: its
+block follows the `access` option, and everything a job actually does comes from the agent it names.
 
-The read-only profile to start from, pasted into `opencode.json`:
+The `access` option picks the block the plugin inserts after each agent's base rule:
+
+| `access` | Jobs' own tools | A script |
+| --- | --- | --- |
+| `all` (default) | allowed, like every other plugin's tools | approved automatically; the digest and the audit record are still kept |
+| `ask-changes` | the four reads and the two pauses are allowed; every change asks | an all-read script with no file writes is approved automatically; anything else asks once per version |
+| `read-only` | the four reads are allowed; every change is denied | an all-read script with no file writes is allowed; anything else is denied |
+
+There are three ways to restrict it:
+
+1. **`access`.** Set it in `opencode.json` to `"ask-changes"` or `"read-only"`; the block above changes with it.
+2. **Agent-level rules.** Point a job at an agent whose own rules are narrow. The read-only profile to start from:
 
 ```json
 {
@@ -130,27 +141,26 @@ The read-only profile to start from, pasted into `opencode.json`:
 }
 ```
 
-The first rule denies everything, because an agent's own rules are applied after OpenCode's base rule that allows
-everything, and the later rule wins. The rules after it are the profile: reading, searching and the plugin's own reads,
-and nothing that writes. Add a rule only when a job needs it, and add it to that agent alone.
+   The first rule denies everything, because an agent's own rules are applied after OpenCode's base rule that allows
+   everything, and the later rule wins. The rules after it are the profile: reading, searching and the plugin's own
+   reads, and nothing that writes. Add a rule only when a job needs it, and add it to that agent alone. An agent that
+   does not deny by default no longer refuses a job; `/jobs-status` shows it as a warning, with the block to paste,
+   because such an agent's runs can use every tool it can.
 
-| What | Default rule |
-| --- | --- |
-| `jobs_status`, `jobs_list`, `jobs_get`, `jobs_history` | allowed |
-| `jobs_pause`, `jobs_pause_all` | allowed: pausing only stops work |
-| `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_run_now`, `jobs_resume`, `jobs_extend` | **ask**, and the prompt is the yes |
-| anything a job's own run does | the agent's rules; a run never asks |
+3. **Per-tool rules.** Name an exact action such as `jobs_create`, `jobs_run_now` or `x_read`, and allow, ask or deny
+   it. A later rule wins, so a per-tool `allow` follows a broader `ask`.
 
-A job whose agent does not deny by default is refused with `JOBS_AGENT_UNGUARDED`, and `/jobs-status` prints the block
-to paste for that agent. A job whose agent the host no longer lists — which a plugin update can cause — is refused with
-`JOBS_AGENT_MISSING`; `/jobs-status` names it and says how to bring it back.
+A job whose agent the host no longer lists — which a plugin update can cause — is refused with `JOBS_AGENT_MISSING`;
+`/jobs-status` names it and says how to bring it back.
 
-A run never asks. If a tool the agent asks about is called inside a job's session, the plugin denies it with
-`JOBS_UNATTENDED` and the run carries on, so a job can never sit waiting for an approval nobody is there to give. The plugin has **two** `evaluate` hooks: this one, on a session it created for a run, and the tools RPC's, on one of its own script calls in flight. Neither ever turns a deny into anything, and neither touches a session it did not create.
+**What runs unattended.** A run never asks: an `ask` with nobody present becomes a `deny`. With `access: "all"`, a
+script job is approved without a prompt, and with `ask-changes` an all-read script is; the digest, the resolved tools
+and the declared files are recorded in each case, so the audit shows what was approved and when. The plugin has **two**
+`evaluate` hooks: one on a session it created for a run, and the tools RPC's on one of its own script calls in flight.
+Neither ever turns a deny into anything, and neither touches a session it did not create.
 
 A job may only narrow its agent's rules: its `allow` list holds deny rules, never a grant. A job that asks for one is
 refused with `JOBS_ALLOW_WIDENS`.
-
 [Configuration](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/configuration.md#permissions) explains
 each rule and the recipes that add one action for one agent.
 
@@ -210,6 +220,9 @@ Run `/jobs-status` first. Its last line is the next step.
 | `JOBS_SCRIPT_FILE_CONFLICT` | A declared write target changed on disk after the run read it. Nothing is written; let the next run read it. |
 | `JOBS_SCRIPT_FILE_MODE` | The script wrote a file declared `read`. Declare it `write` or `readwrite`, then approve again. |
 | `JOBS_SCRIPT_BODY_IGNORED` | A script job file has a non-empty markdown body, which a script has no prompt to use. Remove the body or move it into the code. |
+| `JOBS_SCRIPT_LIMIT` | The script hit one of its limits: calls, memory, output or wall clock. Raise `maxCalls`, `maxMemoryMb`, `maxOutputBytes` or the policy timeout, or make the script smaller. |
+| `JOBS_SCRIPT_FAILED` | The script threw, or a call failed. Read the run record's error, fix the script or its tool, then approve it again if the code changed. |
+| `JOBS_SCRIPT_INTERRUPTED` | The run was interrupted (the kill switch, a shutdown, or a replaced leader). Run it again with `jobs_run_now`, or wait for its next slot. |
 | `JOBS_SCRIPT_HOST_TOOL` | A `host:` entry names OpenCode's own shell, file, network or task tool. A script reaches MCP servers and plugin tools only. Remove it. |
 | `JOBS_SCRIPT_FAMILY_TOOL` | A `host:` entry names a tool a loaded plugin serves through its tools RPC. Use `<plugin id>.<method>`, so its shaping and budgets apply. |
 | `JOBS_SCRIPT_DENIED` | The job's agent denies a tool the script's manifest names. A session allow beats an agent deny, so the script is refused rather than granted it. Remove the deny rule for that tool, or point the job at an agent that allows it. |

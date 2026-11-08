@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test"
 import { quickjsWasm, runScript, type ScriptBridge } from "../../src/jobs/script-runtime.js"
 import { SCRIPT_DEFAULTS, type ScriptLimits } from "../../src/jobs/script.js"
 
-const run = (code: string, options: { bridge?: ScriptBridge; allowed?: string[]; limits?: Partial<ScriptLimits>; timeoutMs?: number; signal?: AbortSignal; files?: { values: Record<string, unknown>; writable: ReadonlySet<string> } } = {}) =>
+const run = (code: string, options: { bridge?: ScriptBridge; allowed?: string[]; limits?: Partial<ScriptLimits>; timeoutMs?: number; signal?: AbortSignal; files?: { values: Record<string, unknown>; writable: ReadonlySet<string> }; classes?: ReadonlyMap<string, string> } = {}) =>
   runScript({
     code,
     allowed: new Set(options.allowed ?? ["host:mem"]),
@@ -14,6 +14,7 @@ const run = (code: string, options: { bridge?: ScriptBridge; allowed?: string[];
     now: () => Date.now(),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     ...(options.files === undefined ? {} : { files: options.files }),
+    ...(options.classes === undefined ? {} : { classes: options.classes }),
   })
 
 describe("the script runtime", () => {
@@ -41,6 +42,18 @@ describe("the script runtime", () => {
     expect(result.error).toContain("Next step:")
     expect(result.limits.interrupted).toBe(true)
     expect(result.limits.timedOut).toBe(false)
+  })
+
+  test("a call refused for external_directory carries the code and an allow hint (GAP-17)", async () => {
+    const result = await run(`return await tools.host.mem({})`, {
+      bridge: async () => {
+        throw new Error("permission.rejected: external_directory /srv/out")
+      },
+      classes: new Map([["host:mem", "unclassified"]]),
+    })
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain("`external_directory` allow")
+    expect(result.calls[0]).toMatchObject({ method: "host:mem", class: "unclassified", outcome: "error", code: "permission.rejected" })
   })
 
   test("has the wasm it ships, and gives the guest no host capability", async () => {

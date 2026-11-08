@@ -7,9 +7,11 @@
  */
 import type { Plugin } from "@opencode/plugin"
 import { jobsError } from "../constants.js"
+import { reasonOf } from "../redact.js"
 import { parseScriptDefinition, type Job } from "./model.js"
 import { forgetJobSession, rememberJobSession, SELF_DENIES } from "./safety.js"
-import { denied, limitsOf, scriptSessionRules, type Script, type ScriptApproval, type ScriptCall, type ScriptLimitFlags } from "./script.js"
+import { denied, limitsOf, scriptSessionRules, worstClass, type Script, type ScriptApproval, type ScriptCall, type ScriptLimitFlags } from "./script.js"
+import type { Access } from "../options.js"
 import { createBridge } from "./script-bridge.js"
 import { commitFiles, resolveScriptFiles, snapshotFiles } from "./script-files.js"
 import type { ScriptGate } from "./script-gate.js"
@@ -34,6 +36,8 @@ export interface OneOffInput {
   readonly location: string
   /** Extra roots a declared file may live in. */
   readonly roots?: readonly string[]
+  /** The family access policy (R18). */
+  readonly access?: Access
   readonly job: Pick<Job, "id" | "name">
 }
 
@@ -57,6 +61,7 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
   const script: Script = parseScriptDefinition({
     code: asked["code"],
     uses: asked["uses"],
+    ...(asked["files"] === undefined ? {} : { files: asked["files"] }),
     ...(asked["timeoutMs"] === undefined ? {} : { timeoutMs: asked["timeoutMs"] }),
     ...(asked["limits"] === undefined ? {} : { limits: asked["limits"] }),
   })
@@ -68,14 +73,27 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
     const names = bad.map((tool) => `${tool.method} (${tool.action})`).join(", ")
     throw jobsError("JOBS_SCRIPT_DENIED", `The script uses tools its agent denies: ${names}.`, `Remove the deny rule for those tools, or name an agent that allows them. A script cannot be granted a tool its agent denies.`)
   }
-  const approval = await input.gate.approve({
-    sessionID: input.sessionID,
-    agent: input.callerAgent,
-    script,
-    resolved,
-    files: resolvedFiles,
-    ...(input.source === undefined ? {} : { source: input.source }),
-  })
+  const access = input.access ?? "all"
+  const worst = worstClass(resolved, resolvedFiles)
+  if (access === "read-only" && worst === "change") {
+    throw jobsError("JOBS_SCRIPT_DENIED", `The script changes something, and the plugin's access option is "read-only".`, `Set the plugin option "access" to "ask-changes" or "all".`)
+  }
+  const approved = access === "all" || worst === "read" ? "auto" : "prompt"
+  let approval: ScriptApproval
+  try {
+    approval = await input.gate.approve({
+      sessionID: input.sessionID,
+      agent: input.callerAgent,
+      script,
+      resolved,
+      files: resolvedFiles,
+      approved,
+      ...(input.source === undefined ? {} : { source: input.source }),
+    })
+  } catch (error) {
+    if (approved === "auto") throw error
+    throw jobsError("JOBS_UNCHECKED", `The script changes something and needs a person's approval, and no one answered (${reasonOf(error)}).`, `Approve it in the OpenCode TUI, or set the plugin option "access" to "all" for automatic approval.`)
+  }
   const snapshots = await snapshotFiles(resolvedFiles)
   const controller = new AbortController()
   const created = await input.session.create({
@@ -100,6 +118,7 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
         values: Object.fromEntries(snapshots.filter((snapshot) => snapshot.file.mode !== "write").map((snapshot) => [snapshot.file.name, snapshot.value] as const)),
         writable: new Set(resolvedFiles.filter((file) => file.mode !== "read").map((file) => file.name)),
       },
+      classes: new Map(resolved.map((tool) => [tool.method, tool.class] as const)),
     })
     const committed = outcome.ok ? await commitFiles(snapshots, outcome.writes) : []
     const files = snapshots.map((snapshot) => {

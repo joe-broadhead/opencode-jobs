@@ -95,7 +95,7 @@ describe("creating a script job", () => {
 })
 
 describe("running a script job", () => {
-  function setup(options: { resolved?: readonly ResolvedTool[]; approval?: ScriptApproval | null; script?: Script; agentRules?: readonly { action: string; resource: string; effect: "allow" | "deny" | "ask" }[] } = {}) {
+  function setup(options: { resolved?: readonly ResolvedTool[]; approval?: ScriptApproval | null; script?: Script; agentRules?: readonly { action: string; resource: string; effect: "allow" | "deny" | "ask" }[]; failSecond?: boolean } = {}) {
     const storage = memoryStorage()
     const session = sessionFake()
     const script = options.script ?? SCRIPT
@@ -108,6 +108,7 @@ describe("running a script job", () => {
       options: { permission: "mem" },
       execute: async (value: unknown) => {
         executed.push(value)
+        if (options.failSecond === true && executed.length === 2) throw new Error("JOBS_TOOL_FAILED: the second call failed.")
         return { output: { remembered: value } }
       },
     }
@@ -162,8 +163,23 @@ describe("running a script job", () => {
     expect(record).toMatchObject({ status: "succeeded", sessionOwned: true, script: { sourceHash: sourceHash(SCRIPT.code), manifestDigest: manifestDigest(SCRIPT.uses), uses: ["host:mem"] } })
     expect(record.result).toEqual({ ok: true, value: { remembered: { content: "x" } } })
     expect(record.calls).toHaveLength(1)
-    expect(Object.keys(record.calls![0]!).sort()).toEqual(["at", "bytes", "method", "ms", "outcome"])
+    // GAP-19: the row carries the method's class and the size, never an input or a result.
+    expect(Object.keys(record.calls![0]!).sort()).toEqual(["at", "bytes", "class", "method", "ms", "outcome"])
     expect(record.calls![0]).toMatchObject({ method: "host:mem", outcome: "ok" })
+  })
+
+  test("a run that fails on its second call names the call and its code (GAP-19)", async () => {
+    const two: Script = { code: 'await tools.host.mem({ content: "a" }); await tools.host.mem({ content: "b" }); return 1', uses: ["host:mem"] }
+    const setup1 = setup({ script: two, failSecond: true })
+    expect((await setup1.run()).status).toBe("failed")
+    const record = (await getRun(setup1.storage.storage, "memory", new Date(START).toISOString()))!
+    expect(record.calls).toHaveLength(2)
+    expect(record.calls![0]).toMatchObject({ method: "host:mem", class: "unclassified", outcome: "ok" })
+    expect(record.calls![1]).toMatchObject({ method: "host:mem", class: "unclassified", outcome: "error", code: "JOBS_TOOL_FAILED" })
+    // The failed call's error is the code and one redacted line; no payload is kept.
+    expect(record.error).toStartWith("JOBS_SCRIPT_FAILED: ")
+    expect(record.error).toContain("the second call failed")
+    expect(JSON.stringify(record.calls)).not.toContain("content")
   })
 
   test("skips a slot when the approval is missing, stale or a tool is now denied", async () => {

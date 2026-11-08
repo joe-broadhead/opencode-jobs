@@ -27,6 +27,8 @@ export interface ScriptRunInput {
   readonly bridge: ScriptBridge
   /** The declared files: the readable values the guest sees, and the names it may write. */
   readonly files?: { readonly values: Readonly<Record<string, unknown>>; readonly writable: ReadonlySet<string> }
+  /** Each manifest method's class, for the per-call rows. */
+  readonly classes?: ReadonlyMap<string, string>
   /** The cleanup signal: aborts the VM and any call in flight. */
   readonly signal?: AbortSignal
   /** The clock the deadline and call times read: injected, like every other time in the plugin. */
@@ -84,11 +86,16 @@ const result = (value: unknown): string => JSON.stringify(value === undefined ? 
 /** A row written at dispatch and amended when the call settles. */
 interface MutableCall {
   readonly method: string
+  readonly class?: string
   readonly at: number
   ms: number
   outcome: "ok" | "refused" | "error" | "aborted"
   bytes: number
+  code?: string
 }
+
+/** The first `CODE:` in an error, for the row: the code, never the message around it. */
+const codeOf = (message: string): string | undefined => /\b(JOBS_[A-Z_]+|[A-Z][A-Z_]{2,}|[a-z]+\.[a-z_]+):/.exec(message)?.[1]
 
 export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult> {
   const wasm = quickjsWasm()
@@ -143,13 +150,13 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
       if (dispatched >= input.limits.maxCalls) {
         flags.callLimit = true
         interrupting = true
-        calls.push({ method, at: started, ms: 0, outcome: "refused", bytes: 0 })
+        calls.push({ method, at: started, ms: 0, outcome: "refused", bytes: 0, class: input.classes?.get(method), code: "JOBS_SCRIPT_LIMIT" })
         deferred.reject(vm.newError("JOBS_SCRIPT_LIMIT: the script used more tool calls than the job allows."))
         vm.executePendingJobs()
         return deferred.handle
       }
       dispatched += 1
-      const row: MutableCall = { method, at: started, ms: 0, outcome: "ok", bytes: 0 }
+      const row: MutableCall = { method, at: started, ms: 0, outcome: "ok", bytes: 0, ...(input.classes?.get(method) === undefined ? {} : { class: input.classes.get(method) }) }
       calls.push(row)
       void (async () => {
         const settle = (error?: Error) => {
@@ -164,6 +171,7 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
         }
         if (!input.allowed.has(method)) {
           row.outcome = "refused"
+          row.code = "JOBS_SCRIPT_UNKNOWN_TOOL"
           settle(new Error(`JOBS_SCRIPT_UNKNOWN_TOOL: ${method} is not in the job's manifest.`))
           return
         }
@@ -190,7 +198,9 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
           settle()
         } catch (error) {
           row.outcome = controller.signal.aborted ? "aborted" : "error"
-          settle(new Error(short(error)))
+          const message = short(error)
+          row.code = codeOf(message)
+          settle(new Error(message))
         }
       })()
       return deferred.handle
@@ -229,6 +239,7 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
       // The host tearing a call down (a location reload) says "All fibers interrupted"; that is an abort, not a fault.
       if (/all fibers interrupted|aborted/i.test(message)) flags.interrupted = true
       if (controller.signal.aborted && !deadlineHit && !flags.callLimit && !flags.outputTruncated) flags.interrupted = true
+      const external = /external_directory/.test(message)
       const coded = flags.memoryExceeded
         ? "JOBS_SCRIPT_LIMIT: the script ran out of memory. Next step: Raise the job's memory limit, or make the script smaller."
         : flags.callLimit
@@ -239,7 +250,9 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
               ? "JOBS_SCRIPT_LIMIT: the script ran longer than the job allows. Next step: Raise the job's policy timeout, or give the script a shorter timeoutMs."
               : flags.interrupted
                 ? "JOBS_SCRIPT_INTERRUPTED: the run was interrupted. Next step: Run it again with jobs_run_now, or wait for its next slot."
-                : "JOBS_SCRIPT_FAILED: the script failed. Next step: Read the script's error, fix the script or its tools, then approve it again if it changed."
+                : external
+                  ? "JOBS_SCRIPT_FAILED: a call was refused because its path is outside the agent's project. Next step: Add an `external_directory` allow for that path to the agent's permissions, and keep the declared file inside `scriptFilesRoots`."
+                  : "JOBS_SCRIPT_FAILED: the script failed. Next step: Read the script's error, fix the script or its tools, then approve it again if it changed."
       return { ok: false, error: `${coded} (${message})`, calls: [...calls], limits: flags, outputTruncated: flags.outputTruncated, writes }
     }
   } finally {

@@ -5,7 +5,7 @@ describe("parseOptions", () => {
   test("defaults to an enabled plugin on a tested host, in the server's time zone", () => {
     expect(parseOptions(undefined)).toEqual(DEFAULT_OPTIONS)
     expect(parseOptions({})).toEqual(DEFAULT_OPTIONS)
-    expect(DEFAULT_OPTIONS).toEqual({ enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2, keepAliveMinutes: 20, scriptFilesRoots: [] })
+    expect(DEFAULT_OPTIONS).toEqual({ enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2, keepAliveMinutes: 20, scriptFilesRoots: [], access: "all" })
   })
 
   test("accepts the script file roots, and refuses a relative or too many", () => {
@@ -14,14 +14,19 @@ describe("parseOptions", () => {
     expect(parseOptions({ scriptFilesRoots: [] }).scriptFilesRoots).toEqual([])
   })
 
+  test("accepts the three access values and refuses anything else", () => {
+    for (const access of ["all", "ask-changes", "read-only"] as const) expect(parseOptions({ access }).access).toBe(access)
+    expect(() => parseOptions({ access: "none" })).toThrow('The option "access"')
+  })
+
   test("accepts every documented value", () => {
-    expect(parseOptions({ enabled: false, allowUntestedHost: true })).toEqual({ enabled: false, allowUntestedHost: true, timezone: null, concurrency: 2, keepAliveMinutes: 20, scriptFilesRoots: [] })
-    expect(parseOptions({ enabled: false, allowUntestedHost: false, timezone: "Europe/London", concurrency: 4, keepAliveMinutes: 5, scriptFilesRoots: [] })).toEqual({ enabled: false, allowUntestedHost: false, timezone: "Europe/London", concurrency: 4, keepAliveMinutes: 5, scriptFilesRoots: [] })
+    expect(parseOptions({ enabled: false, allowUntestedHost: true })).toEqual({ enabled: false, allowUntestedHost: true, timezone: null, concurrency: 2, keepAliveMinutes: 20, scriptFilesRoots: [], access: "all" })
+    expect(parseOptions({ enabled: false, allowUntestedHost: false, timezone: "Europe/London", concurrency: 4, keepAliveMinutes: 5, scriptFilesRoots: [], access: "all" })).toEqual({ enabled: false, allowUntestedHost: false, timezone: "Europe/London", concurrency: 4, keepAliveMinutes: 5, scriptFilesRoots: [], access: "all" })
     expect(parseOptions({ timezone: " UTC " }).timezone).toBe("UTC")
   })
 
   test.each([
-    [{ maxRunsPerJob: 2 }, 'Unknown option "maxRunsPerJob". Accepted options: "enabled", "allowUntestedHost", "timezone", "concurrency", "keepAliveMinutes", "scriptFilesRoots"'],
+    [{ maxRunsPerJob: 2 }, 'Unknown option "maxRunsPerJob". Accepted options: "enabled", "allowUntestedHost", "timezone", "concurrency", "keepAliveMinutes", "scriptFilesRoots", "access"'],
     [{ keepAliveMinutes: 0 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 59 (20 by default), found 0. Keep it below experimental.location_idle_timeout'],
     [{ keepAliveMinutes: 60 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 59 (20 by default), found 60. Keep it below experimental.location_idle_timeout'],
     [{ keepAliveMinutes: 1.5 }, 'The option "keepAliveMinutes" must be a whole number of minutes from 1 to 59 (20 by default), found 1.5. Keep it below experimental.location_idle_timeout'],

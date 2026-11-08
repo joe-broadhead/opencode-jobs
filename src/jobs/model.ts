@@ -173,7 +173,8 @@ function object(value: unknown, field: string, code: JobCode = "JOBS_INVALID_JOB
 function keys(input: Record<string, unknown>, field: string, allowed: readonly string[], code: JobCode = "JOBS_INVALID_JOB", next = `Remove the field, or check docs/configuration.md for the fields a job has.`) {
   const unknown = Object.keys(input).filter((key) => !allowed.includes(key))
   if (unknown.length) {
-    fail(code, field, `${label(field)} has ${unknown.length === 1 ? "an unknown field" : "unknown fields"} ${unknown.map((key) => JSON.stringify(key)).join(", ")}; accepted fields are ${allowed.map((key) => JSON.stringify(key)).join(", ")}.`, next)
+    // Name the first unknown key's own path, so a file's error points at the offending line, not its parent.
+    fail(code, `${field}.${unknown[0]!}`, `${label(field)} has ${unknown.length === 1 ? "an unknown field" : "unknown fields"} ${unknown.map((key) => JSON.stringify(key)).join(", ")}; accepted fields are ${allowed.map((key) => JSON.stringify(key)).join(", ")}.`, next)
   }
 }
 
@@ -386,7 +387,7 @@ function parseSchedule(value: unknown, context: JobContext): JobSchedule {
     fail("JOBS_INVALID_SCHEDULE", "schedule", `${label("schedule")} must have exactly one of "cron", "every" or "at", found ${present.length ? present.join(" and ") : "none"}.`, SCHEDULE_NEXT)
   }
   const kind = present[0]!
-  keys(input, "schedule", kind === "every" ? ["every", "anchor"] : [kind, "tz"], "JOBS_INVALID_SCHEDULE", SCHEDULE_NEXT)
+  keys(input, "schedule", kind === "every" ? ["every", "anchor", "tz"] : [kind, "tz"], "JOBS_INVALID_SCHEDULE", SCHEDULE_NEXT)
 
   if (kind === "cron") {
     const cron = string(input.cron, "schedule.cron", "JOBS_INVALID_SCHEDULE", SCHEDULE_NEXT).trim().split(/\s+/).join(" ")
@@ -399,8 +400,11 @@ function parseSchedule(value: unknown, context: JobContext): JobSchedule {
   if (kind === "every") {
     const everyMs = duration(input.every, "schedule.every", "JOBS_INVALID_SCHEDULE", SCHEDULE_NEXT)
     if (everyMs < MIN_INTERVAL) fail("JOBS_INVALID_SCHEDULE", "schedule.every", `"schedule.every" must be at least one minute, found ${JSON.stringify(input.every)}.`, SCHEDULE_NEXT)
+    // A `tz` beside `every` anchors the interval in that zone: an `anchor` local time is read there, and the interval
+    // itself is fixed. Without one, the anchor is the job's creation instant.
+    const tz = input.tz === undefined ? context.timezone : zone(input.tz, "schedule.tz", context)
     // A file's mtime is a float; a slot is a whole millisecond, so the anchor is floored like every other time here.
-    const anchorMs = input.anchor === undefined ? Math.floor(context.createdAt ?? context.now) : parseInstant(input.anchor, "schedule.anchor", context.timezone, "JOBS_INVALID_SCHEDULE")
+    const anchorMs = input.anchor === undefined ? Math.floor(context.createdAt ?? context.now) : parseInstant(input.anchor, "schedule.anchor", tz, "JOBS_INVALID_SCHEDULE")
     return { kind, everyMs, anchorMs }
   }
 
@@ -451,7 +455,7 @@ function parseScript(value: unknown): Script {
   if (input.uses.length > 200) fail("JOBS_INVALID_JOB", "action.script.uses", `"action.script.uses" has ${input.uses.length} entries; the limit is 200.`, `Name only the tools the script calls.`)
   const uses = input.uses.map((entry, index) => {
     if (typeof entry !== "string" || !METHOD.test(entry)) {
-      fail("JOBS_INVALID_JOB", `action.script.uses.${index}`, `The manifest entry ${describe(entry)} is not a method.`, `Write it as "<plugin id>.<method>", such as "x.posts.get_users_bookmarks", or "host:<tool id>", such as "host:mem_mem_remember".`)
+      fail("JOBS_INVALID_JOB", `action.script.uses.${index}`, `The manifest entry ${describe(entry)} is not a method.`, `Write it as "<plugin id>.<method>", such as "x.posts.get_users_bookmarks", or "host:<tool id>", such as "host:mem_remember".`)
     }
     return entry
   })

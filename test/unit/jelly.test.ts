@@ -54,11 +54,11 @@ describe("the jelly declaration", () => {
       expect(DESCRIPTIONS[name]).toBeString()
     }
     for (const name of PAUSE) expect(tools.find((tool) => tool.permission === `jobs_${name}`)!.effect).toBe("allow")
-    // A write is never read-only and never allowed by the default rules: it asks.
+    // A write is never read-only, and the default access (`all`) allows it like every other plugin's tools.
     for (const name of Object.keys(SCHEMAS) as ToolName[]) {
       if (READ.includes(name) || PAUSE.includes(name)) continue
       const entry = tools.find((tool) => tool.permission === toolId(name))!
-      expect({ name, effect: entry.effect, readOnly: entry.readOnly }).toEqual({ name, effect: "ask", readOnly: false })
+      expect({ name, effect: entry.effect, readOnly: entry.readOnly }).toEqual({ name, effect: "allow", readOnly: false })
     }
   })
 

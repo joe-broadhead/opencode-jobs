@@ -126,7 +126,9 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
   // the leader's own location is what an omitted location resolves, and a host between reloads resolves it more reliably.
   const target = job.target.directory
   const refusal = await guardAgent(input.agents, job.agent, target === undefined || target === input.location ? undefined : target, input.location)
-  if (refusal !== undefined) {
+  // R18: an unguarded agent is a status warning; the job runs under its rules and an ask becomes a deny. A missing or
+  // unreadable agent still fails closed.
+  if (refusal !== undefined && refusal.code !== "JOBS_AGENT_UNGUARDED") {
     const record = await putRun(storage, {
       job: job.id,
       slot: key,
@@ -510,9 +512,13 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
         values: Object.fromEntries(snapshots.filter((snapshot) => snapshot.file.mode !== "write").map((snapshot) => [snapshot.file.name, snapshot.value] as const)),
         writable: new Set(resolvedFiles.filter((file) => file.mode !== "read").map((file) => file.name)),
       },
+      classes: new Map(resolved.map((tool) => [tool.method, tool.class] as const)),
     })
     const interrupted = stopped || input.signal?.aborted === true || outcome.limits.interrupted
     const status: RunStatus = outcome.ok ? "succeeded" : interrupted ? "interrupted" : outcome.limits.timedOut ? "timed_out" : "failed"
+    // GAP-28: a run record names its session and the host's cost, for a script run as for a prompt run.
+    const info = await input.session.get({ sessionID }).catch(() => undefined)
+    const cost = typeof info?.cost === "number" ? { cost: info.cost } : {}
     let fileRecords = recordsOf(snapshots)
     if (outcome.ok) {
       try {
@@ -525,6 +531,7 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
           calls: outcome.calls,
           limits: outcome.limits,
           files: fileRecords,
+          ...cost,
           error: reason(error),
         })
       }
@@ -536,6 +543,7 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
       calls: outcome.calls,
       limits: outcome.limits,
       files: fileRecords,
+      ...cost,
       ...(outcome.ok || outcome.error === undefined ? {} : { error: outcome.error }),
     })
   } catch (error) {

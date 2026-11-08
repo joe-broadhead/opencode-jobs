@@ -33,7 +33,7 @@ async function report() {
 describe("status and a revoked script", () => {
   test("names the job, says a tool is now denied, and gives the approve step", async () => {
     const status = await (await report()).status()
-    expect(status.scriptJobs).toEqual({ approved: 0, unapproved: 1, names: ["bookmarks"], revoked: ["bookmarks"] })
+    expect(status.scriptJobs).toEqual({ approved: 0, unapproved: 1, names: ["bookmarks"], revoked: ["bookmarks"], automatic: 0 })
     expect(status.nextStep).toContain("/jobs-approve bookmarks")
     // The problem row names the job, the method and the action the agent now denies (D1).
     expect(status.problems[0]).toContain("JOBS_SCRIPT_REVOKED")
@@ -48,6 +48,6 @@ describe("status and a revoked script", () => {
     await putRun(storage.storage, { job: job.id, slot: new Date(NOW + 1).toISOString(), status: "succeeded", late: false, attempt: 1 })
     await putRun(storage.storage, { job: job.id, slot: new Date(NOW).toISOString(), status: "skipped", reason: "revoked", late: false, attempt: 1 })
     const report = createReport({ storage: storage.storage, location: "/nowhere", timezone: "UTC", clock: clock.clock, agent: agentsFake(), host: HOST, enabled: true, keepAliveMinutes: 20 })
-    expect((await report.status()).scriptJobs).toEqual({ approved: 1, unapproved: 0, names: [], revoked: [] })
+    expect((await report.status()).scriptJobs).toEqual({ approved: 1, unapproved: 0, names: [], revoked: [], automatic: 0 })
   })
 })

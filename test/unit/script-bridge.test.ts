@@ -46,4 +46,13 @@ describe("the script bridge", () => {
     await expect(setup1.bridge("x.posts.read", {}, new AbortController().signal)).rejects.toThrow("JOBS_SCRIPT_REVOKED")
     expect(setup1.rpcCalls).toHaveLength(1)
   })
+
+  test("a dotted attempt at a hyphenated plugin id names the bracket accessor (GAP-18)", async () => {
+    const hyphenated: ResolvedTool = { method: "google-workspace.gws.read", action: "gws_read", class: "read", kind: "family", effect: "allow" }
+    const setup1 = setup(hyphenated)
+    await expect(setup1.bridge("google.workspace.gws.read", {}, new AbortController().signal)).rejects.toThrow(
+      'tools["google-workspace"].gws.read',
+    )
+    await expect(setup1.bridge("google.workspace.gws.read", {}, new AbortController().signal)).rejects.toThrow("JOBS_SCRIPT_UNKNOWN_TOOL")
+  })
 })

@@ -26,9 +26,9 @@ service, so there is no vendor logo to fetch and the package carries no vendor m
 
 ## Tools
 
-14 tools are declared (4 read-only). Ten ask: `jobs.create`, `jobs.update`, `jobs.delete`,
-`jobs.run_now`, `jobs.resume`, `jobs.extend`, `jobs.approve` and `jobs.run_script`; `jobs.pause` and
-`jobs.pause_all` are allowed because pausing only stops work. `jelly.tools` lists each with the permission
+14 tools are declared (4 read-only). With the default access (`all`) every one is allowed, like every other
+plugin's tools; `jobs.pause` and `jobs.pause_all` only stop work, and the rest can change a job. The `access` option
+(`all`, `ask-changes`, `read-only`) changes what the generated block allows. `jelly.tools` lists each with the permission
 action it checks, whether it asks and whether it is read-only:
 
 | Tool | Permission | Effect | Read-only |
@@ -39,14 +39,14 @@ action it checks, whether it asks and whether it is read-only:
 | `jobs.history` | `jobs_history` | allow | yes |
 | `jobs.pause` | `jobs_pause` | allow | no |
 | `jobs.pause_all` | `jobs_pause_all` | allow | no |
-| `jobs.create` | `jobs_create` | ask | no |
-| `jobs.update` | `jobs_update` | ask | no |
-| `jobs.delete` | `jobs_delete` | ask | no |
-| `jobs.run_now` | `jobs_run_now` | ask | no |
-| `jobs.resume` | `jobs_resume` | ask | no |
-| `jobs.extend` | `jobs_extend` | ask | no |
-| `jobs.approve` | `jobs_approve` | ask | no |
-| `jobs.run_script` | `jobs_run_script` | ask | no |
+| `jobs.create` | `jobs_create` | allow | no |
+| `jobs.update` | `jobs_update` | allow | no |
+| `jobs.delete` | `jobs_delete` | allow | no |
+| `jobs.run_now` | `jobs_run_now` | allow | no |
+| `jobs.resume` | `jobs_resume` | allow | no |
+| `jobs.extend` | `jobs_extend` | allow | no |
+| `jobs.approve` | `jobs_approve` | allow | no |
+| `jobs.run_script` | `jobs_run_script` | allow | no |
 
 The plugin inserts its default rules into every agent that has a base allow, so in Jelly these
 effects hold without a person pasting anything: reads and pauses run, and every change asks.

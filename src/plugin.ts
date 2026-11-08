@@ -84,6 +84,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         ready,
         scripts,
         scriptFilesRoots: options.scriptFilesRoots,
+        access: options.access,
       }
       const tools: ToolInput = {
         ...actions,
@@ -104,6 +105,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
             clock,
             location: ctx.location.directory,
             roots: options.scriptFilesRoots,
+            access: options.access,
             job: { id: "script", name: "Script" },
           }),
       }
@@ -126,7 +128,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         await registerSafety(ctx.permission),
         // Every agent gets the default rules after its base allow: the jobs tools ask, the reads and pauses are allowed.
         await ctx.agent.transform((editor) => {
-          for (const { id } of editor.list()) editor.update(id, (info) => insertDefaultRules(info.permissions))
+          for (const { id } of editor.list()) editor.update(id, (info) => insertDefaultRules(info.permissions, options.access))
         }).then((registration) => registration.dispose),
         await ctx.tool.transform(toolTransform(tools)).then((registration) => registration.dispose),
       ]

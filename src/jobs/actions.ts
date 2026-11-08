@@ -8,6 +8,7 @@
  * permission: the tool's own action asks, and the prompt is the yes.
  */
 import { jobsError } from "../constants.js"
+import { reasonOf } from "../redact.js"
 import { guardAgent, type AgentRefusal } from "../host/permissions.js"
 import type { Plugin } from "@opencode/plugin"
 import type { Clock } from "./clock.js"
@@ -15,7 +16,8 @@ import { nextRun } from "./cron.js"
 import { DEFAULTS, nextId, parseJob, serverTimezone, updateJob, type Job } from "./model.js"
 import { stopReason } from "./policy.js"
 import type { Source } from "./report.js"
-import { approvalMatches, denied, type ScriptApproval } from "./script.js"
+import { approvalMatches, denied, worstClass, type ScriptApproval } from "./script.js"
+import type { Access } from "../options.js"
 import { resolveScriptFiles } from "./script-files.js"
 import type { ScriptGate } from "./script-gate.js"
 import { getRun, putJob, putState, readState, removeJob, setPauseAll, slotISO, updateState, type PauseRecord } from "./store.js"
@@ -36,6 +38,8 @@ export interface ActionInput {
   readonly scripts?: ScriptGate
   /** Extra roots a script's declared files may live in, from the `scriptFilesRoots` option. */
   readonly scriptFilesRoots?: readonly string[]
+  /** The family access policy (`all`, `ask-changes`, `read-only`), R18. */
+  readonly access?: Access
 }
 
 /** The tool call an approval is made in, so the host's prompt carries its own source. */
@@ -119,17 +123,39 @@ async function scriptApproval(input: ActionInput, job: Job, call: ApprovalCall |
     )
   }
   const files = await resolveScriptFiles(job.action.script.files, elsewhere(job, input) ?? input.location, input.scriptFilesRoots ?? [])
+  const access = input.access ?? "all"
+  const worst = worstClass(resolved, files)
+  if (access === "read-only" && worst === "change") {
+    throw jobsError(
+      "JOBS_SCRIPT_DENIED",
+      `The script ${JSON.stringify(job.id)} changes something, and the plugin's access option is "read-only".`,
+      `Set the plugin option "access" to "ask-changes" or "all", then approve the script again. A read-only access allows only all-read scripts and no file writes.`,
+    )
+  }
   // An update that leaves the source, the manifest and the resolution unchanged keeps the approval it already had.
   if (previous !== undefined && approvalMatches(previous, job.action.script, resolved, files)) return previous
-  return input.scripts.approve({
-    sessionID: call.sessionID,
-    agent: call.agent,
-    script: job.action.script,
-    resolved,
-    files,
-    job: job.id,
-    ...(call.messageID === undefined || call.id === undefined ? {} : { source: { messageID: call.messageID, id: call.id } }),
-  })
+  // R18/GAP-21: `all` approves automatically; `ask-changes` auto-approves an all-read script and asks for a change.
+  const approved = access === "all" || worst === "read" ? "auto" : "prompt"
+  try {
+    return await input.scripts.approve({
+      sessionID: call.sessionID,
+      agent: call.agent,
+      script: job.action.script,
+      resolved,
+      files,
+      job: job.id,
+      approved,
+      ...(call.messageID === undefined || call.id === undefined ? {} : { source: { messageID: call.messageID, id: call.id } }),
+    })
+  } catch (error) {
+    if (approved === "auto") throw error
+    // GAP-20: a headless create has no one to answer; the RPC gets a coded refusal with the way to approve it, never a 500.
+    throw jobsError(
+      "JOBS_UNCHECKED",
+      `The script ${JSON.stringify(job.id)} changes something and needs a person's approval, and no one answered (${reasonOf(error)}).`,
+      `Approve it in the OpenCode TUI (or with /jobs-approve ${job.id}), or set the plugin option "access" to "all" for automatic approval.`,
+    )
+  }
 }
 
 /** Creates a job from the model's or a person's input: validated, guarded (or approved), and stored. */
@@ -141,7 +167,8 @@ export async function createJob(input: ActionInput, definition: CreateInput, cal
   if (job.action.type === "script") approval = await scriptApproval(input, job, call)
   else {
     const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input), input.location)
-    if (refusal !== undefined) refuseAgent(refusal)
+    // R18: an unguarded agent is a status warning; a missing or unreadable one is still refused.
+    if (refusal !== undefined && refusal.code !== "JOBS_AGENT_UNGUARDED") refuseAgent(refusal)
   }
   await putJob(input.storage, job)
   const state = await readState(input.storage, job.id)
@@ -165,7 +192,8 @@ export async function changeJob(input: ActionInput, id: string, patch: CreateInp
   if (job.action.type === "script") approval = await scriptApproval(input, job, call, previous.approval)
   else {
     const refusal = await guardAgent(input.agent, job.agent, elsewhere(job, input), input.location)
-    if (refusal !== undefined) refuseAgent(refusal)
+    // R18: an unguarded agent is a status warning; a missing or unreadable one is still refused.
+    if (refusal !== undefined && refusal.code !== "JOBS_AGENT_UNGUARDED") refuseAgent(refusal)
   }
   await putJob(input.storage, job)
   // A changed schedule starts from now: the old slot belonged to the old schedule.

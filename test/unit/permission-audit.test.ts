@@ -6,7 +6,7 @@ import type { Plugin } from "@opencode/plugin"
 import { createReport } from "../../src/jobs/report.js"
 import { parseJob } from "../../src/jobs/model.js"
 import { runJobTool, SCHEMAS, toolId, toolTransform, type ToolInput, type ToolName } from "../../src/jobs/tools.js"
-import { DEFAULT_RULES, evaluate as evaluateRule, type Rule } from "../../src/host/permissions.js"
+import { defaultRules, evaluate as evaluateRule, type Rule } from "../../src/host/permissions.js"
 import { agentsFake, memoryStorage, testClock } from "./fake.js"
 
 const NOW = Date.UTC(2026, 11, 6, 9, 0, 0)
@@ -16,7 +16,8 @@ const HOST = { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }
 const OPEN = ["jobs_pause", "jobs_pause_all"]
 
 /** What the default rules do with one tool's action, from the block the plugin inserts. */
-const defaultEffect = (action: string): Rule["effect"] => evaluateRule(DEFAULT_RULES, action)
+const ASK = defaultRules("ask-changes")
+const defaultEffect = (action: string): Rule["effect"] => evaluateRule(ASK, action)
 
 /** The default rule of a tool: `ask` means it must assert, `allow` means it needs to prove it does not act. */
 const askTools = (): ToolName[] => (Object.keys(SCHEMAS) as ToolName[]).filter((name) => !OPEN.includes(toolId(name)) && defaultEffect(toolId(name)) === "ask")
@@ -104,6 +105,18 @@ describe("every tool that changes something asserts before it acts", () => {
       else expect({ action, effect: defaultEffect(action) }).toEqual({ action, effect: "ask" })
     }
     expect(askTools()).toEqual(["create", "update", "delete", "run_now", "resume", "extend", "approve", "run_script"])
+  })
+
+  test("the three access values drive the block: all allows every tool, ask-changes asks changes, read-only denies them", () => {
+    const reads = ["jobs_status", "jobs_list", "jobs_get", "jobs_history"]
+    for (const [access, change, pause] of [["all", "allow", "allow"], ["ask-changes", "ask", "allow"], ["read-only", "deny", "deny"]] as const) {
+      const block = defaultRules(access)
+      for (const name of Object.keys(SCHEMAS) as ToolName[]) {
+        const action = toolId(name)
+        const want = reads.includes(action) ? "allow" : OPEN.includes(action) ? pause : change
+        expect({ access, action, effect: evaluateRule(block, action) }).toEqual({ access, action, effect: want })
+      }
+    }
   })
 
   test("each one asserts its own action, as the call, before it reads or writes anything", async () => {

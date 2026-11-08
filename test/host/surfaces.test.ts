@@ -85,15 +85,8 @@ describe(`the surfaces in OpenCode ${HOST_VERSION}`, () => {
       const rules = build.data.permissions as { action: string; resource: string; effect: string }[]
       const base = rules.findIndex((rule) => rule.action === "*" && rule.resource === "*" && rule.effect === "allow")
       expect(base).toBe(0)
-      expect(rules.slice(base + 1, base + 8)).toEqual([
-        { action: "jobs_*", resource: "*", effect: "ask" },
-        { action: "jobs_status", resource: "*", effect: "allow" },
-        { action: "jobs_list", resource: "*", effect: "allow" },
-        { action: "jobs_get", resource: "*", effect: "allow" },
-        { action: "jobs_history", resource: "*", effect: "allow" },
-        { action: "jobs_pause", resource: "*", effect: "allow" },
-        { action: "jobs_pause_all", resource: "*", effect: "allow" },
-      ])
+      // R18: the default access is `all`, so the block is the one allow, like every other plugin's tools.
+      expect(rules.slice(base + 1, base + 2)).toEqual([{ action: "jobs_*", resource: "*", effect: "allow" }])
       // The rules are inserted once: a reload does not stack a second block.
       await host.client.location.reload()
       await until("the plugin reloads", async () => host.setups() > 1)
@@ -113,8 +106,8 @@ describe(`the surfaces in OpenCode ${HOST_VERSION}`, () => {
     }
   }, 120_000)
 
-  test("a read runs without asking, and a write asks for approval", async () => {
-    const host = await startHost({ loop: false, config: { agents: GUARDED } })
+  test("a read runs without asking, and a write asks for approval under ask-changes", async () => {
+    const host = await startHost({ loop: false, config: { agents: GUARDED }, options: { access: "ask-changes" } })
     try {
       const read = await session(host, "build")
       await code(host, read, "const r = await tools.jobs.status({}); return JSON.stringify(r)")

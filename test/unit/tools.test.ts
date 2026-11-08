@@ -171,9 +171,10 @@ describe("the changes", () => {
     expect(result.text).toContain("as jobs")
   })
 
-  test("jobs_create refuses an agent that does not deny by default", async () => {
+  test("jobs_create allows an agent that does not deny by default, and status warns (R18)", async () => {
     const setup = harness({ unguarded: ["build"] })
-    await expect(call(setup, "create", { name: "Nightly", schedule: { every: "1h" }, action: { type: "prompt", text: "x" }, agent: "build" })).rejects.toThrow("JOBS_AGENT_UNGUARDED")
+    const result = await call(setup, "create", { name: "Nightly", schedule: { every: "1h" }, action: { type: "prompt", text: "x" }, agent: "build" })
+    expect(result.output["job"]).toMatchObject({ agent: "build" })
   })
 
   test("jobs_create refuses an allow entry in the job's list", async () => {

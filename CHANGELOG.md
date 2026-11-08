@@ -2,7 +2,10 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - Unreleased
+## [0.0.0] - Unreleased
+
+The release workflow (hey-jelly) sets `version` in `package.json` and this heading's version when it publishes;
+`package.json` stays `0.0.0` until then.
 
 ### Added
 
