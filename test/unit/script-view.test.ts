@@ -29,4 +29,16 @@ describe("a script run's result", () => {
     expect(status.calls).toEqual([{ method: "host:mem", at: 1, ms: 2, outcome: "ok", bytes: 10 }])
     expect(status.limits).toMatchObject({ callLimit: false })
   })
+
+  test("keeps the status rows small and the history's whole (DF-9)", () => {
+    const calls = Array.from({ length: 100 }, (_, index) => ({ method: "host:mem", class: "unclassified", at: index, ms: 1, outcome: "ok" as const, bytes: 1 }))
+    const many: RunRecord = { ...record, calls }
+    const status = runView(many, new Map(), false)
+    expect(status.calls).toHaveLength(20)
+    expect(status.callCount).toBe(100)
+    expect(status.callsTruncated).toBe(true)
+    const history = runView(many, new Map(), true, true)
+    expect(history.calls).toHaveLength(100)
+    expect(history.callsTruncated).toBeUndefined()
+  })
 })

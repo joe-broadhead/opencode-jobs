@@ -13,7 +13,7 @@ import { forgetJobSession, rememberJobSession, SELF_DENIES } from "./safety.js"
 import { denied, limitsOf, scriptSessionRules, worstClass, type Script, type ScriptApproval, type ScriptCall, type ScriptLimitFlags } from "./script.js"
 import type { Access } from "../options.js"
 import { createBridge } from "./script-bridge.js"
-import { commitFiles, resolveScriptFiles, snapshotFiles } from "./script-files.js"
+import { commitFiles, filePolicy, resolveScriptFiles, snapshotFiles, FileCommitError, type FileRecord } from "./script-files.js"
 import type { ScriptGate } from "./script-gate.js"
 import { runScript } from "./script-runtime.js"
 
@@ -50,7 +50,7 @@ export interface OneOffResult {
   readonly digest: string
   readonly approval: ScriptApproval
   /** The declared files this run read and wrote, never the content. */
-  readonly files: readonly { readonly name: string; readonly path: string; readonly mode: string; readonly bytesRead: number; readonly bytesWritten: number; readonly sha256Before?: string; readonly sha256After?: string }[]
+  readonly files: readonly { readonly name: string; readonly path: string; readonly mode: string; readonly bytesRead: number; readonly bytesWritten: number; readonly outcome?: string; readonly sha256Before?: string; readonly sha256After?: string }[]
 }
 
 const SCRIPT_SESSION_TITLE = "Script · one-off"
@@ -94,7 +94,8 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
     if (approved === "auto") throw error
     throw jobsError("JOBS_UNCHECKED", `The script changes something and needs a person's approval, and no one answered (${reasonOf(error)}).`, `Approve it in the OpenCode TUI, or set the plugin option "access" to "all" for automatic approval.`)
   }
-  const snapshots = await snapshotFiles(resolvedFiles)
+  const policy = await filePolicy(input.location, input.roots ?? [])
+  const snapshots = await snapshotFiles(resolvedFiles, { policy })
   const controller = new AbortController()
   const created = await input.session.create({
     location: { directory: input.location },
@@ -116,11 +117,20 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
       now: input.clock.now,
       files: {
         values: Object.fromEntries(snapshots.filter((snapshot) => snapshot.file.mode !== "write").map((snapshot) => [snapshot.file.name, snapshot.value] as const)),
-        writable: new Set(resolvedFiles.filter((file) => file.mode !== "read").map((file) => file.name)),
+        writable: new Map(resolvedFiles.filter((file) => file.mode !== "read").map((file) => [file.name, file.maxBytes] as const)),
       },
       classes: new Map(resolved.map((tool) => [tool.method, tool.class] as const)),
     })
-    const committed = outcome.ok ? await commitFiles(snapshots, outcome.writes) : []
+    let committed: readonly FileRecord[] = []
+    let commitError: unknown
+    if (outcome.ok) {
+      try {
+        committed = await commitFiles(snapshots, outcome.writes, { policy, now: input.clock.now })
+      } catch (error) {
+        commitError = error
+        committed = error instanceof FileCommitError ? error.records : []
+      }
+    }
     const files = snapshots.map((snapshot) => {
       const written = committed.find((record) => record.name === snapshot.file.name)
       return {
@@ -129,13 +139,15 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
         mode: snapshot.file.mode,
         bytesRead: snapshot.bytes,
         bytesWritten: written?.bytesWritten ?? 0,
+        outcome: written?.outcome ?? "not_attempted",
         ...(snapshot.sha256 === null ? {} : { sha256Before: snapshot.sha256 }),
         ...(written?.sha256After === undefined ? {} : { sha256After: written.sha256After }),
       }
     })
+    const ok = outcome.ok && commitError === undefined
     return {
-      ok: outcome.ok,
-      ...(outcome.ok ? { value: outcome.value } : { error: outcome.error }),
+      ok,
+      ...(ok ? { value: outcome.value } : { error: commitError === undefined ? outcome.error : reasonOf(commitError) }),
       calls: outcome.calls,
       limits: outcome.limits,
       digest: approval.digest,

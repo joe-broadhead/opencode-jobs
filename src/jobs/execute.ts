@@ -16,12 +16,14 @@ import type { Clock } from "./clock.js"
 import { jobsError } from "../constants.js"
 import type { Job, JobAction } from "./model.js"
 import { forgetJobSession, jobOutput, openJobSession, SELF_DENIES } from "./safety.js"
-import { approvalMatches, denied, limitsOf, manifestDigest, scriptSessionRules, sourceHash, type Script } from "./script.js"
+import { approvalMatches, denied, limitsOf, manifestDigest, scriptSessionRules, sourceHash, worstClass, type Script } from "./script.js"
 import { createBridge } from "./script-bridge.js"
 import type { ScriptGate } from "./script-gate.js"
-import { commitFiles, resolveScriptFiles, snapshotFiles, type FileRecord, type FileSnapshot } from "./script-files.js"
+import { commitFiles, filePolicy, resolveScriptFiles, snapshotFiles, FileCommitError, type FileRecord, type FileSnapshot } from "./script-files.js"
 import { runScript } from "./script-runtime.js"
 import { getRun, putRun, readPauseAll, readState, slotISO, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
+import { reasonOf } from "../redact.js"
+import type { Access } from "../options.js"
 
 /** The session members one run uses, and nothing else. */
 export type Session = Pick<Plugin.Context["session"], "create" | "get" | "remove" | "prompt" | "command" | "synthetic" | "wait" | "interrupt" | "context">
@@ -89,6 +91,8 @@ export interface ExecutorInput {
   readonly rpc?: Plugin.Context["rpc"]
   /** Extra roots a script's declared files may live in, from the `scriptFilesRoots` option. */
   readonly scriptFilesRoots?: readonly string[]
+  /** The family access policy, re-read at every run so a restriction takes effect on the next slot (DF-2). */
+  readonly access?: Access
 }
 
 export function createExecutor(input: ExecutorInput): Executor {
@@ -174,9 +178,9 @@ export async function execute(input: ExecuteInput): Promise<RunResult> {
       ...(sessionID === undefined ? {} : { sessionID }),
       startedAt: clock.now(),
       endedAt: clock.now(),
-      error: reason(error),
+      error: reasonOf(error),
     })
-    return { claimed: true, status: "failed", record: failed, ...(sessionID === undefined ? {} : { sessionID }), error: reason(error) }
+    return { claimed: true, status: "failed", record: failed, ...(sessionID === undefined ? {} : { sessionID }), error: reasonOf(error) }
   }
 }
 
@@ -365,11 +369,9 @@ export async function summaryOf(session: Pick<Session, "context">, sessionID: st
   return undefined
 }
 
-const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))
-
 /** A slot a script job could not start because a declared file could not be read or parsed. */
 async function failScript(input: ExecuteInput, key: string, error: unknown): Promise<RunResult> {
-  const message = reason(error)
+  const message = reasonOf(error, "the declared file could not be read or written")
   const record = await putRun(input.storage, {
     job: input.job.id,
     slot: key,
@@ -394,6 +396,7 @@ function recordsOf(snapshots: readonly FileSnapshot[], writes: readonly FileReco
       mode: snapshot.file.mode,
       bytesRead: snapshot.bytes,
       bytesWritten: written?.bytesWritten ?? 0,
+      outcome: written?.outcome ?? "not_attempted",
       ...(snapshot.sha256 === null ? {} : { sha256Before: snapshot.sha256 }),
       ...(written?.sha256After === undefined ? {} : { sha256After: written.sha256After }),
     }
@@ -437,16 +440,25 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
   try {
     resolved = await gate.resolve(script.uses, job.agent, directory)
   } catch (error) {
-    return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} could not re-resolve its manifest (${reason(error)}).`, `Approve it again with the jobs_approve tool or /jobs-approve ${job.id}.`)
+    return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} could not re-resolve its manifest (${reasonOf(error)}).`, `Approve it again with the jobs_approve tool or /jobs-approve ${job.id}.`)
   }
   let resolvedFiles
   try {
     resolvedFiles = await resolveScriptFiles(script.files, directory, input.scriptFilesRoots ?? [])
   } catch (error) {
-    return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} has a declared file the policy now refuses (${reason(error)}).`, `Fix the path, then approve the script again with /jobs-approve ${job.id}.`)
+    return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} has a declared file the policy now refuses (${reasonOf(error)}).`, `Fix the path, then approve the script again with /jobs-approve ${job.id}.`)
   }
   if (!approvalMatches(state.approval, script, resolved, resolvedFiles)) {
     return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} has changed since it was approved, or its tools or files resolve differently now.`, `Approve it again with the jobs_approve tool or /jobs-approve ${job.id}.`)
+  }
+  // DF-2: the access policy is re-applied at every run, before the first call or write.
+  const access = input.access ?? "all"
+  const worst = worstClass(resolved, resolvedFiles)
+  if (access === "read-only" && worst === "change") {
+    return skipScript(input, key, "revoked", "JOBS_SCRIPT_DENIED", `The script ${JSON.stringify(job.id)} changes something, and the plugin's access option is now "read-only".`, `Set the plugin option "access" to "ask-changes" or "all", then approve the script again. No call was made and nothing was written.`)
+  }
+  if (access === "ask-changes" && worst === "change" && state.approval?.approved !== "prompt") {
+    return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} changes something, and its approval was automatic; "ask-changes" needs a person's approval of this exact digest.`, `Approve it with the jobs_approve tool or /jobs-approve ${job.id}. No call was made and nothing was written.`)
   }
   const revoked = denied(resolved)
   if (revoked.length > 0) {
@@ -456,8 +468,9 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
   }
   // The declared files are read before the session, so an invalid or oversized file fails the slot without a run.
   let snapshots: readonly FileSnapshot[]
+  const policy = await filePolicy(directory, input.scriptFilesRoots ?? [])
   try {
-    snapshots = await snapshotFiles(resolvedFiles)
+    snapshots = await snapshotFiles(resolvedFiles, { policy })
   } catch (error) {
     return await failScript(input, key, error)
   }
@@ -510,7 +523,7 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
       now: clock.now,
       files: {
         values: Object.fromEntries(snapshots.filter((snapshot) => snapshot.file.mode !== "write").map((snapshot) => [snapshot.file.name, snapshot.value] as const)),
-        writable: new Set(resolvedFiles.filter((file) => file.mode !== "read").map((file) => file.name)),
+        writable: new Map(resolvedFiles.filter((file) => file.mode !== "read").map((file) => [file.name, file.maxBytes] as const)),
       },
       classes: new Map(resolved.map((tool) => [tool.method, tool.class] as const)),
     })
@@ -522,17 +535,19 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
     let fileRecords = recordsOf(snapshots)
     if (outcome.ok) {
       try {
-        fileRecords = recordsOf(snapshots, await commitFiles(snapshots, outcome.writes))
+        fileRecords = recordsOf(snapshots, await commitFiles(snapshots, outcome.writes, { policy, now: clock.now }))
       } catch (error) {
+        // A commit that rolled back still carries each file's real outcome, never "nothing written" (DF-4).
+        const truth = error instanceof FileCommitError ? error.records : undefined
         return await complete(input, key, startedAt, sessionID, {
           status: "failed",
           script: { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), uses: [...script.uses] },
           result: { ok: true, value: outcome.value },
           calls: outcome.calls,
           limits: outcome.limits,
-          files: fileRecords,
+          files: truth === undefined ? fileRecords : recordsOf(snapshots, truth),
           ...cost,
-          error: reason(error),
+          error: reasonOf(error),
         })
       }
     }
@@ -559,9 +574,9 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
       ...(sessionID === undefined ? {} : { sessionID }),
       startedAt: clock.now(),
       endedAt: clock.now(),
-      error: reason(error),
+      error: reasonOf(error),
     })
-    return { claimed: true, status: "failed", record: failed, ...(sessionID === undefined ? {} : { sessionID }), error: reason(error) }
+    return { claimed: true, status: "failed", record: failed, ...(sessionID === undefined ? {} : { sessionID }), error: reasonOf(error) }
   } finally {
     input.signal?.removeEventListener("abort", stop)
   }

@@ -94,6 +94,7 @@ const SCRIPT = {
         memoryMb: { type: "integer", minimum: 1, maximum: 512 },
         maxCalls: { type: "integer", minimum: 1, maximum: 1000 },
         maxOutputBytes: { type: "integer", minimum: 256, maximum: 1048576 },
+        maxFileBytes: { type: "integer", minimum: 1024, maximum: 33554432 },
       },
     },
   },
@@ -252,7 +253,7 @@ export async function runJobTool(input: ToolInput, name: ToolName, raw: unknown,
       const runs = (await scanRuns(input.storage, job.id)).slice(0, 3)
       const names = new Map([[job.id, job.name]])
       return {
-        output: { job, state, runs: runs.map((run) => runView(run, names)) },
+        output: { job, state, runs: runs.map((run) => runView(run, names, false, true)) },
         text: compact({ id: job.id, name: job.name, agent: job.agent, state, runs: runs.map((run) => run.status) }),
       }
     }

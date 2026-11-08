@@ -63,11 +63,13 @@ export interface RunView {
   readonly calls?: readonly { readonly method: string; readonly class?: string; readonly at: number; readonly ms: number; readonly outcome: string; readonly bytes: number; readonly code?: string }[]
   /** How many calls the run made. */
   readonly callCount?: number
+  /** True when the status row shows only the first calls of a longer run. */
+  readonly callsTruncated?: boolean
   readonly limits?: { readonly timedOut: boolean; readonly memoryExceeded: boolean; readonly callLimit: boolean; readonly outputTruncated: boolean }
   /** A script run's result, framed as script output; present only where summaries are. */
   readonly result?: string
   /** A script run's declared files: name, path, mode, bytes and hashes, never the content. */
-  readonly files?: readonly { readonly name: string; readonly path: string; readonly mode: string; readonly bytesRead: number; readonly bytesWritten: number; readonly sha256Before?: string; readonly sha256After?: string }[]
+  readonly files?: readonly { readonly name: string; readonly path: string; readonly mode: string; readonly bytesRead: number; readonly bytesWritten: number; readonly outcome?: string; readonly sha256Before?: string; readonly sha256After?: string }[]
 }
 
 /** A job whose recent runs failed, with the code and how many times. */
@@ -378,6 +380,7 @@ const RUN = {
     error: { type: "string" },
     calls: { type: "array" },
     callCount: { type: "integer", minimum: 0 },
+    callsTruncated: { type: "boolean" },
     limits: { type: "object" },
     result: { type: "string" },
     files: { type: "array" },

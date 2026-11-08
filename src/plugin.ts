@@ -20,7 +20,7 @@ import { Runner } from "./jobs/runner.js"
 import { migrate, pruneWithSessions, putBeat, readPauseAll } from "./jobs/store.js"
 import { ownedMethods, toolTransform, type ToolInput } from "./jobs/tools.js"
 import { createFileWatch, type FileWatch } from "./jobs/watch.js"
-import { parseOptions } from "./options.js"
+import { parseOptions, type Access } from "./options.js"
 import { registerStatusRpc } from "./rpc.js"
 
 /** Injected by tests: a clock, and whether the loop ticks itself. Production passes nothing. */
@@ -62,6 +62,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         keepAliveMinutes: options.keepAliveMinutes,
         problems,
         watch,
+        scriptFilesRoots: options.scriptFilesRoots,
       })
       const scripts = createScriptGate({
         rpc: ctx.rpc,
@@ -142,6 +143,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
             report,
             scripts,
             scriptFilesRoots: options.scriptFilesRoots,
+            access: options.access,
             loop: deps.loop !== false,
             deps,
           })
@@ -168,6 +170,8 @@ interface WorkerInput {
   readonly scripts: ScriptGate
   /** Extra roots a script's declared files may live in. */
   readonly scriptFilesRoots: readonly string[]
+  /** The family access policy, re-read at every scheduled run (DF-2). */
+  readonly access: Access
   readonly loop: boolean
   readonly deps: JobsDeps
 }
@@ -234,6 +238,7 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
         tool: ctx.tool,
         rpc: ctx.rpc,
         scriptFilesRoots: input.scriptFilesRoots,
+        access: input.access,
       })
       // Retention runs when the leader starts and once an hour after: the records it drops lose their sessions too.
       let prunedAt: number | undefined

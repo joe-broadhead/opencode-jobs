@@ -1,10 +1,10 @@
 // Declared job files: the path policy, the caps, the snapshot, and the commit (conflict and atomicity). The guest has no
 // filesystem; these are the only paths a script can see, and every refusal names the code.
 import { afterAll, describe, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { stat } from "node:fs/promises"
 import { join } from "node:path"
-import { commitFiles, resolveScriptFiles, snapshotFiles } from "../../src/jobs/script-files.js"
+import { commitFiles, FileCommitError, resolveScriptFiles, snapshotFiles } from "../../src/jobs/script-files.js"
 import type { Script } from "../../src/jobs/script.js"
 
 const root = realpathSync(mkdtempSync(join(realpathSync("/tmp"), "jobs-files-")))
@@ -109,5 +109,159 @@ describe("the commit", () => {
     const records = await commitFiles(await snapshotFiles(fresh), [{ name: "state", json: JSON.stringify({ a: 1 }) }])
     expect(records[0]!.sha256Before).toBeUndefined()
     expect((await stat(join(root, "fresh.json"))).mode & 0o777).toBe(0o600)
+  })
+})
+
+describe("the path policy on a case-insensitive file system", () => {
+  test("refuses .GIT, .Git and .OPENCODE, which are the real .git and .opencode on APFS (DF-1)", async () => {
+    for (const name of [".git", ".GIT", ".Git", "sub/.GIT", ".opencode", ".OPENCODE", ".OpenCode"]) {
+      const declared = name.endsWith("config") ? name : name.includes(".") && !name.includes("/") ? `${name}/config` : `${name}/jobs/x.md`
+      await expect(resolveScriptFiles(one(declared), root)).rejects.toThrow("JOBS_SCRIPT_FILE_PATH")
+    }
+    // A forbidden name reached through a canonical path after realpath is refused too.
+    mkdirSync(join(root, ".GIT"), { recursive: true })
+    await expect(resolveScriptFiles(one(join(root, ".GIT", "config")), root)).rejects.toThrow("JOBS_SCRIPT_FILE_PATH")
+  })
+
+  test("handles a decomposed parent name without letting it stand in for another (DF-1)", async () => {
+    const composed = "café"
+    const decomposed = composed.normalize("NFD")
+    mkdirSync(join(root, decomposed), { recursive: true })
+    writeFileSync(join(root, decomposed, "state.json"), "{}")
+    // The same folder, written decomposed and composed, resolves to the path on disk; neither is a reserved name.
+    const files = await resolveScriptFiles(one(join(composed, "state.json")), root)
+    expect(files[0]!.path.normalize("NFD")).toBe(join(root, decomposed, "state.json").normalize("NFD"))
+  })
+})
+
+describe("the commit's bounds and atomicity", () => {
+  test("the last write to a name wins, with no conflict against its own earlier write (DF-3)", async () => {
+    writeFileSync(join(root, "twice.json"), JSON.stringify({ n: 1 }))
+    const snapshots = await snapshotFiles(await resolveScriptFiles(one("twice.json"), root))
+    const records = await commitFiles(snapshots, [
+      { name: "state", json: JSON.stringify({ n: 2 }) },
+      { name: "state", json: JSON.stringify({ n: 3 }) },
+    ])
+    expect(JSON.parse(readFileSync(join(root, "twice.json"), "utf8"))).toEqual({ n: 3 })
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ outcome: "written" })
+    expect(records[0]!.bytesWritten).toBeGreaterThan(0)
+  })
+
+  test("rolls every file back when the second of three renames fails, and records each real outcome (DF-4)", async () => {
+    const names = ["a", "b", "c"] as const
+    const files: Script["files"] = Object.fromEntries(names.map((name) => [name, { path: `${name}.json`, mode: "readwrite" as const, format: "json" as const }]))
+    for (const name of names) writeFileSync(join(root, `${name}.json`), JSON.stringify({ v: "old" }))
+    const snapshots = await snapshotFiles(await resolveScriptFiles(files, root))
+    let calls = 0
+    const failure = await commitFiles(
+      snapshots,
+      names.map((name) => ({ name, json: JSON.stringify({ v: "new" }) })),
+      {
+        rename: async (from, to) => {
+          calls += 1
+          if (calls === 2) throw new Error("injected rename failure")
+          await (await import("node:fs/promises")).rename(from, to)
+        },
+      },
+    ).catch((error) => error)
+    expect(failure).toBeInstanceOf(FileCommitError)
+    const records = (failure as FileCommitError).records
+    const byName = new Map(records.map((record) => [record.name, record]))
+    expect(byName.get("a")?.outcome).toBe("rolled_back")
+    expect(byName.get("b")?.outcome).toBe("not_attempted")
+    expect(byName.get("c")?.outcome).toBe("not_attempted")
+    // Nothing landed: every file is its old self.
+    for (const name of names) expect(JSON.parse(readFileSync(join(root, `${name}.json`), "utf8"))).toEqual({ v: "old" })
+  })
+
+  test("refuses a leaf swapped for a symlink between the check and the open (DF-6)", async () => {
+    writeFileSync(join(root, "swap-leaf.json"), JSON.stringify({ where: "inside" }))
+    writeFileSync(join(outside, "secret.json"), JSON.stringify({ where: "OUTSIDE" }))
+    const files = await resolveScriptFiles(one("swap-leaf.json"), root)
+    await expect(
+      snapshotFiles(files, {
+        policy: { directory: root, roots: [] },
+        hooks: {
+          beforeOpen: () => {
+            rmSync(join(root, "swap-leaf.json"))
+            symlinkSync(join(outside, "secret.json"), join(root, "swap-leaf.json"))
+          },
+        },
+      }),
+    ).rejects.toThrow("JOBS_SCRIPT_FILE_PATH")
+  })
+
+  test("refuses a parent swapped for a symlink between the check and the open (DF-6)", async () => {
+    mkdirSync(join(root, "swap-dir"), { recursive: true })
+    mkdirSync(join(outside, "swap-dir"), { recursive: true })
+    writeFileSync(join(root, "swap-dir", "state.json"), JSON.stringify({ where: "inside" }))
+    writeFileSync(join(outside, "swap-dir", "state.json"), JSON.stringify({ where: "OUTSIDE" }))
+    const files = await resolveScriptFiles(one("swap-dir/state.json"), root)
+    await expect(
+      snapshotFiles(files, {
+        policy: { directory: root, roots: [] },
+        hooks: {
+          beforeOpen: () => {
+            rmSync(join(root, "swap-dir"), { recursive: true, force: true })
+            symlinkSync(join(outside, "swap-dir"), join(root, "swap-dir"))
+          },
+        },
+      }),
+    ).rejects.toThrow("JOBS_SCRIPT_FILE_PATH")
+  })
+
+  test("refuses a parent swapped before a rename, and leaves both files alone (DF-6)", async () => {
+    mkdirSync(join(root, "commit-dir"), { recursive: true })
+    mkdirSync(join(outside, "commit-dir"), { recursive: true })
+    writeFileSync(join(root, "commit-dir", "state.json"), JSON.stringify({ n: 1 }))
+    writeFileSync(join(outside, "commit-dir", "state.json"), JSON.stringify({ n: "outside" }))
+    const snapshots = await snapshotFiles(await resolveScriptFiles({ state: { path: "commit-dir/state.json", mode: "readwrite", format: "json" } }, root))
+    const failure = await commitFiles(snapshots, [{ name: "state", json: JSON.stringify({ n: 2 }) }], {
+      policy: { directory: root, roots: [] },
+      hooks: {
+        beforeRename: () => {
+          // Keep the real folder, and put a symlink in its place after the check.
+          renameSync(join(root, "commit-dir"), join(root, "commit-dir-real"))
+          symlinkSync(join(outside, "commit-dir"), join(root, "commit-dir"))
+        },
+      },
+    }).catch((error) => error)
+    expect(failure).toBeInstanceOf(FileCommitError)
+    expect(JSON.parse(readFileSync(join(outside, "commit-dir", "state.json"), "utf8"))).toEqual({ n: "outside" })
+    expect(JSON.parse(readFileSync(join(root, "commit-dir-real", "state.json"), "utf8"))).toEqual({ n: 1 })
+  })
+
+  test("a write-only file's existing size is hashed, not capped, and its mode is taken at commit (DF-16)", async () => {
+    writeFileSync(join(root, "write-only.json"), JSON.stringify({ pad: "x".repeat(2000) }))
+    const files = await resolveScriptFiles(one("write-only.json", "write", "json", 100), root)
+    const snapshots = await snapshotFiles(files)
+    expect(snapshots[0]!.bytes).toBeGreaterThan(100)
+    chmodSync(join(root, "write-only.json"), 0o604)
+    await commitFiles(snapshots, [{ name: "state", json: JSON.stringify({ n: 1 }) }])
+    expect((await stat(join(root, "write-only.json"))).mode & 0o777).toBe(0o604)
+  })
+
+  test("refuses a non-finite JSON number rather than writing null (DF-18)", async () => {
+    writeFileSync(join(root, "infinite.json"), '{"big":1e999}')
+    await expect(snapshotFiles(await resolveScriptFiles(one("infinite.json"), root))).rejects.toThrow("JOBS_SCRIPT_FILE_INVALID")
+  })
+
+  test("reads the conflict hash under a bound, and refuses a file grown past the bound (DF-13)", async () => {
+    writeFileSync(join(root, "grown.json"), JSON.stringify({ n: 1 }))
+    const snapshots = await snapshotFiles(await resolveScriptFiles(one("grown.json"), root))
+    writeFileSync(join(root, "grown.json"), JSON.stringify({ pad: "x".repeat(8 * 1024 * 1024 + 1) }))
+    await expect(commitFiles(snapshots, [{ name: "state", json: JSON.stringify({ n: 2 }) }])).rejects.toThrow("JOBS_SCRIPT_FILE_TOO_LARGE")
+  })
+
+  test("removes a stale temp file left by a killed process (DF-12)", async () => {
+    writeFileSync(join(root, "stale.json"), JSON.stringify({ n: 1 }))
+    const stale = join(root, ".stale.json.abcdef123456.tmp")
+    writeFileSync(stale, "half")
+    const old = new Date(Date.now() - 2 * 3_600_000)
+    utimesSync(stale, old, old)
+    const snapshots = await snapshotFiles(await resolveScriptFiles(one("stale.json"), root))
+    await commitFiles(snapshots, [{ name: "state", json: JSON.stringify({ n: 2 }) }], { now: () => Date.now() })
+    expect(existsSync(stale)).toBe(false)
   })
 })

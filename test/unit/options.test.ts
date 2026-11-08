@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import { homedir } from "node:os"
+import { dirname, join, resolve } from "node:path"
 import { DEFAULT_OPTIONS, parseOptions } from "../../src/options.js"
 
 describe("parseOptions", () => {
@@ -12,6 +14,12 @@ describe("parseOptions", () => {
     expect(parseOptions({ scriptFilesRoots: ["/one", "/one", "/two"] }).scriptFilesRoots).toEqual(["/one", "/two"])
     expect(() => parseOptions({ scriptFilesRoots: ["relative"] })).toThrow("absolute directory paths")
     expect(parseOptions({ scriptFilesRoots: [] }).scriptFilesRoots).toEqual([])
+    // A root is a full grant to its tree: the disk, home, its ancestors and OpenCode's own folders are refused (DF-7).
+    expect(() => parseOptions({ scriptFilesRoots: ["/"] })).toThrow("whole disk")
+    const home = resolve(homedir())
+    expect(() => parseOptions({ scriptFilesRoots: [home] })).toThrow("home directory")
+    expect(() => parseOptions({ scriptFilesRoots: [dirname(home)] })).toThrow("home directory")
+    expect(() => parseOptions({ scriptFilesRoots: [join(home, ".config")] })).toThrow("OpenCode's own")
   })
 
   test("accepts the three access values and refuses anything else", () => {

@@ -8,6 +8,7 @@ import {
   approvalResource,
   approvalMatches,
   filesDigest,
+  pathsDigest,
   digestOf,
   denied,
   limitsOf,
@@ -47,9 +48,9 @@ describe("the script action", () => {
     expect(() => parseScriptDefinition({ code: "return 1", uses: ["host:a"], limits: { maxCalls: 1001 } })).toThrow("1 to 1000")
   })
 
-  test("caps the limits at the hard bounds and defaults to 100 calls, 64 MB and 64 KB", () => {
+  test("caps the limits at the hard bounds and defaults to 100 calls, 64 MB, 64 KB and 8 MB of files", () => {
     expect(limitsOf({ code: "x", uses: [] })).toEqual(SCRIPT_DEFAULTS)
-    expect(limitsOf({ code: "x", uses: [], limits: { memoryMb: 10_000, maxCalls: 10_000, maxOutputBytes: 10_000_000 } })).toEqual(SCRIPT_MAX)
+    expect(limitsOf({ code: "x", uses: [], limits: { memoryMb: 10_000, maxCalls: 10_000, maxOutputBytes: 10_000_000, maxFileBytes: 100_000_000 } })).toEqual(SCRIPT_MAX)
   })
 
   test("a prompt, command or reminder still requires its agent; only a script defaults to build", () => {
@@ -66,7 +67,7 @@ describe("the approval binding", () => {
     const source = sourceHash(script.code)
     const manifest = manifestDigest(script.uses)
     expect(manifest).toBe(manifestDigest([...script.uses].reverse()))
-    expect(digestOf(script)).toBe(scriptDigest(source, manifest, filesDigest(script.files)))
+    expect(digestOf(script)).toBe(scriptDigest(source, manifest, filesDigest(script.files), pathsDigest()))
     expect(approvalResource(digestOf(script))).toBe(`script:sha256:${digestOf(script)}`)
     expect(scriptDigest(source, manifest)).not.toBe(scriptDigest(sourceHash("return 2"), manifest))
     expect(scriptDigest(source, manifest)).not.toBe(scriptDigest(source, manifestDigest(["x.posts.b"])))
@@ -83,6 +84,13 @@ describe("the approval binding", () => {
     // The file names and their fields are sorted, so the object's insertion order does not matter.
     const reordered: Script = { ...base, files: { state: base.files!.state! } }
     expect(digestOf(reordered)).toBe(digestOf(base))
+  })
+
+  test("the digest covers the resolved paths, so a saved approval cannot cross directories (DF-8)", () => {
+    const withFile: Script = { code: "return 1", uses: ["host:mem"], files: { state: { path: "state.json", mode: "readwrite", format: "json" } } }
+    const file = (path: string) => ({ name: "state", path, mode: "readwrite" as const, format: "json" as const, maxBytes: 1024 })
+    expect(digestOf(withFile, [file("/one/state.json")])).not.toBe(digestOf(withFile, [file("/two/state.json")]))
+    expect(digestOf(withFile)).toBe(digestOf(withFile, []))
   })
 
   test("matches only the same hashes, tools, actions and classes", () => {

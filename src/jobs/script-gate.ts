@@ -16,7 +16,7 @@ import {
   filesDigest,
   manifestDigest,
   reachesOf,
-  scriptDigest,
+  digestOf,
   sourceHash,
   type MethodClass,
   type ResolvedFile,
@@ -266,8 +266,9 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
     const source = sourceHash(input.script.code)
     const manifest = manifestDigest(input.script.uses)
     const declaredFiles = filesDigest(input.script.files)
-    const digest = scriptDigest(source, manifest, declaredFiles)
     const files = input.files ?? []
+    // The digest names the resolved paths too, so a saved approval cannot cross directories (DF-8).
+    const digest = digestOf(input.script, files)
     const bytes = Buffer.byteLength(input.script.code, "utf8")
     const head = input.script.code.slice(0, SOURCE_HEAD)
     const approved = input.approved ?? "prompt"

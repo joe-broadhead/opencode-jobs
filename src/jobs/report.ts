@@ -25,6 +25,7 @@ import { nextRun } from "./cron.js"
 import { jobFileSignature, readJobFiles, type AgentGuard, type JobFiles } from "./files.js"
 import type { Job } from "./model.js"
 import { approvalCurrent, digestOf } from "./script.js"
+import { resolveScriptFiles } from "./script-files.js"
 import { cut, oneLine } from "../redact.js"
 import { jobOutput } from "./safety.js"
 import { readBeat, readJobs, readPauseAll, readRunner, readState, scanRuns, type JobState, type RunRecord } from "./store.js"
@@ -44,6 +45,8 @@ export interface ReportInput {
   readonly problems?: readonly string[]
   /** The job-file watch: the folders are re-scanned at most once a minute, and re-parsed only when a file changed. */
   readonly watch?: FileWatch
+  /** Extra roots a script's declared files may live in, so status can compare resolved paths (DF-10). */
+  readonly scriptFilesRoots?: readonly string[]
 }
 
 /** Every job this instance knows, and what the file reader refused. */
@@ -144,6 +147,17 @@ export interface Report {
 export function createReport(input: ReportInput): Report {
   const source = () => readSource(input)
 
+  /** True when the approval covers this script and the files as they resolve now, not only as declared (DF-10). */
+  const approvedNow = async (job: Job, state: JobState): Promise<boolean> => {
+    if (job.action.type !== "script") return true
+    try {
+      const files = await resolveScriptFiles(job.action.script.files, job.target.directory ?? input.location, input.scriptFilesRoots ?? [])
+      return approvalCurrent(state.approval, job.action.script, files)
+    } catch {
+      return false
+    }
+  }
+
   const jobView = async (job: Job, now: number): Promise<JobView> => {
     const state = await readState(input.storage, job.id)
     const expired = job.expires !== undefined && now >= job.expires
@@ -163,11 +177,11 @@ export function createReport(input: ReportInput): Report {
       ...(job.action.type === "script"
         ? {
             script: {
-              digest: digestOf(job.action.script),
+              digest: digestOf(job.action.script, state.approval?.files ?? []),
               tools: [...job.action.script.uses],
               ...(state.approval === undefined ? {} : { approvedAt: state.approval.at }),
               ...(state.approval?.approved === undefined ? {} : { approved: state.approval.approved }),
-              needsApproval: !approvalCurrent(state.approval, job.action.script),
+              needsApproval: !(await approvedNow(job, state)),
             },
           }
         : {}),
@@ -206,6 +220,7 @@ export function createReport(input: ReportInput): Report {
     const paused = await readPauseAll(input.storage).catch(() => undefined)
     const runnerView: RunnerView | null =
       runner === undefined ? null : { location: runner.location, pid: runner.pid, since: runner.startedAt, ...(runner.stoppedAt === undefined ? {} : { stoppedAt: runner.stoppedAt }) }
+    const summary = await scriptSummary(jobs, states, records, input)
 
     return buildStatus({
       host: input.host,
@@ -220,10 +235,7 @@ export function createReport(input: ReportInput): Report {
       failures: failuresOf(records, names),
       unguardedAgents: known ? [...new Set([...unguardedAgents(agents, named), ...refusedUnguarded])] : [],
       missingAgents: known ? [...new Set([...missingFrom(agents, named), ...refusedMissing])] : [],
-      ...(() => {
-        const summary = scriptSummary(jobs, states, records)
-        return summary === undefined ? {} : { scriptJobs: summary }
-      })(),
+      ...(summary === undefined ? {} : { scriptJobs: summary }),
       ...(known ? {} : { agentsUnknown: true }),
       problems: [...(input.problems ?? []), ...files.invalid.map((file) => file.message), ...revokedProblems(records)]
         .map((problem) => cut(oneLine(problem), 400))
@@ -248,7 +260,7 @@ export function createReport(input: ReportInput): Report {
     const names = new Map(jobs.map((job) => [job.id, job.name] as const))
     const since = filter.since === undefined ? undefined : Date.parse(filter.since)
     const records = (await scanRuns(input.storage, filter.id)).filter((record) => since === undefined || !Number.isFinite(since) || Date.parse(record.slot) >= since)
-    return records.slice(0, Math.max(1, Math.min(50, filter.limit ?? 20))).map((record) => runView(record, names, filter.summaries === true))
+    return records.slice(0, Math.max(1, Math.min(50, filter.limit ?? 20))).map((record) => runView(record, names, filter.summaries === true, true))
   }
 
   return {
@@ -265,7 +277,7 @@ export function createReport(input: ReportInput): Report {
  * and is returned only where the docs say it lives: the `jobs_history` tool. Status and its RPC name what a run did,
  * never what was said in it.
  */
-export function runView(record: RunRecord, names: ReadonlyMap<string, string>, summaries = false): RunView {
+export function runView(record: RunRecord, names: ReadonlyMap<string, string>, summaries = false, fullCalls = false): RunView {
   const name = names.get(record.job) ?? record.job
   const durationMs = record.startedAt !== undefined && record.endedAt !== undefined ? Math.max(0, record.endedAt - record.startedAt) : undefined
   return {
@@ -283,7 +295,9 @@ export function runView(record: RunRecord, names: ReadonlyMap<string, string>, s
     ...(record.cost === undefined ? {} : { cost: record.cost }),
     ...(record.script === undefined ? {} : { script: record.script }),
     ...(record.error === undefined ? {} : { error: record.error }),
-    ...(record.calls === undefined ? {} : { calls: record.calls, callCount: record.calls.length }),
+    // The status row stays compact: the first rows and the count, never a megabyte of them (DF-9). The history and a
+    // single job's view ask for the run, and keep every row.
+    ...(record.calls === undefined ? {} : { calls: fullCalls ? record.calls : record.calls.slice(0, 20), callCount: record.calls.length, ...(fullCalls || record.calls.length <= 20 ? {} : { callsTruncated: true }) }),
     ...(record.limits === undefined ? {} : { limits: record.limits }),
     ...(record.files === undefined ? {} : { files: record.files }),
     ...(summaries && record.summary !== undefined ? { summary: jobOutput(record.summary, { name, at: record.slot }) } : {}),
@@ -297,18 +311,31 @@ export function runView(record: RunRecord, names: ReadonlyMap<string, string>, s
  * latest run was skipped because a tool is now denied (SR-8). The second case cannot be seen from the hashes: the run
  * record is the evidence, and it is why status does not say "approved" while every slot is skipped.
  */
-function scriptSummary(
+async function scriptSummary(
   jobs: readonly Job[],
   states: ReadonlyMap<string, JobState>,
   records: readonly RunRecord[],
-): { readonly approved: number; readonly unapproved: number; readonly names: readonly string[]; readonly revoked: readonly string[]; readonly automatic: number } | undefined {
-  const scripts = jobs.flatMap((job) => (job.action.type === "script" ? [{ id: job.id, script: job.action.script }] : []))
+  input: Pick<ReportInput, "location" | "scriptFilesRoots">,
+): Promise<{ readonly approved: number; readonly unapproved: number; readonly names: readonly string[]; readonly revoked: readonly string[]; readonly automatic: number } | undefined> {
+  const scripts = jobs.flatMap((job) => (job.action.type === "script" ? [{ id: job.id, directory: job.target.directory ?? input.location, script: job.action.script }] : []))
   if (scripts.length === 0) return undefined
   const latest = new Map<string, RunRecord>()
   for (const record of records) if (!latest.has(record.job)) latest.set(record.job, record)
-  const stale = scripts.filter((entry) => !approvalCurrent(states.get(entry.id)?.approval, entry.script)).map((entry) => entry.id)
+  const stale: string[] = []
+  for (const entry of scripts) {
+    let current = false
+    try {
+      const files = await resolveScriptFiles(entry.script.files, entry.directory, input.scriptFilesRoots ?? [])
+      current = approvalCurrent(states.get(entry.id)?.approval, entry.script, files)
+    } catch {
+      current = false
+    }
+    if (!current) stale.push(entry.id)
+  }
+  // A run skipped `unapproved` is evidence the approval no longer covers what the run needs (SR-8, extended by DF-2).
+  const unapproved = scripts.filter((entry) => latest.get(entry.id)?.reason === "unapproved").map((entry) => entry.id)
   const revoked = scripts.filter((entry) => latest.get(entry.id)?.reason === "revoked").map((entry) => entry.id)
-  const names = [...new Set([...stale, ...revoked])]
+  const names = [...new Set([...stale, ...unapproved, ...revoked])]
   const automatic = scripts.filter((entry) => states.get(entry.id)?.approval?.approved === "auto").length
   return { approved: scripts.length - names.length, unapproved: names.length, names, revoked, automatic }
 }

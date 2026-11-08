@@ -155,6 +155,8 @@ action:
   by pause. Give a long script a `timeout` that bounds it.
 - **The record has no payloads.** Each call is its method, its class, its start, duration, outcome and byte count, and a
   failed call's code; the result is capped at the job's `maxOutputBytes` (64 KB by default) and framed as script output.
+  Status shows the first 20 calls of a run with `callCount` and `callsTruncated`; `jobs_get` and `jobs_history` keep every
+  row.
   Inputs and tool results are never stored a second time. A failed run records the error's code and its first redacted
   line; a successful run records the result and its declared-file writes. Every run records its session and the host's
   cost. `jobs_history`, the status model and the RPC run record carry the per-call rows.
@@ -201,13 +203,23 @@ action:
       return { added: fresh.length, total: next.items.length };
 ```
 
-The run reads `bookmarks.json` into a frozen `files.bookmarks` and buffers `files.write`; the write is committed only if
-the run succeeds, atomically (a temp file then a rename, mode 0600 for a new file), and only if the file did not change
-since the snapshot (otherwise `JOBS_SCRIPT_FILE_CONFLICT`, and the other writer's file stays). A relative path resolves
-against the job's directory; an absolute one must be inside it or a `scriptFilesRoots` root. Symlinks, `..`, `.git`,
-OpenCode's own folders and special files are refused. Reading or writing outside the project also needs an
-`external_directory` allow in the agent's own permissions, on top of `scriptFilesRoots`; both are required, and a
-refusal names the missing one.
+The run reads `bookmarks.json` into a frozen `files.bookmarks` and buffers `files.write`; the last write to a name
+wins. Nothing is committed unless every declared write validates: a multi-file commit writes each temp, keeps each
+original aside, renames all of them, and rolls every one back if a rename fails, so the record's per-file outcome is
+`written`, `rolled_back` or `not_attempted`, never a false "nothing written". Each rename is a temp file then a rename,
+mode 0600 for a new file, fsynced first, and happens only if the file did not change since the snapshot (otherwise
+`JOBS_SCRIPT_FILE_CONFLICT`, and the other writer's file stays). A relative path resolves against the job's directory; an
+absolute one must be inside it or a `scriptFilesRoots` root. A root is a full read/write grant to that tree, so `/`, the
+home directory and any ancestor of it or of OpenCode's own folders are refused. Symlinks at any component, `..`, `.git`
+and `.OPENCODE` (compared case-folded), OpenCode's own folders and special files are refused, and every open and rename
+re-checks the chain. Reading or writing outside the project also needs an `external_directory` allow in the agent's own
+permissions, on top of `scriptFilesRoots`; both are required, and a refusal names the missing one.
+
+The approval digest covers each resolved path, so a saved "Always allow" names the exact files it grants. JSON is
+IEEE-754: a non-finite number (for example `1e999`) is refused with `JOBS_SCRIPT_FILE_INVALID` rather than written as
+`null`. A run may buffer 8 MB across its files by default, up to 32 MB with `limits.maxFileBytes`; a write past the
+per-file cap or the run's total throws `JOBS_SCRIPT_FILE_TOO_LARGE` at the `files.write` call, so a loop cannot grow the
+host's memory.
 
 **Cadence:** daily is the sensible choice. X has no `since_id` for bookmarks, and charges the same resource once per 24
 hours, so a daily run re-reads the newest page cheaply and stops at the first known id.

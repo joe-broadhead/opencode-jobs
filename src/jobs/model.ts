@@ -527,24 +527,26 @@ function source(value: unknown): string {
 }
 
 /** The per-run limits D-E allows: whole numbers inside the hard caps. */
-function parseScriptLimits(value: unknown): Partial<{ memoryMb: number; maxCalls: number; maxOutputBytes: number }> {
+function parseScriptLimits(value: unknown): Partial<{ memoryMb: number; maxCalls: number; maxOutputBytes: number; maxFileBytes: number }> {
   const input = object(value, "action.script.limits")
-  keys(input, "action.script.limits", ["memoryMb", "maxCalls", "maxOutputBytes"])
-  const whole = (key: "memoryMb" | "maxCalls" | "maxOutputBytes", max: number): number | undefined => {
+  keys(input, "action.script.limits", ["memoryMb", "maxCalls", "maxOutputBytes", "maxFileBytes"])
+  const whole = (key: "memoryMb" | "maxCalls" | "maxOutputBytes" | "maxFileBytes", max: number, min = 1): number | undefined => {
     const found = input[key]
     if (found === undefined) return undefined
-    if (typeof found !== "number" || !Number.isInteger(found) || found < 1 || found > max) {
-      fail("JOBS_INVALID_JOB", `action.script.limits.${key}`, `"action.script.limits.${key}" must be a whole number from 1 to ${max}, found ${describe(found)}.`, `Use a whole number from 1 to ${max}, or remove it.`)
+    if (typeof found !== "number" || !Number.isInteger(found) || found < min || found > max) {
+      fail("JOBS_INVALID_JOB", `action.script.limits.${key}`, `"action.script.limits.${key}" must be a whole number from ${min} to ${max}, found ${describe(found)}.`, `Use a whole number from ${min} to ${max}, or remove it.`)
     }
     return found
   }
   const memoryMb = whole("memoryMb", SCRIPT_MAX.memoryMb)
   const maxCalls = whole("maxCalls", SCRIPT_MAX.maxCalls)
   const maxOutputBytes = whole("maxOutputBytes", SCRIPT_MAX.maxOutputBytes)
+  const maxFileBytes = whole("maxFileBytes", SCRIPT_MAX.maxFileBytes, 1024)
   return {
     ...(memoryMb === undefined ? {} : { memoryMb }),
     ...(maxCalls === undefined ? {} : { maxCalls }),
     ...(maxOutputBytes === undefined ? {} : { maxOutputBytes }),
+    ...(maxFileBytes === undefined ? {} : { maxFileBytes }),
   }
 }
 

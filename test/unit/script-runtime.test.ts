@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test"
 import { quickjsWasm, runScript, type ScriptBridge } from "../../src/jobs/script-runtime.js"
 import { SCRIPT_DEFAULTS, type ScriptLimits } from "../../src/jobs/script.js"
 
-const run = (code: string, options: { bridge?: ScriptBridge; allowed?: string[]; limits?: Partial<ScriptLimits>; timeoutMs?: number; signal?: AbortSignal; files?: { values: Record<string, unknown>; writable: ReadonlySet<string> }; classes?: ReadonlyMap<string, string> } = {}) =>
+const run = (code: string, options: { bridge?: ScriptBridge; allowed?: string[]; limits?: Partial<ScriptLimits>; timeoutMs?: number; signal?: AbortSignal; files?: { values: Record<string, unknown>; writable: ReadonlyMap<string, number> }; classes?: ReadonlyMap<string, string> } = {}) =>
   runScript({
     code,
     allowed: new Set(options.allowed ?? ["host:mem"]),
@@ -20,11 +20,11 @@ const run = (code: string, options: { bridge?: ScriptBridge; allowed?: string[];
 describe("the script runtime", () => {
   test("exposes the declared files frozen, buffers writes, and refuses a name that is not writable", async () => {
     const result = await run(
-      `files.state.n = 99; const before = files.state.n; await files.write("state", { n: 2 }); let error = ""; try { await files.write("ro", {}) } catch (e) { error = String(e) } return { before, error }`,
-      { files: { values: { state: { n: 1 } }, writable: new Set(["state"]) } },
+      `let frozen = ""; try { files.state.n = 99 } catch (e) { frozen = String(e) } const before = files.state.n; await files.write("state", { n: 2 }); let error = ""; try { await files.write("ro", {}) } catch (e) { error = String(e) } return { frozen, before, error }`,
+      { files: { values: { state: { n: 1 } }, writable: new Map([["state", 1024]]) } },
     )
     expect(result.ok).toBe(true)
-    expect(result.value).toMatchObject({ before: 1, error: expect.stringContaining("JOBS_SCRIPT_FILE_MODE") })
+    expect(result.value).toMatchObject({ frozen: expect.stringContaining("TypeError"), before: 1, error: expect.stringContaining("JOBS_SCRIPT_FILE_MODE") })
     expect(result.writes).toEqual([{ name: "state", json: '{"n":2}' }])
   })
 
@@ -54,6 +54,16 @@ describe("the script runtime", () => {
     expect(result.ok).toBe(false)
     expect(result.error).toContain("`external_directory` allow")
     expect(result.calls[0]).toMatchObject({ method: "host:mem", class: "unclassified", outcome: "error", code: "permission.rejected" })
+  })
+
+  test("does not put an arbitrary upper-case token in the record's code (DF-17)", async () => {
+    const result = await run(`return await tools.host.mem({})`, {
+      bridge: async () => {
+        throw new Error("SECRET_TOKEN: not a family code")
+      },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.calls[0]?.code).toBeUndefined()
   })
 
   test("has the wasm it ships, and gives the guest no host capability", async () => {

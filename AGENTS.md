@@ -20,15 +20,18 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   the self-contained `dist/index.js` and `dist/tui.js`: no chunks, no relative imports, and only host-provided modules
   external. `tsc` only typechecks. No declaration files, and no `.tsx` or JSX in `dist/`; the TUI source is `src/tui.tsx`, built
   through Solid's Babel transform before esbuild.
-- **Default rules, never a grant.** The plugin inserts one block after each agent's base allow: `jobs_*` asks, and the
-  four reads and the two pauses are allowed (S3). It grants nothing, weakens no deny, and inserts nothing into an agent
-  without a base allow. A job runs as the agent it names, and that agent's own `permissions` are its profile; a run's
-  session rules only ever narrow them. A job whose agent does not deny by default is refused with
-  `JOBS_AGENT_UNGUARDED` at create and again when a slot starts, rather than run into a prompt nobody can answer. An
-  agent the host no longer lists — a plugin update can leave the running plugin with a stale agent view — is
-  `JOBS_AGENT_MISSING`: the slot is `skipped` with reason `missing`, status names the agent, and the next step is
-  `opencode reload` (or a restart). The file watch's signature includes the agent list, so a transient stale view is
-  re-read and the jobs resume without an action.
+- **Default rules follow `access`, never a grant.** The plugin inserts one block after each agent's base allow, chosen by
+  the `access` option: `all` (the default) allows every `jobs_` tool; `ask-changes` asks for a change and allows the four
+  reads and the two pauses; `read-only` allows the reads and denies every change. It weakens no deny, and inserts
+  nothing into an agent without a base allow. A job runs as the agent it names, and that agent's own `permissions` are
+  its profile; a run's session rules only ever narrow them. An agent that does not deny by default is a status warning
+  (`JOBS_AGENT_UNGUARDED`, the code kept and shown) and its job still runs. An agent the host no longer lists — a plugin
+  update can leave the running plugin with a stale agent view — is `JOBS_AGENT_MISSING`: the slot is `skipped` with
+  reason `missing`, status names the agent, and the next step is `opencode reload` (or a restart). The file watch's
+  signature includes the agent list, so a transient stale view is re-read and the jobs resume without an action.
+- **Script access is re-read at every run.** A scheduled or ad-hoc run re-resolves the manifest's worst class (including
+  declared file writes) and the current `access` before the first call: `read-only` skips a change as `revoked`,
+  `ask-changes` skips an automatically approved change as `unapproved` until a person approves that exact digest.
 - **The permission hooks.** Two `permission.hook("evaluate")` calls are allowed, and only these: the one in
   `src/host/tools-rpc.ts` turns an `ask` on one of the tools RPC's own script calls in flight into a deny, and the one
   in `src/jobs/safety.ts` does the same for a session this plugin created for a run, and for a script's call, which is

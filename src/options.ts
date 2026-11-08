@@ -1,3 +1,5 @@
+import { homedir } from "node:os"
+import { isAbsolute, join, relative, resolve, sep } from "node:path"
 import { jobsError } from "./constants.js"
 import { isTimezone } from "./jobs/model.js"
 
@@ -91,15 +93,34 @@ function keepAlive(input: Record<string, unknown>): number {
   return value
 }
 
-/** Extra roots a declared file may live in: absolute directories, resolved and de-duplicated. */
+/** True when `child` lies inside `parent`, on the path's own components. */
+const inside = (child: string, parent: string): boolean => {
+  const path = relative(parent, child)
+  return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path)
+}
+
+/**
+ * Extra roots a declared file may live in: absolute directories, resolved and de-duplicated. A root is a full
+ * read/write grant to that tree, so `/`, the home directory and any ancestor of it or of OpenCode's own folders are
+ * refused (DF-7).
+ */
 function roots(input: Record<string, unknown>): readonly string[] {
   if (!Object.hasOwn(input, "scriptFilesRoots")) return []
   const value = input.scriptFilesRoots
   if (!Array.isArray(value)) throw invalid(`The option "scriptFilesRoots" must be ${ACCEPTED.scriptFilesRoots}, found ${describe(value)}`)
+  const home = resolve(homedir())
+  const configHome = resolve(process.env["XDG_CONFIG_HOME"] ?? join(home, ".config"))
+  const dataHome = resolve(process.env["XDG_DATA_HOME"] ?? join(home, ".local", "share"))
+  const forbidden = [home, join(configHome, "opencode"), join(dataHome, "opencode")]
   const roots: string[] = []
   for (const entry of value) {
     if (typeof entry !== "string" || entry.trim() === "" || !entry.startsWith("/")) throw invalid(`The option "scriptFilesRoots" must be ${ACCEPTED.scriptFilesRoots}, found ${describe(entry)}`)
-    const root = entry.trim()
+    const root = resolve(entry.trim())
+    if (root === "/") throw invalid(`The option "scriptFilesRoots" refuses "/", the whole disk; name a project or data directory`)
+    if (root === home || inside(home, root)) throw invalid(`The option "scriptFilesRoots" refuses ${JSON.stringify(root)}, which contains the home directory; name a project or data directory`)
+    if (forbidden.some((owned) => owned === root || inside(owned, root))) {
+      throw invalid(`The option "scriptFilesRoots" refuses ${JSON.stringify(root)}, which contains OpenCode's own configuration or data; name a directory beside it`)
+    }
     if (!roots.includes(root)) roots.push(root)
   }
   if (roots.length > 8) throw invalid(`The option "scriptFilesRoots" accepts at most 8 roots, found ${roots.length}`)

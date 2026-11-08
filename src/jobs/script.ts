@@ -20,6 +20,8 @@ export interface ScriptLimits {
   readonly memoryMb: number
   readonly maxCalls: number
   readonly maxOutputBytes: number
+  /** The total bytes one run may buffer across its declared files; 8 MB by default, 32 MB at most. */
+  readonly maxFileBytes: number
 }
 
 /** How a declared file may be used: read before the run, written after it, or both. */
@@ -49,11 +51,11 @@ export interface Script {
   readonly limits?: Partial<ScriptLimits>
 }
 
-/** The defaults D-E records: 100 calls, 64 MB and 64 KB. */
-export const SCRIPT_DEFAULTS: ScriptLimits = { memoryMb: 64, maxCalls: 100, maxOutputBytes: 64 * 1024 }
+/** The defaults D-E records: 100 calls, 64 MB, 64 KB and 8 MB of buffered files. */
+export const SCRIPT_DEFAULTS: ScriptLimits = { memoryMb: 64, maxCalls: 100, maxOutputBytes: 64 * 1024, maxFileBytes: 8 * 1024 * 1024 }
 
 /** The hard caps: 1,000 calls as D-E says, and bounds that keep one run from exhausting the host. */
-export const SCRIPT_MAX: ScriptLimits = { memoryMb: 512, maxCalls: 1_000, maxOutputBytes: 1024 * 1024 }
+export const SCRIPT_MAX: ScriptLimits = { memoryMb: 512, maxCalls: 1_000, maxOutputBytes: 1024 * 1024, maxFileBytes: 32 * 1024 * 1024 }
 
 /** A script is source code, not a document: past this it is refused rather than stored. */
 export const SCRIPT_SOURCE_MAX = 64 * 1024
@@ -159,11 +161,24 @@ export const filesDigest = (files: Script["files"] = {}): string =>
       .join("\n"),
   )
 
-/** The approval's resource: the source, the manifest and the declared files, as D-A and §12 bind it. */
-export const scriptDigest = (source: string, manifest: string, files = ""): string => sha256(`script\0${source}\0${manifest}\0${files}`)
+/**
+ * The resolved paths fingerprint: each name and its canonical path, sorted. It is part of the approval digest, so a
+ * saved "Always allow" names the exact files it grants and cannot cross into another directory (DF-8).
+ */
+export const pathsDigest = (files: readonly ResolvedFile[] = []): string =>
+  sha256(
+    [...files]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((file) => `${file.name}\0${file.path}`)
+      .join("\n"),
+  )
 
-/** The digest of a script definition. */
-export const digestOf = (script: Script): string => scriptDigest(sourceHash(script.code), manifestDigest(script.uses), filesDigest(script.files))
+/** The approval's resource: the source, the manifest, the declared files and their resolved paths. */
+export const scriptDigest = (source: string, manifest: string, files = "", paths = ""): string => sha256(`script\0${source}\0${manifest}\0${files}\0${paths}`)
+
+/** The digest of a script definition, with the resolved files when a run or an approval has them. */
+export const digestOf = (script: Script, resolvedFiles: readonly ResolvedFile[] = []): string =>
+  scriptDigest(sourceHash(script.code), manifestDigest(script.uses), filesDigest(script.files), pathsDigest(resolvedFiles))
 
 /** The approval resource the permission request names, and the saved rule is bound to. */
 export const approvalResource = (digest: string): string => `script:sha256:${digest}`
@@ -175,6 +190,7 @@ export function limitsOf(script: Script): ScriptLimits {
     memoryMb: Math.min(SCRIPT_MAX.memoryMb, Math.max(1, Math.floor(asked.memoryMb ?? SCRIPT_DEFAULTS.memoryMb))),
     maxCalls: Math.min(SCRIPT_MAX.maxCalls, Math.max(1, Math.floor(asked.maxCalls ?? SCRIPT_DEFAULTS.maxCalls))),
     maxOutputBytes: Math.min(SCRIPT_MAX.maxOutputBytes, Math.max(256, Math.floor(asked.maxOutputBytes ?? SCRIPT_DEFAULTS.maxOutputBytes))),
+    maxFileBytes: Math.min(SCRIPT_MAX.maxFileBytes, Math.max(1024, Math.floor(asked.maxFileBytes ?? SCRIPT_DEFAULTS.maxFileBytes))),
   }
 }
 
@@ -204,6 +220,7 @@ export function approvalMatches(approval: ScriptApproval | undefined, script: Sc
   if (approval.sourceHash !== sourceHash(script.code) || approval.manifestDigest !== manifestDigest(script.uses)) return false
   if (approval.filesDigest !== filesDigest(script.files)) return false
   if (resolvedFiles !== undefined) {
+    if (approval.digest !== digestOf(script, resolvedFiles)) return false
     if (approval.files.length !== resolvedFiles.length) return false
     const before = new Map(approval.files.map((file) => [file.name, file] as const))
     if (!resolvedFiles.every((file) => {
@@ -219,12 +236,16 @@ export function approvalMatches(approval: ScriptApproval | undefined, script: Sc
   })
 }
 
-/** True when the approval names this script's exact source, manifest and declared files, without the host. */
-export const approvalCurrent = (approval: ScriptApproval | undefined, script: Script): boolean =>
+/**
+ * True when the approval names this script's exact source, manifest and declared files, and — when a run or status
+ * supplies them — its exact resolved paths, without consulting the host.
+ */
+export const approvalCurrent = (approval: ScriptApproval | undefined, script: Script, resolvedFiles?: readonly ResolvedFile[]): boolean =>
   approval !== undefined &&
   approval.sourceHash === sourceHash(script.code) &&
   approval.manifestDigest === manifestDigest(script.uses) &&
-  approval.filesDigest === filesDigest(script.files)
+  approval.filesDigest === filesDigest(script.files) &&
+  (resolvedFiles === undefined || approval.digest === digestOf(script, resolvedFiles))
 
 /** What a class means for a person reading the approval: the line the request carries for each write-ish tool. */
 export function reachesOf(resolved: readonly ResolvedTool[]): readonly string[] {

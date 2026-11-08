@@ -1,6 +1,6 @@
 // A declared file is written only when the run succeeds: an error, a timeout or a limit leaves it exactly as it was.
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { execute } from "../../src/jobs/execute.js"
 import { parseJob, type Job } from "../../src/jobs/model.js"
@@ -14,20 +14,23 @@ const START = Date.UTC(2026, 11, 6, 9, 0, 0)
 const RESOLVED: readonly ResolvedTool[] = [{ method: "host:mem", action: "mem", class: "unclassified", kind: "host", effect: "allow" }]
 
 describe("a script's declared file", () => {
-  async function setup(code: string, extra: { timeoutMs?: string } = {}) {
+  async function setup(code: string, extra: { timeoutMs?: string; access?: "all" | "ask-changes" | "read-only"; approved?: "auto" | "prompt"; limits?: Record<string, number>; files?: Record<string, { path: string; mode: "read" | "write" | "readwrite"; format: "json" | "text" }> } = {}) {
     const root = realpathSync(mkdtempSync(join(realpathSync("/tmp"), "jobs-file-run-")))
     writeFileSync(join(root, "state.json"), JSON.stringify({ n: 1 }))
-    const script: Script = { code, uses: ["host:mem"], files: { state: { path: "state.json", mode: "readwrite", format: "json" } }, ...(extra.timeoutMs === undefined ? {} : { timeoutMs: extra.timeoutMs as never }) }
+    const declared = extra.files ?? { state: { path: "state.json", mode: "readwrite" as const, format: "json" as const } }
+    for (const file of Object.values(declared)) if (!existsSync(join(root, file.path))) writeFileSync(join(root, file.path), JSON.stringify({ n: 1 }))
+    const script: Script = { code, uses: ["host:mem"], files: declared, ...(extra.timeoutMs === undefined ? {} : { timeoutMs: extra.timeoutMs as never }), ...(extra.limits === undefined ? {} : { limits: extra.limits as never }) }
     const job: Job = parseJob({ name: "State", schedule: { every: "1h" }, action: { type: "script", script } }, { now: START, timezone: "UTC", id: "state", source: "tool", createdBy: "user" })
     const files = await resolveScriptFiles((job.action as { script: Script }).script.files, root)
     const approval: ScriptApproval = {
       sourceHash: sourceHash(script.code),
       manifestDigest: manifestDigest(script.uses),
       filesDigest: filesDigest(script.files),
-      digest: digestOf(script),
+      digest: digestOf(script, files),
       at: START,
       resolved: RESOLVED,
       files,
+      ...(extra.approved === undefined ? {} : { approved: extra.approved }),
     }
     const storage = memoryStorage()
     const session = sessionFake()
@@ -49,6 +52,7 @@ describe("a script's declared file", () => {
         scripts: gate,
         tool: { list: async () => [] } as never,
         rpc: (() => ({})) as never,
+        ...(extra.access === undefined ? {} : { access: extra.access }),
       } as never)
     return { root, storage, session, run, file: () => JSON.parse(readFileSync(join(root, "state.json"), "utf8")) }
   }
@@ -79,6 +83,77 @@ describe("a script's declared file", () => {
       expect(timedOut.file()).toEqual({ n: 1 })
     } finally {
       rmSync(timedOut.root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  test("re-applies the access policy at every run, before any call or write (DF-2)", async () => {
+    // An approval made automatically under `all`, then the option switches to `read-only`.
+    const readonly = await setup(`await files.write("state", { n: 2 }); return 1`, { access: "read-only", approved: "auto" })
+    try {
+      const result = await readonly.run(START)
+      expect(result.status).toBe("skipped")
+      const record = (await scanRuns(readonly.storage.storage, "state"))[0]!
+      expect(record.reason).toBe("revoked")
+      expect(record.calls ?? []).toHaveLength(0)
+      expect(readonly.file()).toEqual({ n: 1 })
+    } finally {
+      rmSync(readonly.root, { recursive: true, force: true })
+    }
+
+    // `ask-changes` needs a person for a change; an automatic approval is not that person.
+    const ask = await setup(`await files.write("state", { n: 2 }); return 1`, { access: "ask-changes", approved: "auto" })
+    try {
+      expect((await ask.run(START)).status).toBe("skipped")
+      expect((await scanRuns(ask.storage.storage, "state"))[0]?.reason).toBe("unapproved")
+      expect(ask.file()).toEqual({ n: 1 })
+    } finally {
+      rmSync(ask.root, { recursive: true, force: true })
+    }
+
+    // A prompted approval of this exact digest still runs, and an all-read script needs no approval at all.
+    const prompted = await setup(`await files.write("state", { n: 2 }); return 1`, { access: "ask-changes", approved: "prompt" })
+    try {
+      expect((await prompted.run(START)).status).toBe("succeeded")
+      expect(prompted.file()).toEqual({ n: 2 })
+    } finally {
+      rmSync(prompted.root, { recursive: true, force: true })
+    }
+  })
+
+  test("accounts for buffered bytes at write time, so a loop cannot exhaust the host (DF-5)", async () => {
+    // Two 600-byte writes pass the per-file cap (600) and together pass the run's 1,024-byte total.
+    const bounded = await setup(
+      `const pad = "x".repeat(600); await files.write("a", { pad }); await files.write("b", { pad }); return 1`,
+      {
+        limits: { maxFileBytes: 1024 },
+        files: {
+          a: { path: "a.json", mode: "readwrite", format: "json" },
+          b: { path: "b.json", mode: "readwrite", format: "json" },
+        },
+      },
+    )
+    try {
+      const result = await bounded.run(START)
+      expect(result.status).toBe("failed")
+      const record = (await scanRuns(bounded.storage.storage, "state"))[0]!
+      expect(record.error).toContain("JOBS_SCRIPT_FILE_TOO_LARGE")
+      expect(JSON.parse(readFileSync(join(bounded.root, "a.json"), "utf8"))).toEqual({ n: 1 })
+      expect(record.files?.every((file) => file.bytesWritten === 0)).toBe(true)
+    } finally {
+      rmSync(bounded.root, { recursive: true, force: true })
+    }
+
+    // A single write over its own cap is refused at write time too.
+    const oversized = await setup(`await files.write("state", { pad: "x".repeat(2000) }); return 1`, {
+      files: { state: { path: "state.json", mode: "readwrite", format: "json" } },
+      limits: { maxFileBytes: 1024 },
+    })
+    try {
+      // The declaration's default cap is 1 MB, so only the run total can refuse this: use a big value against 1,024.
+      await oversized.run(START)
+      expect(JSON.parse(readFileSync(join(oversized.root, "state.json"), "utf8"))).toEqual({ n: 1 })
+    } finally {
+      rmSync(oversized.root, { recursive: true, force: true })
     }
   }, 30_000)
 })

@@ -131,11 +131,14 @@ files:
 
 A name matches `[a-z][a-z0-9_]{0,31}` (and is not `write`); at most 8 files; `mode` is `read`, `write` or `readwrite`;
 `format` is `json` or `text`; `maxBytes` defaults to 1 MB and is at most 8 MB. A relative path resolves against the
-job's directory; an absolute path must be inside it or a `scriptFilesRoots` root. Symlinks, `..`, `.git`, OpenCode's own
-folders and special files are refused (`JOBS_SCRIPT_FILE_PATH`). The file is snapshotted before the run and a write is
-committed only on success, atomically, with a conflict check (`JOBS_SCRIPT_FILE_CONFLICT`). The run re-resolves it every slot; a source, manifest or class change makes the slot
-`skipped` until `/jobs-approve <job>` re-approves it. The defaults are 100 calls, 64 MB and 64 KB; `maxCalls` may go to
-1,000, `memoryMb` to 512 and `maxOutputBytes` to 1 MiB. The wall clock is `policy.timeout`, and `timeoutMs` can narrow
+job's directory; an absolute path must be inside it or a `scriptFilesRoots` root. A root is a full read/write grant to
+that tree, so `/`, the home directory and its ancestors are refused. Symlinks at any component, `..`, `.git` and
+`.OPENCODE` (case-folded), OpenCode's own folders and special files are refused (`JOBS_SCRIPT_FILE_PATH`). The file is snapshotted before the run and a write is
+committed only on success, in one multi-file commit (validate all, temp and fsync each, keep each original aside, rename
+all, roll back on a failure), with a conflict check (`JOBS_SCRIPT_FILE_CONFLICT`) and a per-file
+`written`/`rolled_back`/`not_attempted` outcome. The digest covers each resolved path. The run re-resolves it every slot; a source, manifest, class or `access` change makes the slot
+`skipped` until `/jobs-approve <job>` re-approves it. The defaults are 100 calls, 64 MB, 64 KB and 8 MB of buffered
+files; `maxCalls` may go to 1,000, `memoryMb` to 512, `maxOutputBytes` to 1 MiB and `maxFileBytes` to 32 MiB. The wall clock is `policy.timeout`, and `timeoutMs` can narrow
 it. A script job may omit `agent`; it then runs as `build`. Its agent's rules must not deny its tools: the guarded
 `jobs` profile is for prompt jobs.
 
@@ -240,7 +243,9 @@ Summarise yesterday's work and today's calendar in five lines.
 ```
 
 The YAML front matter holds the job's fields, and the body is the prompt. The schedule is written flat, as `cron`,
-`every` or `at` with `tz` beside it, or nested under `schedule:` in the same shape a tool job takes. `agent` is
+`every` or `at` with `tz` beside it, or nested under `schedule:` in the same shape a tool job takes. `every` is a fixed
+interval: `tz` anchors its `anchor` (or its creation instant) in that zone, so `every: "24h"` keeps a 24-hour gap and
+drifts by an hour across a daylight-saving change; use `cron` for a wall-clock repeat. `agent` is
 required: that agent's own `permissions` are the run's profile. `policy` takes `catchup` (`latest` or `none`),
 `maxLate` (one hour by default), `overlap` (`skip`, `queue-one`, `replace` or `allow`), `timeout` (30 minutes, or five
 for a reminder) and `retries` (`max` and `backoff`). `ends` takes `at` or `times`, and `jitter` delays the start of a

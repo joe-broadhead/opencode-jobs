@@ -1,5 +1,7 @@
 // A script job whose latest run was skipped because a tool is now denied: status must not say "approved" (SR-8).
 import { describe, expect, test } from "bun:test"
+import { mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { join } from "node:path"
 import { createReport } from "../../src/jobs/report.js"
 import { parseJob } from "../../src/jobs/model.js"
 import { digestOf, filesDigest, manifestDigest, sourceHash } from "../../src/jobs/script.js"
@@ -38,6 +40,34 @@ describe("status and a revoked script", () => {
     // The problem row names the job, the method and the action the agent now denies (D1).
     expect(status.problems[0]).toContain("JOBS_SCRIPT_REVOKED")
     expect(status.problems[0]).toContain("host:mem")
+  })
+
+  test("flags a resolved path that no longer matches the approval (DF-10)", async () => {
+    const root = realpathSync(mkdtempSync(join(realpathSync("/tmp"), "jobs-status-")))
+    try {
+      const withFile = parseJob(
+        { name: "State", schedule: { every: "1h" }, action: { type: "script", script: { code: "return files.state", uses: ["host:mem"], files: { state: { path: "state.json", mode: "read", format: "json" } } } } },
+        { now: NOW, timezone: "UTC", id: "state", source: "tool", createdBy: "user" },
+      )
+      const declared = (withFile.action as { script: { code: string; uses: readonly string[]; files: Record<string, unknown> } }).script
+      const old = [{ name: "state", path: join(root, "old", "state.json"), mode: "read" as const, format: "json" as const, maxBytes: 1024 }]
+      const storage = memoryStorage()
+      const clock = testClock(NOW, { instantBelow: 0 })
+      await putJob(storage.storage, withFile)
+      await putState(storage.storage, {
+        job: withFile.id,
+        runCount: 0,
+        consecutiveFailures: 0,
+        nextDueAt: NOW,
+        approval: { sourceHash: sourceHash(declared.code), manifestDigest: manifestDigest(declared.uses), filesDigest: filesDigest(declared.files as never), digest: digestOf(declared as never, old), at: NOW, resolved: [], files: old },
+      })
+      const report = createReport({ storage: storage.storage, location: root, timezone: "UTC", clock: clock.clock, agent: agentsFake(), host: HOST, enabled: true, keepAliveMinutes: 20 })
+      const status = await report.status()
+      // The declared path alone still matches; the resolved path does not, so status must not say approved.
+      expect(status.scriptJobs).toMatchObject({ approved: 0, unapproved: 1, names: ["state"] })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   test("a successful latest run is not flagged", async () => {

@@ -26,7 +26,7 @@ export interface ScriptRunInput {
   readonly timeoutMs: number
   readonly bridge: ScriptBridge
   /** The declared files: the readable values the guest sees, and the names it may write. */
-  readonly files?: { readonly values: Readonly<Record<string, unknown>>; readonly writable: ReadonlySet<string> }
+  readonly files?: { readonly values: Readonly<Record<string, unknown>>; readonly writable: ReadonlyMap<string, number> }
   /** Each manifest method's class, for the per-call rows. */
   readonly classes?: ReadonlyMap<string, string>
   /** The cleanup signal: aborts the VM and any call in flight. */
@@ -95,12 +95,21 @@ interface MutableCall {
 }
 
 /** The first `CODE:` in an error, for the row: the code, never the message around it. */
-const codeOf = (message: string): string | undefined => /\b(JOBS_[A-Z_]+|[A-Z][A-Z_]{2,}|[a-z]+\.[a-z_]+):/.exec(message)?.[1]
+const KNOWN_CODES = new Set([
+  "TOOL_UNAVAILABLE", "SESSION_UNKNOWN", "SESSION_AGENT_REQUIRED", "PERMISSION_DENIED", "SERVER_CONFLICT", "AUTH_REQUIRED",
+  "CONNECTING", "CONNECTION_FAILED", "DISABLED", "NOT_REGISTERED", "UPSTREAM_ERROR", "CANCELLED",
+])
+/** The first code the family itself raises. Any other upper-case token with a colon is not a code (DF-17). */
+const codeOf = (message: string): string | undefined =>
+  [...message.matchAll(/\b([A-Z][A-Z_]{2,}|[a-z]+\.[a-z_]+):/g)]
+    .map((match) => match[1]!)
+    .find((code) => code.startsWith("JOBS_") || code.startsWith("permission.") || KNOWN_CODES.has(code))
 
 export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult> {
   const wasm = quickjsWasm()
   const calls: MutableCall[] = []
-  const writes: FileWrite[] = []
+  const buffer = new Map<string, string>()
+  let buffered = 0
   let dispatched = 0
   const flags = { timedOut: false, memoryExceeded: false, callLimit: false, outputTruncated: false, interrupted: false }
   let deadlineHit = false
@@ -209,13 +218,24 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
     vm.setProp(vm.global, "__files", vm.newString(JSON.stringify(input.files?.values ?? {})))
     const write = vm.newFunction("__write", (nameHandle: { toString(): string }, jsonHandle: { toString(): string }) => {
       const name = nameHandle.toString()
-      if (input.files?.writable.has(name) !== true) throw new Error(`JOBS_SCRIPT_FILE_MODE: ${name} is not a writable file.`)
-      writes.push({ name, json: jsonHandle.toString() })
+      const cap = input.files?.writable.get(name)
+      if (cap === undefined) throw new Error(`JOBS_SCRIPT_FILE_MODE: ${name} is not a writable file.`)
+      const json = jsonHandle.toString()
+      const size = Buffer.byteLength(json, "utf8")
+      // Account for the buffer at write time: per file, and for the run, so a loop cannot exhaust the host (DF-5).
+      if (size > cap) throw new Error(`JOBS_SCRIPT_FILE_TOO_LARGE: the value written to ${name} is ${size} bytes, over its ${cap} byte limit.`)
+      const previous = buffer.get(name)
+      const total = buffered - (previous === undefined ? 0 : Buffer.byteLength(previous, "utf8")) + size
+      if (total > input.limits.maxFileBytes) {
+        throw new Error(`JOBS_SCRIPT_FILE_TOO_LARGE: the run's buffered writes are ${total} bytes, over the ${input.limits.maxFileBytes} byte limit.`)
+      }
+      buffer.set(name, json)
+      buffered = total
       return vm.undefined
     })
     vm.setProp(vm.global, "__write", write)
 
-    const wrapped = `(async () => { ${PRELUDE}; const __value = await (async () => {\n${input.code}\n})(); return JSON.stringify(__value === undefined ? null : __value) })()`
+    const wrapped = `(async () => { "use strict"; ${PRELUDE}; const __value = await (async () => {\n${input.code}\n})(); return JSON.stringify(__value === undefined ? null : __value) })()`
     try {
       const handle = vm.evalCode(wrapped, "script.js", 0)
       vm.executePendingJobs()
@@ -230,9 +250,9 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
       const size = Buffer.byteLength(output, "utf8")
       if (size > input.limits.maxOutputBytes) {
         flags.outputTruncated = true
-        return { ok: true, value: { truncated: true, bytes: size, note: "output truncated at the job's limit" }, calls: [...calls], limits: flags, outputTruncated: true, writes }
+        return { ok: true, value: { truncated: true, bytes: size, note: "output truncated at the job's limit" }, calls: [...calls], limits: flags, outputTruncated: true, writes: [...buffer].map(([name, json]) => ({ name, json })) }
       }
-      return { ok: true, value: JSON.parse(output) as unknown, calls: [...calls], limits: flags, outputTruncated: false, writes }
+      return { ok: true, value: JSON.parse(output) as unknown, calls: [...calls], limits: flags, outputTruncated: false, writes: [...buffer].map(([name, json]) => ({ name, json })) }
     } catch (error) {
       const message = short(error)
       if (/out of memory/i.test(message) || /memory/i.test(String((evalError as { message?: string } | undefined)?.message))) flags.memoryExceeded = true
@@ -253,7 +273,7 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
                 : external
                   ? "JOBS_SCRIPT_FAILED: a call was refused because its path is outside the agent's project. Next step: Add an `external_directory` allow for that path to the agent's permissions, and keep the declared file inside `scriptFilesRoots`."
                   : "JOBS_SCRIPT_FAILED: the script failed. Next step: Read the script's error, fix the script or its tools, then approve it again if it changed."
-      return { ok: false, error: `${coded} (${message})`, calls: [...calls], limits: flags, outputTruncated: flags.outputTruncated, writes }
+      return { ok: false, error: `${coded} (${message})`, calls: [...calls], limits: flags, outputTruncated: flags.outputTruncated, writes: [...buffer].map(([name, json]) => ({ name, json })) }
     }
   } finally {
     closed = true
