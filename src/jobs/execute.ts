@@ -19,6 +19,7 @@ import { forgetJobSession, jobOutput, openJobSession, SELF_DENIES } from "./safe
 import { approvalMatches, denied, limitsOf, manifestDigest, scriptSessionRules, sourceHash, type Script } from "./script.js"
 import { createBridge } from "./script-bridge.js"
 import type { ScriptGate } from "./script-gate.js"
+import { commitFiles, resolveScriptFiles, snapshotFiles, type FileRecord, type FileSnapshot } from "./script-files.js"
 import { runScript } from "./script-runtime.js"
 import { getRun, putRun, readPauseAll, readState, slotISO, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
 
@@ -86,6 +87,8 @@ export interface ExecutorInput {
   /** The host's tools and tools RPCs, which a script's bridge calls. A script run requires both. */
   readonly tool?: Pick<Plugin.Context["tool"], "list">
   readonly rpc?: Plugin.Context["rpc"]
+  /** Extra roots a script's declared files may live in, from the `scriptFilesRoots` option. */
+  readonly scriptFilesRoots?: readonly string[]
 }
 
 export function createExecutor(input: ExecutorInput): Executor {
@@ -198,6 +201,7 @@ async function complete(input: ExecuteInput, key: string, startedAt: number, ses
     ...(result.result === undefined ? {} : { result: result.result }),
     ...(result.calls === undefined ? {} : { calls: result.calls }),
     ...(result.limits === undefined ? {} : { limits: result.limits }),
+    ...(result.files === undefined ? {} : { files: result.files }),
     ...(result.error === undefined ? {} : { error: result.error }),
   })
   return {
@@ -219,6 +223,7 @@ interface Finished {
   readonly result?: RunRecord["result"]
   readonly calls?: RunRecord["calls"]
   readonly limits?: RunRecord["limits"]
+  readonly files?: RunRecord["files"]
   /** A script run's coded error, when it did not succeed. */
   readonly error?: string
 }
@@ -360,6 +365,39 @@ export async function summaryOf(session: Pick<Session, "context">, sessionID: st
 
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
+/** A slot a script job could not start because a declared file could not be read or parsed. */
+async function failScript(input: ExecuteInput, key: string, error: unknown): Promise<RunResult> {
+  const message = reason(error)
+  const record = await putRun(input.storage, {
+    job: input.job.id,
+    slot: key,
+    status: "failed",
+    late: input.late,
+    attempt: input.attempt,
+    token: input.token,
+    startedAt: input.clock.now(),
+    endedAt: input.clock.now(),
+    error: message,
+  })
+  return { claimed: true, status: "failed", record, error: message }
+}
+
+/** One record per declared file: what it read, and what a commit wrote, never the content. */
+function recordsOf(snapshots: readonly FileSnapshot[], writes: readonly FileRecord[] = []): readonly FileRecord[] {
+  return snapshots.map((snapshot) => {
+    const written = writes.find((record) => record.name === snapshot.file.name)
+    return {
+      name: snapshot.file.name,
+      path: snapshot.file.path,
+      mode: snapshot.file.mode,
+      bytesRead: snapshot.bytes,
+      bytesWritten: written?.bytesWritten ?? 0,
+      ...(snapshot.sha256 === null ? {} : { sha256Before: snapshot.sha256 }),
+      ...(written?.sha256After === undefined ? {} : { sha256After: written.sha256After }),
+    }
+  })
+}
+
 /** A slot a script job could not run, with the code and the one act that unlocks it. */
 async function skipScript(input: ExecuteInput, key: string, skipReason: "unapproved" | "revoked", code: string, what: string, next: string): Promise<RunResult> {
   const message = jobsError(code, what, next).message
@@ -399,13 +437,27 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
   } catch (error) {
     return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} could not re-resolve its manifest (${reason(error)}).`, `Approve it again with the jobs_approve tool or /jobs-approve ${job.id}.`)
   }
-  if (!approvalMatches(state.approval, script, resolved)) {
-    return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} has changed since it was approved, or its tools resolve differently now.`, `Approve it again with the jobs_approve tool or /jobs-approve ${job.id}.`)
+  let resolvedFiles
+  try {
+    resolvedFiles = await resolveScriptFiles(script.files, directory, input.scriptFilesRoots ?? [])
+  } catch (error) {
+    return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} has a declared file the policy now refuses (${reason(error)}).`, `Fix the path, then approve the script again with /jobs-approve ${job.id}.`)
+  }
+  if (!approvalMatches(state.approval, script, resolved, resolvedFiles)) {
+    return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} has changed since it was approved, or its tools or files resolve differently now.`, `Approve it again with the jobs_approve tool or /jobs-approve ${job.id}.`)
   }
   const revoked = denied(resolved)
   if (revoked.length > 0) {
     const names = revoked.map((tool) => `${tool.method} (${tool.action})`).join(", ")
-    return skipScript(input, key, "revoked", "JOBS_SCRIPT_REVOKED", `The script ${JSON.stringify(job.id)} uses tools its agent now denies: ${names}.`, `Remove the deny rule for those tools, or point the job at an agent that allows them, then approve it again.`)
+    const rules = revoked.map((tool) => ({ action: tool.action, resource: "*", effect: "allow" }))
+    return skipScript(input, key, "revoked", "JOBS_SCRIPT_REVOKED", `The script ${JSON.stringify(job.id)} uses tools its agent now denies: ${names}.`, `Add these rules to that agent's permissions: ${JSON.stringify(rules)}, or remove the deny, then approve the script again.`)
+  }
+  // The declared files are read before the session, so an invalid or oversized file fails the slot without a run.
+  let snapshots: readonly FileSnapshot[]
+  try {
+    snapshots = await snapshotFiles(resolvedFiles)
+  } catch (error) {
+    return await failScript(input, key, error)
   }
   // The kill switch can arrive between the claim and the session.
   if (await paused(input)) return { claimed: true, status: "interrupted" }
@@ -446,15 +498,44 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
       },
     })
     const bridge = createBridge({ rpc, tool: tools, session: input.session, agent: input.agents, sessionID, agentID: job.agent, manifest: resolved })
-    const outcome = await runScript({ code: script.code, allowed: new Set(resolved.map((tool) => tool.method)), limits, timeoutMs, bridge, signal: controller.signal, now: clock.now })
+    const outcome = await runScript({
+      code: script.code,
+      allowed: new Set(resolved.map((tool) => tool.method)),
+      limits,
+      timeoutMs,
+      bridge,
+      signal: controller.signal,
+      now: clock.now,
+      files: {
+        values: Object.fromEntries(snapshots.filter((snapshot) => snapshot.file.mode !== "write").map((snapshot) => [snapshot.file.name, snapshot.value] as const)),
+        writable: new Set(resolvedFiles.filter((file) => file.mode !== "read").map((file) => file.name)),
+      },
+    })
     const interrupted = stopped || input.signal?.aborted === true || outcome.limits.interrupted
     const status: RunStatus = outcome.ok ? "succeeded" : interrupted ? "interrupted" : outcome.limits.timedOut ? "timed_out" : "failed"
+    let fileRecords = recordsOf(snapshots)
+    if (outcome.ok) {
+      try {
+        fileRecords = recordsOf(snapshots, await commitFiles(snapshots, outcome.writes))
+      } catch (error) {
+        return await complete(input, key, startedAt, sessionID, {
+          status: "failed",
+          script: { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), uses: [...script.uses] },
+          result: { ok: true, value: outcome.value },
+          calls: outcome.calls,
+          limits: outcome.limits,
+          files: fileRecords,
+          error: reason(error),
+        })
+      }
+    }
     return await complete(input, key, startedAt, sessionID, {
       status,
       script: { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), uses: [...script.uses] },
       result: outcome.ok ? { ok: true, value: outcome.value } : { ok: false, error: outcome.error },
       calls: outcome.calls,
       limits: outcome.limits,
+      files: fileRecords,
       ...(outcome.ok || outcome.error === undefined ? {} : { error: outcome.error }),
     })
   } catch (error) {

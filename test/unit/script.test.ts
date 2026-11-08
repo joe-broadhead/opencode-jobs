@@ -7,6 +7,7 @@ import { parseJob, parseScriptDefinition, type Job } from "../../src/jobs/model.
 import {
   approvalResource,
   approvalMatches,
+  filesDigest,
   digestOf,
   denied,
   limitsOf,
@@ -65,14 +66,27 @@ describe("the approval binding", () => {
     const source = sourceHash(script.code)
     const manifest = manifestDigest(script.uses)
     expect(manifest).toBe(manifestDigest([...script.uses].reverse()))
-    expect(digestOf(script)).toBe(scriptDigest(source, manifest))
+    expect(digestOf(script)).toBe(scriptDigest(source, manifest, filesDigest(script.files)))
     expect(approvalResource(digestOf(script))).toBe(`script:sha256:${digestOf(script)}`)
     expect(scriptDigest(source, manifest)).not.toBe(scriptDigest(sourceHash("return 2"), manifest))
     expect(scriptDigest(source, manifest)).not.toBe(scriptDigest(source, manifestDigest(["x.posts.b"])))
   })
 
+  test("the digest covers the declared files: a path, mode, format or cap change needs a new approval", () => {
+    const base: Script = { code: "return 1", uses: ["host:mem"], files: { state: { path: "state.json", mode: "readwrite", format: "json" } } }
+    const changed = (file: Partial<NonNullable<Script["files"]>[string]>) => digestOf({ ...base, files: { state: { ...base.files!.state!, ...file } } })
+    expect(digestOf(base)).not.toBe(digestOf({ code: base.code, uses: base.uses }))
+    expect(changed({ path: "other.json" })).not.toBe(digestOf(base))
+    expect(changed({ mode: "write" })).not.toBe(digestOf(base))
+    expect(changed({ format: "text" })).not.toBe(digestOf(base))
+    expect(changed({ maxBytes: 10 })).not.toBe(digestOf(base))
+    // The file names and their fields are sorted, so the object's insertion order does not matter.
+    const reordered: Script = { ...base, files: { state: base.files!.state! } }
+    expect(digestOf(reordered)).toBe(digestOf(base))
+  })
+
   test("matches only the same hashes, tools, actions and classes", () => {
-    const approval = { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), digest: digestOf(script), at: NOW, resolved }
+    const approval = { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), filesDigest: filesDigest(script.files), digest: digestOf(script), at: NOW, resolved, files: [] }
     expect(approvalMatches(approval, script, resolved)).toBe(true)
     expect(approvalMatches(undefined, script, resolved)).toBe(false)
     expect(approvalMatches(approval, { ...script, code: "return 2" }, resolved)).toBe(false)

@@ -12,7 +12,8 @@ import type { Plugin } from "@opencode/plugin"
 import { jobsError } from "../constants.js"
 import { cut } from "../redact.js"
 import { DAY, type Job } from "./model.js"
-import type { ScriptApproval, ScriptCall, ScriptLimitFlags } from "./script.js"
+import type { ResolvedFile, ScriptApproval, ScriptCall, ScriptLimitFlags } from "./script.js"
+import type { FileRecord } from "./script-files.js"
 
 /** The schema this build writes. A store with a later one is refused, not overwritten. */
 export const SCHEMA_VERSION = 2
@@ -96,6 +97,8 @@ export interface RunRecord {
   readonly calls?: readonly ScriptCall[]
   /** Which limit ended the run, when one did. */
   readonly limits?: ScriptLimitFlags
+  /** The declared files this run read and wrote: name, path, mode, bytes and hashes, never the content. */
+  readonly files?: readonly FileRecord[]
 }
 
 export interface Migration {
@@ -219,13 +222,24 @@ function asApproval(value: unknown): ScriptApproval | undefined {
     if (entry.effect !== "allow" && entry.effect !== "ask" && entry.effect !== "deny") return []
     return [{ method: entry.method, action: entry.action, class: entry.class, kind: entry.kind, effect: entry.effect, ...(typeof entry.description === "string" ? { description: entry.description } : {}) }]
   })
+  const files: ResolvedFile[] = Array.isArray(value.files)
+    ? value.files.flatMap((entry) => {
+        if (!isObject(entry) || typeof entry.name !== "string" || typeof entry.path !== "string") return []
+        if (entry.mode !== "read" && entry.mode !== "write" && entry.mode !== "readwrite") return []
+        if (entry.format !== "json" && entry.format !== "text") return []
+        if (typeof entry.maxBytes !== "number") return []
+        return [{ name: entry.name, path: entry.path, mode: entry.mode, format: entry.format, maxBytes: entry.maxBytes } as ResolvedFile]
+      })
+    : []
   return {
     sourceHash: value.sourceHash,
     manifestDigest: value.manifestDigest,
+    filesDigest: typeof value.filesDigest === "string" ? value.filesDigest : "",
     digest: value.digest,
     at: value.at,
     ...(typeof value.requestID === "string" ? { requestID: value.requestID } : {}),
     resolved: resolved as ScriptApproval["resolved"],
+    files,
   }
 }
 

@@ -51,8 +51,38 @@ A job is one of four things:
   source and tool list, and re-checked every slot; a changed script or tool needs `/jobs-approve`.
 
 A script is the no-model path: `uses` is its whole reach, it cannot ask, and the record keeps only what each call did.
-[Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md) has the approval flow, the two
-routes it can call (family methods and `host:<tool id>`), the limits, and the X-bookmarks walkthrough.
+A job may also declare files it reads and writes, so a script can keep state between runs:
+
+```yaml
+name: Keep last week's bookmarks
+schedule: { cron: "0 8 * * *", tz: Europe/Amsterdam }
+agent: build
+action:
+  type: script
+  script:
+    uses:
+      - x.posts.get_users_me
+      - x.posts.get_users_bookmarks
+    files:
+      bookmarks:
+        path: bookmarks.json
+        mode: readwrite
+        format: json
+    code: |
+      const me = await tools.x.posts.get_users_me({});
+      const state = files.bookmarks ?? { items: [] };
+      const known = new Set((state.items ?? []).map((item) => item.id));
+      const page = await tools.x.posts.get_users_bookmarks({ id: me.data?.id, max_results: 100 });
+      const fresh = (page.data ?? []).filter((item) => !known.has(item.id));
+      await files.write("bookmarks", { items: [...fresh, ...(state.items ?? [])] });
+      return { added: fresh.length };
+```
+
+The manifest is read as `<plugin id>.<method>`, split at the last dot, so `utilities.tools.time_now` is
+`tools.utilities.tools.time_now`. A `readwrite` file is snapshotted before the run and written after it, atomically and
+only on success. [Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md) has the
+approval flow, the two routes (family methods and `host:<tool id>`), the file policy, the limits, and the full
+bookmarks walkthrough with the daily cadence.
 
 A job that belongs to a project is a Markdown file in `.opencode/jobs/`, so it is reviewed and committed like any other
 file:
@@ -174,6 +204,12 @@ Run `/jobs-status` first. Its last line is the next step.
 | Agents OpenCode no longer lists | A plugin update can leave OpenCode's running plugin with a stale agent list, so jobs that name a configuration agent do not run. Run `opencode reload` in a terminal, or restart OpenCode; jobs resume on their own. |
 | `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, so the job is refused rather than run into prompts. Paste the block `/jobs-status` prints. |
 | `JOBS_AGENT_MISSING` | OpenCode no longer lists the job's agent here, which can happen after a plugin update. Run `opencode reload` in a terminal, or restart OpenCode; the next slot runs once it is back. |
+| `JOBS_SCRIPT_FILE_PATH` | A declared file's path is outside the job's directory and `scriptFilesRoots`, contains `..`, a symlink, a special file, `.git`, or OpenCode's own config or data. Fix the path; the file is never opened. |
+| `JOBS_SCRIPT_FILE_INVALID` | A declared JSON file is not valid JSON, or a text file was given a non-string value. Fix the file or the write. |
+| `JOBS_SCRIPT_FILE_TOO_LARGE` | A declared file, or a write to it, is over its `maxBytes`. Raise the cap, or keep the file smaller. |
+| `JOBS_SCRIPT_FILE_CONFLICT` | A declared write target changed on disk after the run read it. Nothing is written; let the next run read it. |
+| `JOBS_SCRIPT_FILE_MODE` | The script wrote a file declared `read`. Declare it `write` or `readwrite`, then approve again. |
+| `JOBS_SCRIPT_BODY_IGNORED` | A script job file has a non-empty markdown body, which a script has no prompt to use. Remove the body or move it into the code. |
 | `JOBS_SCRIPT_HOST_TOOL` | A `host:` entry names OpenCode's own shell, file, network or task tool. A script reaches MCP servers and plugin tools only. Remove it. |
 | `JOBS_SCRIPT_FAMILY_TOOL` | A `host:` entry names a tool a loaded plugin serves through its tools RPC. Use `<plugin id>.<method>`, so its shaping and budgets apply. |
 | `JOBS_SCRIPT_DENIED` | The job's agent denies a tool the script's manifest names. A session allow beats an agent deny, so the script is refused rather than granted it. Remove the deny rule for that tool, or point the job at an agent that allows it. |

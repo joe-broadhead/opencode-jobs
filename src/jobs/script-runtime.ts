@@ -12,6 +12,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { QuickJS, Intrinsics } from "quickjs-wasi"
 import { reasonOf } from "../redact.js"
+import type { FileWrite } from "./script-files.js"
 import type { ScriptCall, ScriptLimitFlags, ScriptLimits } from "./script.js"
 
 /** One tool call the guest makes. The host resolves it against the manifest before anything is dispatched. */
@@ -24,6 +25,8 @@ export interface ScriptRunInput {
   /** The job's wall clock for this run, already capped by its policy. */
   readonly timeoutMs: number
   readonly bridge: ScriptBridge
+  /** The declared files: the readable values the guest sees, and the names it may write. */
+  readonly files?: { readonly values: Readonly<Record<string, unknown>>; readonly writable: ReadonlySet<string> }
   /** The cleanup signal: aborts the VM and any call in flight. */
   readonly signal?: AbortSignal
   /** The clock the deadline and call times read: injected, like every other time in the plugin. */
@@ -38,6 +41,8 @@ export interface ScriptRunResult {
   readonly limits: ScriptLimitFlags
   /** True when the result was cut at the output limit and a marker appended. */
   readonly outputTruncated: boolean
+  /** The writes the guest buffered; committed only if the run succeeds. */
+  readonly writes: readonly FileWrite[]
 }
 
 const WASM_CANDIDATES = [
@@ -66,6 +71,12 @@ const PRELUDE = `globalThis.tools = (() => {
     return new Proxy(call, { get: (_, key) => node(path === "" ? String(key) : path + "." + String(key)) })
   }
   return node("")
+})();
+globalThis.files = (() => {
+  const freeze = (value) => { if (value && typeof value === "object") { for (const key of Object.keys(value)) freeze(value[key]); Object.freeze(value) } return value }
+  const values = JSON.parse(__files);
+  Object.defineProperty(values, "write", { value: (name, value) => new Promise((resolve) => resolve(__write(name, JSON.stringify(value === undefined ? null : value)))).then(() => undefined), enumerable: false, writable: false })
+  return freeze(values)
 })();`
 
 const result = (value: unknown): string => JSON.stringify(value === undefined ? null : value)
@@ -82,6 +93,7 @@ interface MutableCall {
 export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult> {
   const wasm = quickjsWasm()
   const calls: MutableCall[] = []
+  const writes: FileWrite[] = []
   let dispatched = 0
   const flags = { timedOut: false, memoryExceeded: false, callLimit: false, outputTruncated: false, interrupted: false }
   let deadlineHit = false
@@ -184,6 +196,14 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
       return deferred.handle
     })
     vm.setProp(vm.global, "__call", call)
+    vm.setProp(vm.global, "__files", vm.newString(JSON.stringify(input.files?.values ?? {})))
+    const write = vm.newFunction("__write", (nameHandle: { toString(): string }, jsonHandle: { toString(): string }) => {
+      const name = nameHandle.toString()
+      if (input.files?.writable.has(name) !== true) throw new Error(`JOBS_SCRIPT_FILE_MODE: ${name} is not a writable file.`)
+      writes.push({ name, json: jsonHandle.toString() })
+      return vm.undefined
+    })
+    vm.setProp(vm.global, "__write", write)
 
     const wrapped = `(async () => { ${PRELUDE}; const __value = await (async () => {\n${input.code}\n})(); return JSON.stringify(__value === undefined ? null : __value) })()`
     try {
@@ -200,9 +220,9 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
       const size = Buffer.byteLength(output, "utf8")
       if (size > input.limits.maxOutputBytes) {
         flags.outputTruncated = true
-        return { ok: true, value: { truncated: true, bytes: size, note: "output truncated at the job's limit" }, calls: [...calls], limits: flags, outputTruncated: true }
+        return { ok: true, value: { truncated: true, bytes: size, note: "output truncated at the job's limit" }, calls: [...calls], limits: flags, outputTruncated: true, writes }
       }
-      return { ok: true, value: JSON.parse(output) as unknown, calls: [...calls], limits: flags, outputTruncated: false }
+      return { ok: true, value: JSON.parse(output) as unknown, calls: [...calls], limits: flags, outputTruncated: false, writes }
     } catch (error) {
       const message = short(error)
       if (/out of memory/i.test(message) || /memory/i.test(String((evalError as { message?: string } | undefined)?.message))) flags.memoryExceeded = true
@@ -220,7 +240,7 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
               : flags.interrupted
                 ? "JOBS_SCRIPT_INTERRUPTED: the run was interrupted. Next step: Run it again with jobs_run_now, or wait for its next slot."
                 : "JOBS_SCRIPT_FAILED: the script failed. Next step: Read the script's error, fix the script or its tools, then approve it again if it changed."
-      return { ok: false, error: `${coded} (${message})`, calls: [...calls], limits: flags, outputTruncated: flags.outputTruncated }
+      return { ok: false, error: `${coded} (${message})`, calls: [...calls], limits: flags, outputTruncated: flags.outputTruncated, writes }
     }
   } finally {
     closed = true

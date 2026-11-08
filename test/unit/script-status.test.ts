@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test"
 import { createReport } from "../../src/jobs/report.js"
 import { parseJob } from "../../src/jobs/model.js"
-import { digestOf, manifestDigest, sourceHash } from "../../src/jobs/script.js"
+import { digestOf, filesDigest, manifestDigest, sourceHash } from "../../src/jobs/script.js"
 import { putJob, putRun, putState } from "../../src/jobs/store.js"
 import { agentsFake, memoryStorage, testClock } from "./fake.js"
 
@@ -24,7 +24,7 @@ async function report() {
     runCount: 0,
     consecutiveFailures: 0,
     nextDueAt: NOW,
-    approval: { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), digest: digestOf(script), at: NOW, resolved: [] },
+    approval: { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), filesDigest: filesDigest(), digest: digestOf(script), at: NOW, resolved: [], files: [] },
   })
   await putRun(storage.storage, { job: job.id, slot: new Date(NOW).toISOString(), status: "skipped", reason: "revoked", late: false, attempt: 1, error: "JOBS_SCRIPT_REVOKED: The script \"bookmarks\" uses tools its agent now denies: host:mem (mem). Next step: Remove the deny rule." })
   return createReport({ storage: storage.storage, location: "/nowhere", timezone: "UTC", clock: clock.clock, agent: agentsFake(), host: HOST, enabled: true, keepAliveMinutes: 20 })
@@ -44,7 +44,7 @@ describe("status and a revoked script", () => {
     const storage = memoryStorage()
     const clock = testClock(NOW, { instantBelow: 0 })
     await putJob(storage.storage, job)
-    await putState(storage.storage, { job: job.id, runCount: 0, consecutiveFailures: 0, nextDueAt: NOW, approval: { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), digest: digestOf(script), at: NOW, resolved: [] } })
+    await putState(storage.storage, { job: job.id, runCount: 0, consecutiveFailures: 0, nextDueAt: NOW, approval: { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), filesDigest: filesDigest(), digest: digestOf(script), at: NOW, resolved: [], files: [] } })
     await putRun(storage.storage, { job: job.id, slot: new Date(NOW + 1).toISOString(), status: "succeeded", late: false, attempt: 1 })
     await putRun(storage.storage, { job: job.id, slot: new Date(NOW).toISOString(), status: "skipped", reason: "revoked", late: false, attempt: 1 })
     const report = createReport({ storage: storage.storage, location: "/nowhere", timezone: "UTC", clock: clock.clock, agent: agentsFake(), host: HOST, enabled: true, keepAliveMinutes: 20 })

@@ -5,12 +5,16 @@ import { describe, expect, test } from "bun:test"
 import { Plugin } from "@opencode/plugin"
 import { Rpc } from "@opencode/plugin/rpc"
 import { evaluate, type Rule } from "../../src/host/permissions.js"
+import { readFileSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { scanRuns, setPauseAll } from "../../src/jobs/store.js"
 import { startHost, until, type Host } from "./harness.js"
 
 import { HOST_VERSION } from "./harness.js"
 
 const familyCalls: { method: string; input: unknown; at: number }[] = []
+/** The items `family_read` returns; a test changes them between runs to make the merge grow. */
+let familyItems: { id: string; text?: string }[] = [{ id: "1", text: "first" }, { id: "2", text: "second" }]
 const memWrites: unknown[] = []
 
 /**
@@ -50,7 +54,7 @@ const family = Plugin.define({
       }
       if (name === "family_read") {
         familyCalls.push({ method: "read", input, at: Date.now() })
-        return { output: { items: [{ id: "1", text: "first" }, { id: "2", text: "second" }], page: "next" } }
+        return { output: { items: familyItems, page: "next" } }
       }
       if (name === "family_write") {
         familyCalls.push({ method: "write", input, at: Date.now() })
@@ -403,6 +407,69 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
         await expect(pending).rejects.toThrow("JOBS_SCRIPT_HOST_TOOL")
         expect(await host.client.permission.list({ sessionID: session.id })).toEqual([])
       }
+    } finally {
+      await host.close()
+    }
+  }, 120_000)
+
+  test("a readwrite JSON file merges three runs without duplicates, and a conflicting edit is refused", async () => {
+    const host = await newHost({ loop: false })
+    try {
+      const session = await host.client.session.create({ location: host.location, agent: AGENT })
+      const worker = host.worker()
+      const merge = `
+        const state = files.bookmarks ?? { ids: [] };
+        const known = new Set(state.ids ?? []);
+        const page = await tools.scripts.family.family_read({ max_results: 100 });
+        let added = 0;
+        for (const item of page.items ?? []) { if (item.id && !known.has(item.id)) { known.add(item.id); added += 1 } }
+        await files.write("bookmarks", { ids: [...known] });
+        return { added, total: known.size };
+      `
+      const spec = {
+        name: "Bookmarks",
+        schedule: { every: "1 hour" },
+        agent: AGENT,
+        action: { type: "script", script: { code: merge, uses: ["scripts.family.family_read"], files: { bookmarks: { path: "bookmarks.json", mode: "readwrite", format: "json" } } } },
+      }
+      const id = await create(host, session.id, spec)
+      const run = async (items: { id: string; text?: string }[]) => {
+        familyItems = items
+        const now = await tool(host, "jobs_run_now")
+        const pending = now.execute({ id }, toolCall(session.id, `run_${items[0]!.id}_${items.length}`))
+        await reply(host, session.id, "jobs_run_now")
+        await pending
+        await worker.runner.tick(Date.now())
+        await worker.runner.settle()
+        return (await scanRuns(worker.storage, id))[0]!
+      }
+      expect((await run([{ id: "1" }, { id: "2" }])).result).toMatchObject({ ok: true, value: { added: 2, total: 2 } })
+      expect(JSON.parse(readFileSync(join(host.location.directory, "bookmarks.json"), "utf8"))).toEqual({ ids: ["1", "2"] })
+      expect((await run([{ id: "2" }, { id: "3" }])).result).toMatchObject({ ok: true, value: { added: 1, total: 3 } })
+      expect((await run([{ id: "3" }, { id: "4" }])).result).toMatchObject({ ok: true, value: { added: 1, total: 4 } })
+      expect(JSON.parse(readFileSync(join(host.location.directory, "bookmarks.json"), "utf8"))).toEqual({ ids: ["1", "2", "3", "4"] })
+
+      // A conflicting writer between the snapshot and the commit: the run fails and the other writer's file stays.
+      const conflictCode = `
+        const state = files.bookmarks ?? { ids: [] };
+        await tools.scripts.family.family_slow({ ms: 1_500 });
+        await files.write("bookmarks", { ids: [...(state.ids ?? []), "mine"] });
+        return { ok: true };
+      `
+      const conflictSpec = { ...spec, name: "Conflict", action: { type: "script", script: { code: conflictCode, uses: ["scripts.family.family_slow"], files: { bookmarks: { path: "bookmarks.json", mode: "readwrite", format: "json" } } } } }
+      const conflictId = await create(host, session.id, conflictSpec)
+      const nowTool = await tool(host, "jobs_run_now")
+      const pending = nowTool.execute({ id: conflictId }, toolCall(session.id, "run_conflict"))
+      await reply(host, session.id, "jobs_run_now")
+      await pending
+      await worker.runner.tick(Date.now())
+      await Bun.sleep(400)
+      writeFileSync(join(host.location.directory, "bookmarks.json"), JSON.stringify({ ids: ["external"] }))
+      await worker.runner.settle()
+      const conflict = (await scanRuns(worker.storage, conflictId))[0]!
+      expect(conflict.status).toBe("failed")
+      expect(conflict.error).toContain("JOBS_SCRIPT_FILE_CONFLICT")
+      expect(JSON.parse(readFileSync(join(host.location.directory, "bookmarks.json"), "utf8"))).toEqual({ ids: ["external"] })
     } finally {
       await host.close()
     }

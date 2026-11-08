@@ -203,6 +203,16 @@ async function readJobFile(path: string, context: ReadContext): Promise<Job | In
 
   let action = fields.action
   let injected = false
+  // A script job has no prompt: a markdown body would be silently dropped, so it is refused instead (GAP-15).
+  if (typeof action === "object" && action !== null && !Array.isArray(action) && (action as Record<string, unknown>).type === "script" && body !== "") {
+    return invalidAt(
+      path,
+      close + 1,
+      `A script job has no prompt, so the markdown body after the front matter would be ignored.`,
+      `Remove the body, or move the note into the script's "code" as a comment.`,
+      "JOBS_SCRIPT_BODY_IGNORED",
+    )
+  }
   const promptWithoutText = action === undefined || (typeof action === "object" && action !== null && !Array.isArray(action) && (action as Record<string, unknown>).type === "prompt" && (action as Record<string, unknown>).text === undefined)
   if (promptWithoutText) {
     if (body === "") {

@@ -8,7 +8,7 @@
 import { randomBytes } from "node:crypto"
 import { errorText } from "../constants.js"
 import { cronProblem } from "./cron.js"
-import { SCRIPT_MAX, SCRIPT_SOURCE_MAX, type Script } from "./script.js"
+import { SCRIPT_FILE_MAX, SCRIPT_MAX, SCRIPT_MAX_FILES, SCRIPT_SOURCE_MAX, type Script, type ScriptFile, type ScriptFileFormat, type ScriptFileMode } from "./script.js"
 
 export const SECOND = 1000
 export const MINUTE = 60 * SECOND
@@ -444,7 +444,7 @@ const METHOD = /^(?:host:[A-Za-z0-9][A-Za-z0-9_.-]*|[A-Za-z0-9][A-Za-z0-9_.-]*\.
 /** A script's source, manifest, optional timeout and limits. The digest and the approval are job state, not here. */
 function parseScript(value: unknown): Script {
   const input = object(value, "action.script")
-  keys(input, "action.script", ["code", "uses", "timeoutMs", "limits"])
+  keys(input, "action.script", ["code", "uses", "files", "timeoutMs", "limits"])
   const code = source(input.code)
   if (!Array.isArray(input.uses)) fail("JOBS_INVALID_JOB", "action.script.uses", `"action.script.uses" must be a list of methods, found ${describe(input.uses)}.`, `List every tool the script calls, as "<plugin id>.<method>" or "host:<tool id>".`)
   if (input.uses.length === 0) fail("JOBS_INVALID_JOB", "action.script.uses", `"action.script.uses" is empty, so the script could call nothing.`, `List at least one tool, as "<plugin id>.<method>" or "host:<tool id>".`)
@@ -458,7 +458,51 @@ function parseScript(value: unknown): Script {
   const unique = [...new Set(uses)]
   const timeoutMs = input.timeoutMs === undefined ? undefined : duration(input.timeoutMs, "action.script.timeoutMs", "JOBS_INVALID_JOB", `Use a duration such as "5m", or remove it.`)
   const limits = input.limits === undefined ? undefined : parseScriptLimits(input.limits)
-  return { code, uses: unique, ...(timeoutMs === undefined ? {} : { timeoutMs }), ...(limits === undefined ? {} : { limits }) }
+  const files = input.files === undefined ? undefined : parseScriptFiles(input.files)
+  return {
+    code,
+    uses: unique,
+    ...(files === undefined ? {} : { files }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(limits === undefined ? {} : { limits }),
+  }
+}
+
+/** A file name in the guest: lower-case, starts with a letter, at most 32 characters. */
+const FILE_NAME = /^[a-z][a-z0-9_]{0,31}$/
+
+/** The declared files: names, paths, modes, formats and caps. Paths are resolved and checked at approval and run. */
+function parseScriptFiles(value: unknown): Record<string, ScriptFile> {
+  const input = object(value, "action.script.files")
+  const names = Object.keys(input)
+  if (names.length === 0) fail("JOBS_INVALID_JOB", "action.script.files", `"action.script.files" is empty; remove it or declare a file.`, `Declare a file as "files": { "state": { "path": "state.json", "mode": "readwrite", "format": "json" } }.`)
+  if (names.length > SCRIPT_MAX_FILES) fail("JOBS_INVALID_JOB", "action.script.files", `"action.script.files" declares ${names.length} files; the limit is ${SCRIPT_MAX_FILES}.`, `Declare at most ${SCRIPT_MAX_FILES} files.`)
+  const files: Record<string, ScriptFile> = {}
+  for (const name of names) {
+    if (!FILE_NAME.test(name) || name === "write") fail("JOBS_INVALID_JOB", `action.script.files.${name}`, `The file name ${JSON.stringify(name)} must match [a-z][a-z0-9_]{0,31} and is not "write", which is the write function.`, `Use a lower-case name that starts with a letter, such as "bookmarks".`)
+    const field = `action.script.files.${name}`
+    const file = object(input[name], field)
+    keys(file, field, ["path", "mode", "format", "maxBytes"])
+    const path = string(file.path, `${field}.path`, "JOBS_INVALID_JOB", `Give the file's path, relative to the job's directory or absolute inside an allowed root.`)
+    if (path.includes("\u0000")) fail("JOBS_INVALID_JOB", `${field}.path`, `The path contains a null byte.`, `Remove it.`)
+    const mode: unknown = file.mode ?? "read"
+    if (mode !== "read" && mode !== "write" && mode !== "readwrite") {
+      fail("JOBS_INVALID_JOB", `${field}.mode`, `"mode" is ${describe(mode)}; the modes are "read", "write" and "readwrite".`, `Use "read", "write" or "readwrite".`)
+    }
+    const format: unknown = file.format ?? "json"
+    if (format !== "json" && format !== "text") {
+      fail("JOBS_INVALID_JOB", `${field}.format`, `"format" is ${describe(format)}; the formats are "json" and "text".`, `Use "json" or "text".`)
+    }
+    let maxBytes: number | undefined
+    if (file.maxBytes !== undefined) {
+      if (typeof file.maxBytes !== "number" || !Number.isInteger(file.maxBytes) || file.maxBytes < 1 || file.maxBytes > SCRIPT_FILE_MAX) {
+        fail("JOBS_INVALID_JOB", `${field}.maxBytes`, `"maxBytes" must be a whole number from 1 to ${SCRIPT_FILE_MAX}, found ${describe(file.maxBytes)}.`, `Use a whole number of bytes up to ${SCRIPT_FILE_MAX}.`)
+      }
+      maxBytes = file.maxBytes
+    }
+    files[name] = { path, mode: mode as ScriptFileMode, format: format as ScriptFileFormat, ...(maxBytes === undefined ? {} : { maxBytes }) }
+  }
+  return files
 }
 
 /** Parses a script definition from a tool's input, the same validation a job file gets. */

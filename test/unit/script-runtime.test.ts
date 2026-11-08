@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test"
 import { quickjsWasm, runScript, type ScriptBridge } from "../../src/jobs/script-runtime.js"
 import { SCRIPT_DEFAULTS, type ScriptLimits } from "../../src/jobs/script.js"
 
-const run = (code: string, options: { bridge?: ScriptBridge; allowed?: string[]; limits?: Partial<ScriptLimits>; timeoutMs?: number; signal?: AbortSignal } = {}) =>
+const run = (code: string, options: { bridge?: ScriptBridge; allowed?: string[]; limits?: Partial<ScriptLimits>; timeoutMs?: number; signal?: AbortSignal; files?: { values: Record<string, unknown>; writable: ReadonlySet<string> } } = {}) =>
   runScript({
     code,
     allowed: new Set(options.allowed ?? ["host:mem"]),
@@ -13,9 +13,20 @@ const run = (code: string, options: { bridge?: ScriptBridge; allowed?: string[];
     bridge: options.bridge ?? (async () => ({ ok: true })),
     now: () => Date.now(),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.files === undefined ? {} : { files: options.files }),
   })
 
 describe("the script runtime", () => {
+  test("exposes the declared files frozen, buffers writes, and refuses a name that is not writable", async () => {
+    const result = await run(
+      `files.state.n = 99; const before = files.state.n; await files.write("state", { n: 2 }); let error = ""; try { await files.write("ro", {}) } catch (e) { error = String(e) } return { before, error }`,
+      { files: { values: { state: { n: 1 } }, writable: new Set(["state"]) } },
+    )
+    expect(result.ok).toBe(true)
+    expect(result.value).toMatchObject({ before: 1, error: expect.stringContaining("JOBS_SCRIPT_FILE_MODE") })
+    expect(result.writes).toEqual([{ name: "state", json: '{"n":2}' }])
+  })
+
   test("a structured host error is <name>: <first line>, with a code and a next step, never [object Object]", async () => {
     const result = await run(`return await tools.host.mem({})`, {
       bridge: async () => {

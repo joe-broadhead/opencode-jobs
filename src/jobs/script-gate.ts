@@ -13,11 +13,13 @@ import { evaluate, type Rule } from "../host/permissions.js"
 import { JobInputError } from "./model.js"
 import {
   approvalResource,
-  digestOf,
+  filesDigest,
   manifestDigest,
   reachesOf,
+  scriptDigest,
   sourceHash,
   type MethodClass,
+  type ResolvedFile,
   type ResolvedTool,
   type Script,
   type ScriptApproval,
@@ -56,6 +58,7 @@ export interface ScriptGate {
     agent: string
     script: Script
     resolved: readonly ResolvedTool[]
+    files?: readonly ResolvedFile[]
     source?: { readonly messageID: string; readonly id: string }
     /** The job whose script this is, for the "where to read it" line; absent for a one-off tool call. */
     job?: string
@@ -260,7 +263,9 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
   const approve: ScriptGate["approve"] = async (input) => {
     const source = sourceHash(input.script.code)
     const manifest = manifestDigest(input.script.uses)
-    const digest = digestOf(input.script)
+    const declaredFiles = filesDigest(input.script.files)
+    const digest = scriptDigest(source, manifest, declaredFiles)
+    const files = input.files ?? []
     const bytes = Buffer.byteLength(input.script.code, "utf8")
     const head = input.script.code.slice(0, SOURCE_HEAD)
     await host.permission.assert({
@@ -280,15 +285,18 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
         where: input.job === undefined ? "the tool call's input" : `the jobs_get tool, job ${JSON.stringify(input.job)}`,
         tools: input.resolved.map((tool) => ({ method: tool.method, class: tool.class, effect: tool.effect, ...(tool.description === undefined ? {} : { description: tool.description }) })),
         writes: reachesOf(input.resolved),
+        files: files.map((file) => ({ name: file.name, path: file.path, mode: file.mode, format: file.format, maxBytes: file.maxBytes })),
       },
       ...(input.source === undefined ? {} : { source: { type: "tool", messageID: input.source.messageID, id: input.source.id } }),
     })
     return {
       sourceHash: source,
       manifestDigest: manifest,
+      filesDigest: declaredFiles,
       digest,
       at: host.now(),
       resolved: input.resolved,
+      files,
     }
   }
 

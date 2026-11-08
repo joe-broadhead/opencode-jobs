@@ -281,6 +281,7 @@ export function runView(record: RunRecord, names: ReadonlyMap<string, string>, s
     ...(record.script === undefined ? {} : { script: record.script }),
     ...(record.calls === undefined ? {} : { calls: record.calls.length }),
     ...(record.limits === undefined ? {} : { limits: record.limits }),
+    ...(record.files === undefined ? {} : { files: record.files }),
     ...(summaries && record.summary !== undefined ? { summary: jobOutput(record.summary, { name, at: record.slot }) } : {}),
     // A script's result is script output: framed exactly as a summary is, never raw data for a model to follow (SR-9).
     ...(summaries && record.result !== undefined ? { result: jobOutput(JSON.stringify(record.result), { name, at: record.slot }) } : {}),

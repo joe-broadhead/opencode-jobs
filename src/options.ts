@@ -13,9 +13,11 @@ export interface Options {
   readonly concurrency: number
   /** How often the keep-alive touches the leader's location, in minutes (D2). Below the user's idle timeout. */
   readonly keepAliveMinutes: number
+  /** Extra directories a script's declared files may live in, besides the job's own directory. Absolute paths. */
+  readonly scriptFilesRoots: readonly string[]
 }
 
-export const DEFAULT_OPTIONS: Options = { enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2, keepAliveMinutes: 20 }
+export const DEFAULT_OPTIONS: Options = { enabled: true, allowUntestedHost: false, timezone: null, concurrency: 2, keepAliveMinutes: 20, scriptFilesRoots: [] }
 
 /** The most runs a person may allow at once: the option is a cost bound, not a throughput knob. */
 export const MAX_CONCURRENCY = 8
@@ -30,6 +32,7 @@ const ACCEPTED = {
   timezone: 'an IANA time zone name such as "Europe/London" (the server\'s zone by default)',
   concurrency: `a whole number from 1 to ${MAX_CONCURRENCY} (2 by default)`,
   keepAliveMinutes: `a whole number of minutes from ${MIN_KEEPALIVE_MINUTES} to ${MAX_KEEPALIVE_MINUTES} (20 by default)`,
+  scriptFilesRoots: "a list of absolute directory paths (none by default)",
 } as const
 
 const invalid = (problem: string) =>
@@ -51,6 +54,7 @@ export function parseOptions(raw: unknown): Options {
     timezone: zone(input),
     concurrency: count(input),
     keepAliveMinutes: keepAlive(input),
+    scriptFilesRoots: roots(input),
   }
 }
 
@@ -77,6 +81,21 @@ function keepAlive(input: Record<string, unknown>): number {
     throw invalid(`The option "keepAliveMinutes" must be ${ACCEPTED.keepAliveMinutes}, found ${describe(value)}. Keep it below experimental.location_idle_timeout`)
   }
   return value
+}
+
+/** Extra roots a declared file may live in: absolute directories, resolved and de-duplicated. */
+function roots(input: Record<string, unknown>): readonly string[] {
+  if (!Object.hasOwn(input, "scriptFilesRoots")) return []
+  const value = input.scriptFilesRoots
+  if (!Array.isArray(value)) throw invalid(`The option "scriptFilesRoots" must be ${ACCEPTED.scriptFilesRoots}, found ${describe(value)}`)
+  const roots: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.trim() === "" || !entry.startsWith("/")) throw invalid(`The option "scriptFilesRoots" must be ${ACCEPTED.scriptFilesRoots}, found ${describe(entry)}`)
+    const root = entry.trim()
+    if (!roots.includes(root)) roots.push(root)
+  }
+  if (roots.length > 8) throw invalid(`The option "scriptFilesRoots" accepts at most 8 roots, found ${roots.length}`)
+  return roots
 }
 
 function zone(input: Record<string, unknown>): string | null {

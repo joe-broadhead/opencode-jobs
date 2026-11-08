@@ -13,6 +13,10 @@ a call without it reaches the server's default location and fails `rpc.unavailab
 | A family method | A tool a plugin's tools RPC lists, by exact name. Its action is the plugin's permission action. | `x.posts.get_users_bookmarks` |
 | A host tool | A tool OpenCode lists that has no tools RPC, by exact tool id. It is `unclassified`. | `host:mem_mem_remember` |
 
+A manifest entry is `<plugin id>.<method>`, split at the **last** dot; the guest accessor nests by dots. So
+`x.posts.get_users_bookmarks` is `tools.x.posts.get_users_bookmarks`, and `utilities.tools.time_now` (a three-part
+plugin id) is `tools.utilities.tools.time_now`. A `host:` entry is reached as `tools.host.<tool id>`.
+
 A family method is resolved by that plugin's `describe`, carries a class (`read`, `write`, `send`, `export`,
 `destructive`) and goes through the plugin's own shaping, so a script reads what a model would. A `host:` entry is
 called only by exact id, only after the same rule check, and the tool still runs its own assert. Never guess a tool id:
@@ -145,6 +149,57 @@ action:
   by pause. Give a long script a `timeout` that bounds it.
 - **The record has no payloads.** Each call is its method, time, duration, outcome and byte count; the result is
   capped and framed as script output. Inputs and tool results are never stored a second time.
+
+### Keeping state in a file
+
+A script has no filesystem, but a job may declare files it reads before the run and writes after it. The owner's case —
+last week's X bookmarks, merged into a `bookmarks.json` that each run extends — is a `readwrite` JSON file:
+
+```yaml
+# ~/.config/opencode/jobs/bookmarks-file.md
+name: Keep last week's bookmarks
+schedule: { cron: "0 8 * * *", tz: Europe/Amsterdam }
+agent: build
+action:
+  type: script
+  script:
+    uses:
+      - x.posts.get_users_me
+      - x.posts.get_users_bookmarks
+    files:
+      bookmarks:
+        path: bookmarks.json
+        mode: readwrite
+        format: json
+    code: |
+      const me = await tools.x.posts.get_users_me({});
+      const userId = me.data?.id ?? me.data?.username;
+      const state = files.bookmarks ?? { items: [] };
+      const known = new Set((state.items ?? []).map((item) => item.id));
+      const fresh = [];
+      let cursor;
+      do {
+        // Newest first. X has no since_id for bookmarks; stop at the first id this file already has.
+        const page = await tools.x.posts.get_users_bookmarks({ id: userId, max_results: 100, pagination_token: cursor });
+        for (const item of page.data ?? []) {
+          if (known.has(item.id)) { cursor = undefined; break; }
+          fresh.push({ id: item.id, text: item.text, url: `https://x.com/i/web/status/${item.id}` });
+        }
+        cursor = cursor === undefined ? page.meta?.next_token : undefined;
+      } while (cursor);
+      const next = { items: [...fresh, ...(state.items ?? [])].slice(0, 5000) };
+      await files.write("bookmarks", next);
+      return { added: fresh.length, total: next.items.length };
+```
+
+The run reads `bookmarks.json` into a frozen `files.bookmarks` and buffers `files.write`; the write is committed only if
+the run succeeds, atomically (a temp file then a rename, mode 0600 for a new file), and only if the file did not change
+since the snapshot (otherwise `JOBS_SCRIPT_FILE_CONFLICT`, and the other writer's file stays). A relative path resolves
+against the job's directory; an absolute one must be inside it or a `scriptFilesRoots` root. Symlinks, `..`, `.git`,
+OpenCode's own folders and special files are refused.
+
+**Cadence:** daily is the sensible choice. X has no `since_id` for bookmarks, and charges the same resource once per 24
+hours, so a daily run re-reads the newest page cheaply and stops at the first known id.
 
 ### X's budget
 

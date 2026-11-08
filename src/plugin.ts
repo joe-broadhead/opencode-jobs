@@ -83,6 +83,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         wake: () => worker?.wake(),
         ready,
         scripts,
+        scriptFilesRoots: options.scriptFilesRoots,
       }
       const tools: ToolInput = {
         ...actions,
@@ -102,6 +103,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
             session: ctx.session,
             clock,
             location: ctx.location.directory,
+            roots: options.scriptFilesRoots,
             job: { id: "script", name: "Script" },
           }),
       }
@@ -137,6 +139,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
             watch,
             report,
             scripts,
+            scriptFilesRoots: options.scriptFilesRoots,
             loop: deps.loop !== false,
             deps,
           })
@@ -161,6 +164,8 @@ interface WorkerInput {
   readonly report: Report
   /** The script gate a script run re-resolves its manifest through. */
   readonly scripts: ScriptGate
+  /** Extra roots a script's declared files may live in. */
+  readonly scriptFilesRoots: readonly string[]
   readonly loop: boolean
   readonly deps: JobsDeps
 }
@@ -226,6 +231,7 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
         scripts: input.scripts,
         tool: ctx.tool,
         rpc: ctx.rpc,
+        scriptFilesRoots: input.scriptFilesRoots,
       })
       // Retention runs when the leader starts and once an hour after: the records it drops lose their sessions too.
       let prunedAt: number | undefined

@@ -16,6 +16,7 @@ import { DEFAULTS, nextId, parseJob, serverTimezone, updateJob, type Job } from 
 import { stopReason } from "./policy.js"
 import type { Source } from "./report.js"
 import { approvalMatches, denied, type ScriptApproval } from "./script.js"
+import { resolveScriptFiles } from "./script-files.js"
 import type { ScriptGate } from "./script-gate.js"
 import { getRun, putJob, putState, readState, removeJob, setPauseAll, slotISO, updateState, type PauseRecord } from "./store.js"
 
@@ -33,6 +34,8 @@ export interface ActionInput {
   readonly ready: boolean
   /** The script gate: resolving a manifest, and the one approval a script gets. Absent only in unit fakes. */
   readonly scripts?: ScriptGate
+  /** Extra roots a script's declared files may live in, from the `scriptFilesRoots` option. */
+  readonly scriptFilesRoots?: readonly string[]
 }
 
 /** The tool call an approval is made in, so the host's prompt carries its own source. */
@@ -108,19 +111,22 @@ async function scriptApproval(input: ActionInput, job: Job, call: ApprovalCall |
   const bad = denied(resolved)
   if (bad.length > 0) {
     const names = bad.map((tool) => `${tool.method} (${tool.action})`).join(", ")
+    const rules = bad.map((tool) => ({ action: tool.action, resource: "*", effect: "allow" }))
     throw jobsError(
       "JOBS_SCRIPT_DENIED",
       `The script ${JSON.stringify(job.id)} uses tools its agent denies: ${names}.`,
-      `Remove the deny rule for those tools, or point the job at an agent that allows them. A script cannot be granted a tool its agent denies.`,
+      `To allow them, add these rules to that agent's permissions: ${JSON.stringify(rules)}. Or point the job at an agent that allows them; a script cannot be granted a tool its agent denies.`,
     )
   }
+  const files = await resolveScriptFiles(job.action.script.files, elsewhere(job, input) ?? input.location, input.scriptFilesRoots ?? [])
   // An update that leaves the source, the manifest and the resolution unchanged keeps the approval it already had.
-  if (previous !== undefined && approvalMatches(previous, job.action.script, resolved)) return previous
+  if (previous !== undefined && approvalMatches(previous, job.action.script, resolved, files)) return previous
   return input.scripts.approve({
     sessionID: call.sessionID,
     agent: call.agent,
     script: job.action.script,
     resolved,
+    files,
     job: job.id,
     ...(call.messageID === undefined || call.id === undefined ? {} : { source: { messageID: call.messageID, id: call.id } }),
   })

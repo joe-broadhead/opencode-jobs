@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path"
 import { execute } from "../../src/jobs/execute.js"
 import { readJobFiles } from "../../src/jobs/files.js"
-import { approvalCurrent, approvalMatches, digestOf, manifestDigest, sourceHash, type ResolvedTool, type ScriptApproval } from "../../src/jobs/script.js"
+import { approvalCurrent, approvalMatches, digestOf, filesDigest, manifestDigest, sourceHash, type ResolvedTool, type ScriptApproval } from "../../src/jobs/script.js"
 import type { ScriptGate } from "../../src/jobs/script-gate.js"
 import { putState, scanRuns } from "../../src/jobs/store.js"
 import { memoryStorage, sessionFake, testClock } from "./fake.js"
@@ -30,7 +30,7 @@ describe("a file job's script", () => {
       const first = await jobFrom(root)
       expect(first.action.type).toBe("script")
       const script = first.action.type === "script" ? first.action.script : undefined!
-      const approval: ScriptApproval = { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), digest: digestOf(script), at: START, resolved: RESOLVED }
+      const approval: ScriptApproval = { sourceHash: sourceHash(script.code), manifestDigest: manifestDigest(script.uses), filesDigest: filesDigest(), digest: digestOf(script), at: START, resolved: RESOLVED, files: [] }
       expect(approvalCurrent(approval, script)).toBe(true)
 
       // The person edits the file. The next read is the new code, and the old approval no longer covers it.

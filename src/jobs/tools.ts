@@ -261,12 +261,20 @@ export async function runJobTool(input: ToolInput, name: ToolName, raw: unknown,
     }
     case "create": {
       const job = await createJob(input, args as never, approvalCall(call))
-      return { output: { job: summaryOf(job) }, text: `Created ${job.name} (${job.id}) as ${job.agent}.` }
+      const rules = await agentRulesOf(input, job)
+      return {
+        output: { job: summaryOf(job), ...(rules.length === 0 ? {} : { agentRules: rules }) },
+        text: `Created ${job.name} (${job.id}) as ${job.agent}.${rules.length === 0 ? "" : ` To stop its agent asking for the manifest's tools, add these rules to its permissions: ${JSON.stringify(rules)}.`}`,
+      }
     }
     case "update": {
       const { id: _unchanged, ...patch } = args
       const job = await changeJob(input, id(), patch as never, approvalCall(call))
-      return { output: { job: summaryOf(job) }, text: `Updated ${job.name} (${job.id}).` }
+      const rules = await agentRulesOf(input, job)
+      return {
+        output: { job: summaryOf(job), ...(rules.length === 0 ? {} : { agentRules: rules }) },
+        text: `Updated ${job.name} (${job.id}).${rules.length === 0 ? "" : ` Its agent still asks for: add these rules to its permissions: ${JSON.stringify(rules)}.`}`,
+      }
     }
     case "approve": {
       const { job, approval } = await approveJob(input, id(), approvalCall(call)!)
@@ -306,6 +314,16 @@ export async function runJobTool(input: ToolInput, name: ToolName, raw: unknown,
       return { output: { id: job.id, name: job.name, expires: job.expires }, text: `Extended ${job.name} (${job.id}) to ${new Date(job.expires ?? 0).toISOString()}.` }
     }
   }
+}
+
+/**
+ * The exact allow rules that would stop a script job's agent asking for a manifest tool (GAP-12). The approval already
+ * answered the ask for this job; the rules are for a person who wants its agent to allow them without a prompt.
+ */
+async function agentRulesOf(input: ToolInput, job: Job): Promise<readonly { action: string; resource: string; effect: "allow" }[]> {
+  if (job.action.type !== "script") return []
+  const state = await readState(input.storage, job.id).catch(() => undefined)
+  return (state?.approval?.resolved ?? []).filter((tool) => tool.effect === "ask").map((tool) => ({ action: tool.action, resource: "*", effect: "allow" as const }))
 }
 
 /** A tool call's approval source; a script-marked call has no message to name, and a script cannot create jobs anyway. */

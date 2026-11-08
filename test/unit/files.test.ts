@@ -127,3 +127,22 @@ describe("invalid job files", () => {
     expect(invalid[0]!.message).toContain(`The job id "brief" is already defined by ${join(FIXTURES, "conflict/project/.opencode/jobs/brief.md")}`)
   })
 })
+
+describe("a script job file's body", () => {
+  test("is refused when the body is not empty, rather than silently dropped (GAP-15)", async () => {
+    const { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } = await import("node:fs")
+    const root = realpathSync(mkdtempSync(join(realpathSync("/tmp"), "jobs-script-body-")))
+    try {
+      mkdirSync(join(root, ".opencode", "jobs"), { recursive: true })
+      writeFileSync(
+        join(root, ".opencode", "jobs", "script.md"),
+        "---\nname: Script\nschedule:\n  every: 1 hour\nagent: build\naction:\n  type: script\n  script:\n    uses:\n      - host:mem\n    code: |\n      return 1\n---\nA note that would be silently dropped.\n",
+      )
+      const { jobs, invalid } = await readJobFiles({ now: NOW, timezone: "UTC", projects: [root] })
+      expect(jobs).toHaveLength(0)
+      expect(invalid[0]?.message).toStartWith("JOBS_SCRIPT_BODY_IGNORED: ")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})

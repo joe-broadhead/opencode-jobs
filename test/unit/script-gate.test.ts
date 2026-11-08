@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test"
 import type { Plugin } from "@opencode/plugin"
 import { SELF_DENIES } from "../../src/jobs/safety.js"
-import { approvalMatches, denied, scriptSessionRules, type Script, type ScriptApproval } from "../../src/jobs/script.js"
+import { approvalMatches, denied, filesDigest, scriptSessionRules, type Script, type ScriptApproval } from "../../src/jobs/script.js"
 import { createScriptGate, type ScriptHost } from "../../src/jobs/script-gate.js"
 
 type Effect = "allow" | "ask" | "deny"
@@ -133,7 +133,7 @@ describe("the script gate's resolve", () => {
   test("re-resolving after the agent gains a deny refuses the run and invalidates the approval", async () => {
     const setup = makeGate()
     const before = await setup.gate.resolve(USES, "build")
-    const approval: ScriptApproval = { sourceHash: "a".repeat(64), manifestDigest: "b".repeat(64), digest: "c".repeat(64), at: 1, resolved: before }
+    const approval: ScriptApproval = { sourceHash: "a".repeat(64), manifestDigest: "b".repeat(64), filesDigest: filesDigest(), digest: "c".repeat(64), at: 1, resolved: before, files: [] }
     expect(denied(before)).toHaveLength(0)
     // The user adds a deny between runs.
     setup.setRules([BASE, exact("x_write", "deny")])
@@ -216,5 +216,18 @@ describe("the approval's own payload", () => {
     expect((asked.metadata.tools as unknown[]).length).toBe(4)
     expect((asked.metadata.writes as string[]).length).toBe(3)
     expect(approval.resolved).toEqual(resolved)
+  })
+
+  test("lists each declared file's path and mode, and binds them into the digest", async () => {
+    const setup = makeGate()
+    const resolved = await setup.gate.resolve(USES, "build")
+    const files = [{ name: "state", path: "/work/state.json", mode: "readwrite" as const, format: "json" as const, maxBytes: 1024 }]
+    const script = { code: "return 1", uses: USES, files: { state: { path: "state.json", mode: "readwrite" as const, format: "json" as const } } }
+    const first = await setup.gate.approve({ sessionID: "ses_1", agent: "build", script, resolved, files, job: "job_1" })
+    const asked = setup.asserted[0] as { metadata: Record<string, unknown> }
+    expect(asked.metadata.files).toEqual(files)
+    expect(first.filesDigest).toBe(filesDigest(script.files))
+    const changed = await setup.gate.approve({ sessionID: "ses_1", agent: "build", script: { ...script, files: { state: { ...script.files.state, mode: "read" } } }, resolved, files: [{ ...files[0]!, mode: "read" } as never], job: "job_1" })
+    expect(changed.digest).not.toBe(first.digest)
   })
 })

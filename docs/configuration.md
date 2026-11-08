@@ -122,8 +122,19 @@ action:
     limits: { maxCalls: 150, memoryMb: 64, maxOutputBytes: 65536 }
 ```
 
-`uses` is the manifest and the script's whole reach: a family method (`<plugin id>.<method>`) or a host tool
-(`host:<exact tool id>`). The run re-resolves it every slot; a source, manifest or class change makes the slot
+`uses` is the manifest and the script's whole reach: a family method (`<plugin id>.<method>`, split at the last dot) or
+a host tool (`host:<exact tool id>`). `files` declares the files the script may read and write:
+
+```yaml
+files:
+  bookmarks: { path: bookmarks.json, mode: readwrite, format: json, maxBytes: 1048576 }
+```
+
+A name matches `[a-z][a-z0-9_]{0,31}` (and is not `write`); at most 8 files; `mode` is `read`, `write` or `readwrite`;
+`format` is `json` or `text`; `maxBytes` defaults to 1 MB and is at most 8 MB. A relative path resolves against the
+job's directory; an absolute path must be inside it or a `scriptFilesRoots` root. Symlinks, `..`, `.git`, OpenCode's own
+folders and special files are refused (`JOBS_SCRIPT_FILE_PATH`). The file is snapshotted before the run and a write is
+committed only on success, atomically, with a conflict check (`JOBS_SCRIPT_FILE_CONFLICT`). The run re-resolves it every slot; a source, manifest or class change makes the slot
 `skipped` until `/jobs-approve <job>` re-approves it. The defaults are 100 calls, 64 MB and 64 KB; `maxCalls` may go to
 1,000, `memoryMb` to 512 and `maxOutputBytes` to 1 MiB. The wall clock is `policy.timeout`, and `timeoutMs` can narrow
 it. A script job may omit `agent`; it then runs as `build`. Its agent's rules must not deny its tools: the guarded
@@ -285,7 +296,8 @@ Both are read-only, and both answer a `STATUS_UNAVAILABLE` failure with a `nextS
 The fields every plugin of this family shares are `version`, `host` (`version`, `range`, `tested`), `state`,
 `unguardedAgents` and `nextStep`. Jobs has no service to connect to, so `state` is `ready`, or `disabled` when the
 `enabled` option is `false`. Its own fields sit beside them: `jobs`, `runner`, `liveness`, `paused`, `nextRuns`,
-`recentRuns`, `failures`, `missingAgents`, `scriptJobs`, `permissionsBlock` and `problems`. `missingAgents` names the
+`recentRuns`, `failures`, `missingAgents`, `scriptJobs`, `permissionsBlock` and `problems`. A run's `files` lists each
+declared file's name, path, mode, bytes and hashes, never the content. `missingAgents` names the
 agents a job uses that the host no longer lists, and `scriptJobs` counts the script jobs approved and waiting for a new
 approval; both are empty or absent when there are none.
 
@@ -306,6 +318,12 @@ its code and shown in status; it is not thrown at you.
 | `JOBS_TARGET_MISSING` | A job, session or agent the call names does not exist. | Run `jobs_list` to see the jobs there are, and create the session before naming it. |
 | `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, so a job under it is refused instead of run into denied prompts. | Give the agent the read-only block, starting with the blanket deny, or point the job at an agent that has it; `/jobs-status` prints it. |
 | `JOBS_AGENT_MISSING` | OpenCode no longer lists the job's agent, which can happen after a plugin update. No job that names it runs. | Run `opencode reload` in a terminal, or restart OpenCode; every slot re-checks, so the next slot runs once the agent is back. |
+| `JOBS_SCRIPT_FILE_PATH` | A declared file's path is outside the allowed roots, or has a symlink, `..`, `.git`, a special file, or OpenCode's own directories. | Fix the path; it is never opened. |
+| `JOBS_SCRIPT_FILE_INVALID` | A declared JSON file is invalid, or a text write was not a string. | Fix the file or the value. |
+| `JOBS_SCRIPT_FILE_TOO_LARGE` | A declared file or write is over its `maxBytes`. | Raise the cap or write less. |
+| `JOBS_SCRIPT_FILE_CONFLICT` | The write target changed after the snapshot. | Nothing is written; let the next run read it. |
+| `JOBS_SCRIPT_FILE_MODE` | The script wrote a `read` file. | Declare it `write` or `readwrite`, then approve again. |
+| `JOBS_SCRIPT_BODY_IGNORED` | A script job file has a body, which is not a prompt. | Remove the body or move it into the code. |
 | `JOBS_SCRIPT_HOST_TOOL` | A `host:` entry names OpenCode's own shell, file, network or task tool, which a script may not reach. | Remove it; a script reaches MCP servers and plugin tools only. |
 | `JOBS_SCRIPT_FAMILY_TOOL` | A `host:` entry names a tool a loaded plugin serves through its tools RPC. | Use `<plugin id>.<method>` instead, so the plugin's shaping and budgets apply. |
 | `JOBS_SCRIPT_DENIED` | The job's agent denies a tool the script's manifest names. A session allow beats an agent deny, so the script is refused rather than granted it. | Remove the deny rule for that tool, or point the job at an agent that allows it. |

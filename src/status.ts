@@ -364,6 +364,7 @@ const RUN = {
     calls: { type: "integer", minimum: 0 },
     limits: { type: "object" },
     result: { type: "string" },
+    files: { type: "array" },
   },
 } as const
 

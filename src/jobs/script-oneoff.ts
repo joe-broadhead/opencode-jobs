@@ -11,6 +11,7 @@ import { parseScriptDefinition, type Job } from "./model.js"
 import { forgetJobSession, rememberJobSession, SELF_DENIES } from "./safety.js"
 import { denied, limitsOf, scriptSessionRules, type Script, type ScriptApproval, type ScriptCall, type ScriptLimitFlags } from "./script.js"
 import { createBridge } from "./script-bridge.js"
+import { commitFiles, resolveScriptFiles, snapshotFiles } from "./script-files.js"
 import type { ScriptGate } from "./script-gate.js"
 import { runScript } from "./script-runtime.js"
 
@@ -31,6 +32,8 @@ export interface OneOffInput {
   readonly session: Pick<Plugin.Context["session"], "create" | "remove" | "get">
   readonly clock: { now: () => number }
   readonly location: string
+  /** Extra roots a declared file may live in. */
+  readonly roots?: readonly string[]
   readonly job: Pick<Job, "id" | "name">
 }
 
@@ -42,6 +45,8 @@ export interface OneOffResult {
   readonly limits: ScriptLimitFlags
   readonly digest: string
   readonly approval: ScriptApproval
+  /** The declared files this run read and wrote, never the content. */
+  readonly files: readonly { readonly name: string; readonly path: string; readonly mode: string; readonly bytesRead: number; readonly bytesWritten: number; readonly sha256Before?: string; readonly sha256After?: string }[]
 }
 
 const SCRIPT_SESSION_TITLE = "Script · one-off"
@@ -57,6 +62,7 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
   })
   const agentID = input.agent ?? "build"
   const resolved = await input.gate.resolve(script.uses, agentID, input.location)
+  const resolvedFiles = await resolveScriptFiles(script.files, input.location, input.roots ?? [])
   const bad = denied(resolved)
   if (bad.length > 0) {
     const names = bad.map((tool) => `${tool.method} (${tool.action})`).join(", ")
@@ -67,8 +73,10 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
     agent: input.callerAgent,
     script,
     resolved,
+    files: resolvedFiles,
     ...(input.source === undefined ? {} : { source: input.source }),
   })
+  const snapshots = await snapshotFiles(resolvedFiles)
   const controller = new AbortController()
   const created = await input.session.create({
     location: { directory: input.location },
@@ -88,6 +96,23 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
       bridge,
       signal: controller.signal,
       now: input.clock.now,
+      files: {
+        values: Object.fromEntries(snapshots.filter((snapshot) => snapshot.file.mode !== "write").map((snapshot) => [snapshot.file.name, snapshot.value] as const)),
+        writable: new Set(resolvedFiles.filter((file) => file.mode !== "read").map((file) => file.name)),
+      },
+    })
+    const committed = outcome.ok ? await commitFiles(snapshots, outcome.writes) : []
+    const files = snapshots.map((snapshot) => {
+      const written = committed.find((record) => record.name === snapshot.file.name)
+      return {
+        name: snapshot.file.name,
+        path: snapshot.file.path,
+        mode: snapshot.file.mode,
+        bytesRead: snapshot.bytes,
+        bytesWritten: written?.bytesWritten ?? 0,
+        ...(snapshot.sha256 === null ? {} : { sha256Before: snapshot.sha256 }),
+        ...(written?.sha256After === undefined ? {} : { sha256After: written.sha256After }),
+      }
     })
     return {
       ok: outcome.ok,
@@ -96,6 +121,7 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
       limits: outcome.limits,
       digest: approval.digest,
       approval,
+      files,
     }
   } finally {
     forgetJobSession(created.id)

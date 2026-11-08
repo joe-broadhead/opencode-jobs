@@ -94,6 +94,27 @@ describe("the tool table", () => {
   })
 })
 
+describe("a script create", () => {
+  test("returns the exact rules that would stop its agent asking (GAP-12)", async () => {
+    const setup = harness()
+    const resolved = [{ method: "host:mem", action: "mem", class: "unclassified" as const, kind: "host" as const, effect: "ask" as const }]
+    const withScripts = {
+      ...setup.input,
+      scripts: {
+        resolve: async () => resolved,
+        approve: async (input: { resolved: typeof resolved }) => ({ sourceHash: "0".repeat(64), manifestDigest: "0".repeat(64), filesDigest: "0".repeat(64), digest: "0".repeat(64), at: NOW, resolved: input.resolved, files: [] }),
+      },
+    }
+    const result = await runJobTool(
+      withScripts as never,
+      "create",
+      { name: "S", schedule: { every: "1h" }, agent: "build", action: { type: "script", script: { code: "return 1", uses: ["host:mem"] } } },
+      CALL,
+    )
+    expect(result.output["agentRules"]).toEqual([{ action: "mem", resource: "*", effect: "allow" }])
+  })
+})
+
 describe("the reads", () => {
   test("jobs_status is compact: state, counts, the agent count and the next step, never the block", async () => {
     const result = await call(harness(), "status")

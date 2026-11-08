@@ -22,12 +22,28 @@ export interface ScriptLimits {
   readonly maxOutputBytes: number
 }
 
+/** How a declared file may be used: read before the run, written after it, or both. */
+export type ScriptFileMode = "read" | "write" | "readwrite"
+/** A file's format: JSON (parsed/serialised) or plain text. */
+export type ScriptFileFormat = "json" | "text"
+
+/** One file the script may see or write, as authored: the path is relative to the job's directory or absolute. */
+export interface ScriptFile {
+  readonly path: string
+  readonly mode: ScriptFileMode
+  readonly format: ScriptFileFormat
+  /** The per-run read and write cap; the default is 1 MB, the maximum 8 MB. */
+  readonly maxBytes?: number
+}
+
 /** The script an action carries. The limits are optional in the definition and resolved by `limitsOf`. */
 export interface Script {
   /** The exact source the person approved. */
   readonly code: string
   /** Exact methods: `<plugin id>.<method>` or `host:<exact tool id>`. */
   readonly uses: readonly string[]
+  /** Declared files, by name: `files.<name>` in the guest, and `files.write(name, value)` for a writable one. */
+  readonly files?: Readonly<Record<string, ScriptFile>>
   /** A per-run wall clock, capped by the job's own `policy.timeout`. */
   readonly timeoutMs?: number
   readonly limits?: Partial<ScriptLimits>
@@ -41,6 +57,11 @@ export const SCRIPT_MAX: ScriptLimits = { memoryMb: 512, maxCalls: 1_000, maxOut
 
 /** A script is source code, not a document: past this it is refused rather than stored. */
 export const SCRIPT_SOURCE_MAX = 64 * 1024
+
+/** A file's cap: 1 MB by default, 8 MB at most, and at most this many files a job. */
+export const SCRIPT_FILE_DEFAULT_MAX = 1024 * 1024
+export const SCRIPT_FILE_MAX = 8 * 1024 * 1024
+export const SCRIPT_MAX_FILES = 8
 
 /** One manifest entry, resolved against the host and the agent's rules. */
 export interface ResolvedTool {
@@ -77,15 +98,28 @@ export interface ScriptLimitFlags {
   readonly interrupted: boolean
 }
 
+/** A declared file, resolved against the job's directory and the allowed roots, as the approval names it. */
+export interface ResolvedFile {
+  readonly name: string
+  readonly path: string
+  readonly mode: ScriptFileMode
+  readonly format: ScriptFileFormat
+  readonly maxBytes: number
+}
+
 /** The approval a job's script carries in its runtime state, never in its authored definition. */
 export interface ScriptApproval {
   readonly sourceHash: string
   readonly manifestDigest: string
+  /** The declared files fingerprint: names, paths, modes, formats and caps (D-A extended by §12). */
+  readonly filesDigest: string
   readonly digest: string
   readonly at: number
   /** The host permission request id, when the assert answered one. */
   readonly requestID?: string
   readonly resolved: readonly ResolvedTool[]
+  /** The files as resolved and shown at approval; a run re-resolves them and compares. */
+  readonly files: readonly ResolvedFile[]
 }
 
 /** One narrowed rule, as the run session takes it. */
@@ -103,11 +137,23 @@ export const sourceHash = (code: string): string => sha256(code)
 /** The digest of the manifest alone: sorted and canonical, so order and duplicates do not change it. */
 export const manifestDigest = (uses: readonly string[]): string => sha256([...new Set(uses)].sort().join("\n"))
 
-/** The approval's resource: both parts, as D-A binds it. */
-export const scriptDigest = (source: string, manifest: string): string => sha256(`script\0${source}\0${manifest}`)
+/**
+ * The declared files fingerprint: each name, path, mode, format and cap, sorted. A path, mode, format or cap change
+ * therefore changes the approval digest and makes the job unapproved, without consulting the host (§12).
+ */
+export const filesDigest = (files: Script["files"] = {}): string =>
+  sha256(
+    Object.entries(files)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, file]) => `${name}\0${file.path}\0${file.mode}\0${file.format}\0${file.maxBytes ?? SCRIPT_FILE_DEFAULT_MAX}`)
+      .join("\n"),
+  )
+
+/** The approval's resource: the source, the manifest and the declared files, as D-A and §12 bind it. */
+export const scriptDigest = (source: string, manifest: string, files = ""): string => sha256(`script\0${source}\0${manifest}\0${files}`)
 
 /** The digest of a script definition. */
-export const digestOf = (script: Script): string => scriptDigest(sourceHash(script.code), manifestDigest(script.uses))
+export const digestOf = (script: Script): string => scriptDigest(sourceHash(script.code), manifestDigest(script.uses), filesDigest(script.files))
 
 /** The approval resource the permission request names, and the saved rule is bound to. */
 export const approvalResource = (digest: string): string => `script:sha256:${digest}`
@@ -143,9 +189,18 @@ export function scriptSessionRules(resolved: readonly ResolvedTool[], selfDenies
  * that later denies a method still matches here and the run reports `revoked` (with the method and rule), while a source
  * edit is `unapproved`. Restoring the rule resumes without a new approval.
  */
-export function approvalMatches(approval: ScriptApproval | undefined, script: Script, resolved: readonly ResolvedTool[]): boolean {
+export function approvalMatches(approval: ScriptApproval | undefined, script: Script, resolved: readonly ResolvedTool[], resolvedFiles?: readonly ResolvedFile[]): boolean {
   if (approval === undefined) return false
   if (approval.sourceHash !== sourceHash(script.code) || approval.manifestDigest !== manifestDigest(script.uses)) return false
+  if (approval.filesDigest !== filesDigest(script.files)) return false
+  if (resolvedFiles !== undefined) {
+    if (approval.files.length !== resolvedFiles.length) return false
+    const before = new Map(approval.files.map((file) => [file.name, file] as const))
+    if (!resolvedFiles.every((file) => {
+      const previous = before.get(file.name)
+      return previous !== undefined && previous.path === file.path && previous.mode === file.mode && previous.format === file.format && previous.maxBytes === file.maxBytes
+    })) return false
+  }
   const approved = new Map(approval.resolved.map((tool) => [tool.method, tool] as const))
   if (approved.size !== resolved.length) return false
   return resolved.every((tool) => {
@@ -154,9 +209,12 @@ export function approvalMatches(approval: ScriptApproval | undefined, script: Sc
   })
 }
 
-/** True when the approval names this script's exact source and manifest, without consulting the host again. */
+/** True when the approval names this script's exact source, manifest and declared files, without the host. */
 export const approvalCurrent = (approval: ScriptApproval | undefined, script: Script): boolean =>
-  approval !== undefined && approval.sourceHash === sourceHash(script.code) && approval.manifestDigest === manifestDigest(script.uses)
+  approval !== undefined &&
+  approval.sourceHash === sourceHash(script.code) &&
+  approval.manifestDigest === manifestDigest(script.uses) &&
+  approval.filesDigest === filesDigest(script.files)
 
 /** What a class means for a person reading the approval: the line the request carries for each write-ish tool. */
 export function reachesOf(resolved: readonly ResolvedTool[]): readonly string[] {

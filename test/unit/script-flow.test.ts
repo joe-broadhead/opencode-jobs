@@ -5,7 +5,7 @@ import type { Plugin } from "@opencode/plugin"
 import { approveJob, changeJob, createJob, type ActionInput } from "../../src/jobs/actions.js"
 import { execute } from "../../src/jobs/execute.js"
 import { parseJob, type Job } from "../../src/jobs/model.js"
-import { digestOf, manifestDigest, sourceHash, type ResolvedTool, type Script, type ScriptApproval } from "../../src/jobs/script.js"
+import { digestOf, filesDigest, manifestDigest, sourceHash, type ResolvedTool, type Script, type ScriptApproval } from "../../src/jobs/script.js"
 import type { ScriptGate } from "../../src/jobs/script-gate.js"
 import { SELF_DENIES } from "../../src/jobs/safety.js"
 import { getRun, putState, readState } from "../../src/jobs/store.js"
@@ -19,9 +19,11 @@ const RESOLVED: readonly ResolvedTool[] = [{ method: "host:mem", action: "mem", 
 const approvalOf = (script: Script, resolved: readonly ResolvedTool[] = RESOLVED): ScriptApproval => ({
   sourceHash: sourceHash(script.code),
   manifestDigest: manifestDigest(script.uses),
+  filesDigest: filesDigest(script.files),
   digest: digestOf(script),
   at: START,
   resolved,
+  files: [],
 })
 
 function gate(resolved: readonly ResolvedTool[] = RESOLVED, approval: ScriptApproval = approvalOf(SCRIPT)): ScriptGate & { approved: unknown[] } {
