@@ -7,6 +7,8 @@
  * order, and nothing else: the run session's rules *are* the grant, so resolving against them would make every grant
  * its own permission. A method the table does not know is refused with the nearest names, never guessed.
  */
+import { realpath } from "node:fs/promises"
+import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path"
 import type { Plugin } from "@opencode/plugin"
 import { Rpc } from "@opencode/plugin/rpc"
 import { evaluate, type Rule } from "../host/permissions.js"
@@ -65,10 +67,21 @@ export interface ScriptGate {
     /** `auto` under the access policy: record the digest and the resolved tools without prompting (R18). */
     approved?: "auto" | "prompt"
   }): Promise<ScriptApproval>
+  /**
+   * The first declared file outside the job's project that the agent's own rules do not allow through
+   * `external_directory`. Absent only in unit fakes (GAP-34, R19).
+   */
+  external?(input: { readonly agent: string; readonly project: string; readonly files: readonly ResolvedFile[]; readonly location?: string }): Promise<{ readonly name: string; readonly path: string; readonly resource: string } | undefined>
 }
 
 /** How much source the approval prompt carries; the rest is named by `where`. */
 const SOURCE_HEAD = 8192
+
+/** True when `child` lies inside `parent`, on path components. */
+const inside = (child: string, parent: string): boolean => {
+  const path = relative(parent, child)
+  return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path)
+}
 
 const CLASSES: readonly MethodClass[] = ["read", "write", "send", "export", "destructive", "unclassified"]
 
@@ -224,9 +237,31 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
     return [...tools, ...family.flat()]
   }
 
-  const resolve = async (entries: readonly string[], agentID: string, directory = host.location): Promise<readonly ResolvedTool[]> => {
+  const rulesOf = async (agentID: string, directory: string): Promise<readonly Rule[] | undefined> => {
     // The host's agent view is this location's; passing a location back (especially a Location.Ref carrying a workspace)
     // fails for a project-level plugin on 2.2.4, so only a job that targets another directory names one explicitly.
+    const info = await host.agent.get({ agentID, ...(directory === host.location ? {} : { location: { directory } }) }).then(
+      (found) => found.data,
+      () => undefined,
+    )
+    return info === undefined ? undefined : ((info.permissions ?? []) as readonly Rule[])
+  }
+
+  const external: NonNullable<ScriptGate["external"]> = async (input) => {
+    const rules = await rulesOf(input.agent, input.location ?? host.location)
+    if (rules === undefined) return undefined
+    // Compare canonical paths: a macOS `/tmp` location and a `/private/tmp` file are the same project.
+    const project = await realpath(input.project).catch(() => resolvePath(input.project))
+    for (const file of input.files) {
+      if (inside(file.path, project)) continue
+      const resource = `${dirname(file.path)}/*`
+      if (evaluate(rules, "external_directory", resource) === "allow") continue
+      return { name: file.name, path: file.path, resource }
+    }
+    return undefined
+  }
+
+  const resolve = async (entries: readonly string[], agentID: string, directory = host.location): Promise<readonly ResolvedTool[]> => {
     const info = await host.agent.get({ agentID, ...(directory === host.location ? {} : { location: { directory } }) }).then(
       (found) => found.data,
       () => undefined,
@@ -305,5 +340,5 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
     }
   }
 
-  return { resolve, approve }
+  return { resolve, approve, external }
 }

@@ -173,38 +173,37 @@ describe(`safety in OpenCode ${HOST_VERSION}`, () => {
     }
   }, 120_000)
 
-  test("refuses a job pointed at an agent that does not deny by default, before it runs", async () => {
+  test("warns about an agent that does not deny by default, loads its job, and still refuses a widening allow (R18)", async () => {
     const manual = manualClock(START)
     const host = await startHost({ clock: manual.clock, loop: false, config: { agents: GUARDED } })
     try {
       const worker = host.worker()
-      const refused = jobFile(host, "nightly", ["name: Nightly", "every: 5 minutes", "agent: build"], "Summarise the day.")
+      jobFile(host, "nightly", ["name: Nightly", "every: 5 minutes", "agent: build"], "Summarise the day.")
       const widens = jobFile(host, "widens", ["name: Widens", "every: 5 minutes", "agent: jobs", "allow:", '  - action: edit', "    effect: allow"], "Edit the file.")
       // The job folders are checked once a minute: move the clock past the watch's window.
       manual.set(manual.now() + 61_000)
 
-      // Create time: neither file becomes a job, and status names each with its code and path.
+      // Create time: the unguarded agent is a warning whose job loads; a widening allow is still refused.
       const status = await statusOf(host)
-      expect(status.problems.map((problem) => problem.split(":")[0])).toEqual(["JOBS_AGENT_UNGUARDED", "JOBS_ALLOW_WIDENS"])
-      expect(status.problems[0]).toContain(refused)
-      expect(status.problems[0]).toContain("does not deny by default")
-      expect(status.problems[0]).toContain("Next step: Give the agent \"build\" the read-only block")
-      expect(status.problems[1]).toContain(widens)
-      expect(status.jobs.invalidFiles).toBe(2)
-      expect(status.jobs.total).toBe(0)
+      expect(status.problems.map((problem) => problem.split(":")[0])).toEqual(["JOBS_ALLOW_WIDENS"])
+      expect(status.problems[0]).toContain(widens)
+      expect(status.unguardedAgents).toContain("build")
+      expect(status.jobs.invalidFiles).toBe(1)
+      expect(status.jobs.total).toBe(1)
       // The status text carries the block to paste, for the agent that needs it.
       const text = formatStatus(status)
       expect(text).toContain("- Agents without default rules: build")
       expect(text).toContain('Paste this for "build" into opencode.json:')
       expect(text).toContain('"effect": "deny"')
 
-      // Run time: the slots come and go without a session or a run record.
-      await worker.runner.tick(START)
-      await worker.runner.tick(START + 5 * MINUTE)
-      await worker.runner.tick(START + 10 * MINUTE)
+      // Run time: the unguarded job runs under its own rules; the widening job never became a job.
+      manual.set(manual.now() + 61_000)
+      await worker.runner.tick(manual.now())
+      await worker.runner.tick(manual.now() + 5 * MINUTE)
       await worker.runner.settle()
-      expect(await records(host)).toEqual([])
-      expect(host.mock().calls()).toBe(0)
+      const ran = (await records(host)).filter((record) => record.job === "nightly")
+      expect(ran.length).toBeGreaterThan(0)
+      expect(ran[0]!.status).toBe("succeeded")
     } finally {
       await host.close()
     }

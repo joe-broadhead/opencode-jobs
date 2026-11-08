@@ -81,7 +81,9 @@ action:
 The manifest is read as `<plugin id>.<method>`, split at the last dot, so `utilities.tools.time_now` is
 `tools.utilities.tools.time_now`. A `readwrite` file is snapshotted before the run and written after it, atomically and
 only on success. A file outside the project needs both a `scriptFilesRoots` entry and an `external_directory` allow in
-the agent's permissions. [Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md) has the
+the agent's permissions, for example
+`{ "action": "external_directory", "resource": "/srv/evidence/*", "effect": "allow" }`; a deny is honoured at approval
+and at every run. [Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md) has the
 approval flow, the two routes (family methods and `host:<tool id>`), the file policy, the limits, and the full
 bookmarks walkthrough with the daily cadence.
 

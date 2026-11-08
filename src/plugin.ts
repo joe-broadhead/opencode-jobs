@@ -4,7 +4,7 @@ import { PLUGIN_ID } from "./constants.js"
 import { checkHost } from "./host-version.js"
 import { insertDefaultRules } from "./host/permissions.js"
 import { registerToolsRpc } from "./host/tools-rpc.js"
-import { pauseEveryJob, runNow, type ActionInput } from "./jobs/actions.js"
+import { pauseEveryJob, reconcileFileScripts, runNow, type ActionInput } from "./jobs/actions.js"
 import { adopt } from "./jobs/adopt.js"
 import { systemClock, type Clock } from "./jobs/clock.js"
 import { createExecutor } from "./jobs/execute.js"
@@ -240,6 +240,21 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
         scriptFilesRoots: input.scriptFilesRoots,
         access: input.access,
       })
+      // A file script job has no create call, so its automatic approval happens when the leader reads the jobs.
+      const scheduled = async () => {
+        const found = await jobs()
+        await reconcileFileScripts(
+          {
+            storage: ctx.storage,
+            scripts: input.scripts,
+            location: ctx.location.directory,
+            scriptFilesRoots: input.scriptFilesRoots,
+            access: input.access,
+          },
+          found,
+        ).catch(() => undefined)
+        return found
+      }
       // Retention runs when the leader starts and once an hour after: the records it drops lose their sessions too.
       let prunedAt: number | undefined
       const maintain = async (now: number) => {
@@ -250,7 +265,7 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
       runner = new Runner({
         storage: ctx.storage,
         clock: input.clock,
-        jobs,
+        jobs: scheduled,
         execute,
         active: () => leader.isLeader,
         concurrency: input.concurrency,

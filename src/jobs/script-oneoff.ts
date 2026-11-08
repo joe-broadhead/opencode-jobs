@@ -73,6 +73,14 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
     const names = bad.map((tool) => `${tool.method} (${tool.action})`).join(", ")
     throw jobsError("JOBS_SCRIPT_DENIED", `The script uses tools its agent denies: ${names}.`, `Remove the deny rule for those tools, or name an agent that allows them. A script cannot be granted a tool its agent denies.`)
   }
+  const outside = await input.gate.external?.({ agent: agentID, project: input.location, files: resolvedFiles, location: input.location })
+  if (outside !== undefined) {
+    throw jobsError(
+      "JOBS_SCRIPT_DENIED",
+      `The file ${JSON.stringify(outside.name)} at ${JSON.stringify(outside.path)} is outside the project, and the script's agent does not allow external_directory for it.`,
+      `Add this rule to that agent's permissions: ${JSON.stringify({ action: "external_directory", resource: outside.resource, effect: "allow" })}.`,
+    )
+  }
   const access = input.access ?? "all"
   const worst = worstClass(resolved, resolvedFiles)
   if (access === "read-only" && worst === "change") {

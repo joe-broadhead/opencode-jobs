@@ -14,14 +14,18 @@ export interface FileWatch {
   read(signature: () => Promise<string>, scan: () => Promise<JobFiles>): Promise<JobFiles>
 }
 
-export function createFileWatch(now: () => number, everyMs = MINUTE): FileWatch {
+export function createFileWatch(now: () => number, everyMs = MINUTE, retryMs = 5_000): FileWatch {
   let last: { readonly at: number; readonly signature: string; readonly files: JobFiles } | undefined
   return {
     async read(signature, scan) {
       const at = now()
-      if (last !== undefined && at - last.at < everyMs) return last.files
+      // A file refused because an agent is missing is retried at once, and then on a short cadence even when the host's
+      // list has not changed: a restart's first scan can see a partial list, and the file must load when it fills in
+      // (GAP-30). Healthy files keep the one-stat-a-minute cost.
+      const missing = last?.files.refused.some((entry) => entry.code === "JOBS_AGENT_MISSING") === true
+      if (last !== undefined && at - last.at < everyMs && !missing) return last.files
       const current = await signature()
-      if (last !== undefined && current === last.signature) {
+      if (last !== undefined && current === last.signature && (!missing || at - last.at < retryMs)) {
         last = { at, signature: current, files: last.files }
         return last.files
       }

@@ -29,7 +29,7 @@ service, so there is no vendor logo to fetch and the package carries no vendor m
 14 tools are declared (4 read-only). With the default access (`all`) every one is allowed, like every other
 plugin's tools; `jobs.pause` and `jobs.pause_all` only stop work, and the rest can change a job. The `access` option
 (`all`, `ask-changes`, `read-only`) changes what the generated block allows. `jelly.tools` lists each with the permission
-action it checks, whether it asks and whether it is read-only:
+action it checks, its effect under the default `all`, and whether it can change something:
 
 | Tool | Permission | Effect | Read-only |
 | --- | --- | --- | --- |
@@ -49,11 +49,11 @@ action it checks, whether it asks and whether it is read-only:
 | `jobs.run_script` | `jobs_run_script` | allow | no |
 
 The plugin inserts its default rules into every agent that has a base allow, so in Jelly these
-effects hold without a person pasting anything: reads and pauses run, and every change asks.
-Pausing every job is the one change that does not ask, because it only stops work; resuming
-asks. A
-*job* still runs as the agent it names, and only that agent's own `permissions` can grant a tool a
-job needs; a tool Jelly or a plugin adds later is asked about, and a write is included.
+effects hold without a person pasting anything. With the default `all`, every tool runs; with
+`ask-changes`, reads and pauses run and every change asks; with `read-only`, only the reads run.
+A *job* still runs as the agent it names, and only that agent's own `permissions` can grant a tool a
+job needs. The namespace pattern follows `access`: a tool added later runs under `all`, and under
+`ask-changes` it asks, while under `read-only` it is denied.
 
 ## Skills, RPC and views
 

@@ -117,6 +117,15 @@ describe("docs", () => {
     expect(examples).toBeGreaterThanOrEqual(2)
   })
 
+  test("under the default access no model-facing guide claims a tool asks (VERIFY item 16)", () => {
+    for (const file of ["skills/jobs/SKILL.md", "docs/jelly.md"]) {
+      for (const line of text(file).split("\n")) {
+        const falseClaim = /\basks\b/.test(line) && !line.includes("ask-changes") && !line.includes("agent asks")
+        expect({ file, line, falseClaim }).toEqual({ file, line, falseClaim: false })
+      }
+    }
+  })
+
   test("the README names every code the plugin raises in its troubleshooting table, and no other", () => {
     const readme = /## Troubleshooting\n([\s\S]*?)\n## /.exec(text("README.md"))?.[1] ?? ""
     const rows = [...readme.matchAll(/\| `([A-Z][A-Z_]+)` \|/g)].map((match) => match[1]!)

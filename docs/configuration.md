@@ -36,14 +36,20 @@ set: OpenCode's base `* * allow` is the grant. Jobs inserts one block directly a
 
 ```json
 [
-  { "action": "jobs_*", "resource": "*", "effect": "allow" }
+  { "action": "jobs_*", "resource": "*", "effect": "allow" },
+  { "action": "jobs_status", "resource": "*", "effect": "allow" },
+  { "action": "jobs_list", "resource": "*", "effect": "allow" },
+  { "action": "jobs_get", "resource": "*", "effect": "allow" },
+  { "action": "jobs_history", "resource": "*", "effect": "allow" },
+  { "action": "jobs_pause", "resource": "*", "effect": "allow" },
+  { "action": "jobs_pause_all", "resource": "*", "effect": "allow" }
 ]
 ```
 
-That is `all`, the default. With `"access": "ask-changes"` the block is `jobs_* ask` plus the four reads
-(`jobs_status`, `jobs_list`, `jobs_get`, `jobs_history`) and the two pauses (`jobs_pause`, `jobs_pause_all`) allowed;
-with `"access": "read-only"` it is `jobs_* deny` plus the four reads allowed. Every later rule still wins, because the
-last match wins, so an agent's own `deny` or `allow` is untouched.
+That is `all`, the default. With `"access": "ask-changes"` the namespace rule is `jobs_* ask` and the same four reads
+and two pauses follow as explicit allows; with `"access": "read-only"` it is `jobs_* deny` plus the four reads. A tool
+the vendor adds later therefore runs under `all`, asks under `ask-changes` and is denied under `read-only`. Every later
+rule still wins, because the last match wins, so an agent's own `deny` or `allow` is untouched.
 
 The access option also decides a script's approval: `all` approves automatically (the digest and the audit record are
 still kept); `ask-changes` approves an all-read script with no file writes automatically and asks once per version for
@@ -136,7 +142,10 @@ that tree, so `/`, the home directory and its ancestors are refused. Symlinks at
 `.OPENCODE` (case-folded), OpenCode's own folders and special files are refused (`JOBS_SCRIPT_FILE_PATH`). The file is snapshotted before the run and a write is
 committed only on success, in one multi-file commit (validate all, temp and fsync each, keep each original aside, rename
 all, roll back on a failure), with a conflict check (`JOBS_SCRIPT_FILE_CONFLICT`) and a per-file
-`written`/`rolled_back`/`not_attempted` outcome. The digest covers each resolved path. The run re-resolves it every slot; a source, manifest, class or `access` change makes the slot
+`written`/`rolled_back`/`not_attempted` outcome. The digest covers each resolved path, and a file outside the project also needs the agent's
+`{ "action": "external_directory", "resource": "<folder>/*", "effect": "allow" }`, checked at approval and at every run.
+A file job is approved automatically at load under `all` (and under `ask-changes` when it is all-read); a changing one
+under `ask-changes` waits for `/jobs-approve`. The run re-resolves it every slot; a source, manifest, class or `access` change makes the slot
 `skipped` until `/jobs-approve <job>` re-approves it. The defaults are 100 calls, 64 MB, 64 KB and 8 MB of buffered
 files; `maxCalls` may go to 1,000, `memoryMb` to 512, `maxOutputBytes` to 1 MiB and `maxFileBytes` to 32 MiB. The wall clock is `policy.timeout`, and `timeoutMs` can narrow
 it. A script job may omit `agent`; it then runs as `build`. Its agent's rules must not deny its tools: the guarded
@@ -188,7 +197,7 @@ tools; `access: "ask-changes"` makes the changes ask, and `"read-only"` denies t
 | --- | --- |
 | `jobs_status` | The compact status: state, counts, how many agents need the block, and the one next step. |
 | `jobs_list` | The jobs there are: id, name, state, agent and next run. Filter by state, or cap the list. |
-| `jobs_get` | One job: its definition, its runtime state and its last three runs. |
+| `jobs_get` | One job: its definition, its runtime state and its last three runs, with a script run's capped `result`. |
 | `jobs_history` | Recent runs, with each summary labelled as job output. This is the only surface that carries a run's output: status and its RPC name what a run did, never what was said in it. |
 | `jobs_pause` | Pauses one job. |
 | `jobs_pause_all` | Pauses every job at once: the kill switch. It runs without asking, because it only stops work. |

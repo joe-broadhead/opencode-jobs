@@ -122,7 +122,17 @@ async function scriptApproval(input: ActionInput, job: Job, call: ApprovalCall |
       `To allow them, add these rules to that agent's permissions: ${JSON.stringify(rules)}. Or point the job at an agent that allows them; a script cannot be granted a tool its agent denies.`,
     )
   }
-  const files = await resolveScriptFiles(job.action.script.files, elsewhere(job, input) ?? input.location, input.scriptFilesRoots ?? [])
+  const directory = elsewhere(job, input) ?? input.location
+  const files = await resolveScriptFiles(job.action.script.files, directory, input.scriptFilesRoots ?? [])
+  // R19: a file outside the project also needs the agent's own external_directory allow, at approval and at every run.
+  const outside = await input.scripts.external?.({ agent: job.agent, project: directory, files, location: directory })
+  if (outside !== undefined) {
+    throw jobsError(
+      "JOBS_SCRIPT_DENIED",
+      `The script ${JSON.stringify(job.id)} declares the file ${JSON.stringify(outside.name)} at ${JSON.stringify(outside.path)}, outside the project, and its agent does not allow external_directory for it.`,
+      `Add this rule to that agent's permissions: ${JSON.stringify({ action: "external_directory", resource: outside.resource, effect: "allow" })}, then approve the script again.`,
+    )
+  }
   const access = input.access ?? "all"
   const worst = worstClass(resolved, files)
   if (access === "read-only" && worst === "change") {
@@ -155,6 +165,50 @@ async function scriptApproval(input: ActionInput, job: Job, call: ApprovalCall |
       `The script ${JSON.stringify(job.id)} changes something and needs a person's approval, and no one answered (${reasonOf(error)}).`,
       `Approve it in the OpenCode TUI (or with /jobs-approve ${job.id}), or set the plugin option "access" to "all" for automatic approval.`,
     )
+  }
+}
+
+/**
+ * Approves file script jobs under the access policy, at load and whenever their digest changes. A file job has no
+ * create call to approve it, so this is where `all` (and an all-read `ask-changes` script) gets its automatic approval
+ * and its audit record. A changing script under `ask-changes` stays unapproved for a person's `/jobs-approve`.
+ */
+export async function reconcileFileScripts(input: Pick<ActionInput, "storage" | "scripts" | "location" | "scriptFilesRoots" | "access">, jobs: readonly Job[]): Promise<void> {
+  if (input.scripts === undefined) return
+  for (const job of jobs) {
+    if (job.source !== "file" || job.action.type !== "script") continue
+    const directory = elsewhere(job, input) ?? input.location
+    let resolved
+    let files
+    try {
+      resolved = await input.scripts.resolve(job.action.script.uses, job.agent, directory)
+      files = await resolveScriptFiles(job.action.script.files, directory, input.scriptFilesRoots ?? [])
+    } catch {
+      // A path or tool the policy refuses is reported by the run and by status; there is nothing to approve.
+      continue
+    }
+    const outside = await input.scripts.external?.({ agent: job.agent, project: directory, files, location: directory })
+    if (outside !== undefined) continue
+    const access = input.access ?? "all"
+    const worst = worstClass(resolved, files)
+    if (access === "read-only" && worst === "change") continue
+    if (access === "ask-changes" && worst === "change") continue
+    const state = await readState(input.storage, job.id)
+    if (approvalMatches(state.approval, job.action.script, resolved, files)) continue
+    try {
+      const approval = await input.scripts.approve({
+        sessionID: "jobs-reconcile",
+        agent: job.agent,
+        script: job.action.script,
+        resolved,
+        files,
+        job: job.id,
+        approved: "auto",
+      })
+      await updateState(input.storage, job.id, (current) => ({ ...current, approval }))
+    } catch {
+      // Leave the next step to the run and status, which name the approval command.
+    }
   }
 }
 

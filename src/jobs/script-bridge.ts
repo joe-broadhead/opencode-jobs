@@ -13,7 +13,7 @@
 import type { Plugin } from "@opencode/plugin"
 import { Rpc } from "@opencode/plugin/rpc"
 import { evaluate, type Rule } from "../host/permissions.js"
-import type { ResolvedTool } from "./script.js"
+import { hyphenHint, type ResolvedTool } from "./script.js"
 import type { ScriptBridge } from "./script-runtime.js"
 
 /** The session's permission check, as the host hands it to an evaluate hook. */
@@ -94,29 +94,9 @@ export function createBridge(input: BridgeInput): ScriptBridge {
     return result.output ?? result.content ?? result
   }
 
-  // A plugin id with a hyphen cannot be written with dots in the guest (`tools.a-b.c` is a subtraction), so a dotted
-  // attempt gets the bracket form back (GAP-18).
-  const hyphenHint = (method: string): string => {
-    for (const entry of input.manifest) {
-      if (entry.method.startsWith("host:")) continue
-      const at = entry.method.lastIndexOf(".")
-      const plugin = entry.method.slice(0, at)
-      const rest = entry.method.slice(at + 1)
-      if (plugin.includes("-") && method === `${plugin.replace(/-/g, ".")}.${rest}`) {
-        const accessor = plugin
-          .split(".")
-          .map((segment) => (segment.includes("-") ? `[${JSON.stringify(segment)}]` : `.${segment}`))
-          .join("")
-          .replace(/^\./, "")
-        return ` A plugin id with a hyphen needs brackets: tools${accessor.startsWith("[") ? "" : "."}${accessor}.${rest}.`
-      }
-    }
-    return ""
-  }
-
   return async (method, args, signal) => {
     const tool = input.manifest.find((entry) => entry.method === method)
-    if (tool === undefined) throw new Error(`JOBS_SCRIPT_UNKNOWN_TOOL: ${method} is not in the job's manifest.${hyphenHint(method)}`)
+    if (tool === undefined) throw new Error(`JOBS_SCRIPT_UNKNOWN_TOOL: ${hyphenHint(method, input.manifest.map((entry) => entry.method))}${method} is not in the job's manifest.`)
     // The agent's rules are re-read per call: a deny added after the run's own resolve stops the next call.
     if (await agentDenies(tool.action)) throw new Error(`JOBS_SCRIPT_REVOKED: ${tool.action} is now denied for this run's agent.`)
     if (method.startsWith("host:")) return hostTool(method.slice("host:".length))(args, signal)

@@ -37,7 +37,7 @@ export interface ReportInput {
   readonly location: string
   readonly timezone: string
   readonly clock: Clock
-  readonly agent: Pick<Plugin.Context["agent"], "list">
+  readonly agent: Pick<Plugin.Context["agent"], "list"> & { readonly get?: Plugin.Context["agent"]["get"] }
   readonly host: HostCheck
   readonly enabled: boolean
   readonly keepAliveMinutes: number
@@ -108,22 +108,44 @@ export async function readAgents(agent: Pick<Plugin.Context["agent"], "list">, d
 /** Every job this instance knows, read now: a refused file is reported, never thrown, and never becomes a job. */
 export async function readSource(input: Omit<ReportInput, "host" | "enabled" | "keepAliveMinutes">): Promise<Source> {
   const listed = await readAgents(input.agent, input.location)
-  const agents = listed.agents
-  const guard = listed.known ? (id: string) => refusalFor(agents, id) : undefined
+  let agents = listed.agents
+  const guardFor = (list: readonly AgentInfo[]): AgentGuard | undefined => (listed.known ? (id: string) => refusalFor(list, id) : undefined)
+  const keyOf = (list: readonly AgentInfo[]) => (listed.known ? list.map((agent) => agent.id || agent.name).sort().join(",") : "unknown")
   const stored = await readJobs(input.storage).catch(() => [])
-  const sources = {
-    now: input.clock.now(),
-    timezone: input.timezone,
-    projects: [input.location],
-    // A refused file is cached with the agent list it was read against: when the host's list changes (an agent comes
-    // back, or one disappears), the files are parsed again, so recovery needs no file change and no restart (DR-22).
-    agents: listed.known ? listed.agents.map((agent) => agent.id || agent.name).sort().join(",") : "unknown",
-    ...(guard === undefined ? {} : { guard }),
+  const sourcesFor = (list: readonly AgentInfo[]) => {
+    const guard = guardFor(list)
+    return {
+      now: input.clock.now(),
+      timezone: input.timezone,
+      projects: [input.location],
+      // A refused file is cached with the agent list it was read against: when the host's list changes (an agent comes
+      // back, or one disappears), the files are parsed again, so recovery needs no file change and no restart (DR-22).
+      agents: keyOf(list),
+      ...(guard === undefined ? {} : { guard }),
+    }
   }
-  const scan = () => readJobFiles(sources).catch(() => ({ jobs: [], invalid: [], refused: [] }))
-  const files = input.watch === undefined ? await scan() : await input.watch.read(() => jobFileSignature(sources), scan)
+  const scan = () => readJobFiles(sourcesFor(agents)).catch(() => ({ jobs: [], invalid: [], refused: [] }))
+  let files = input.watch === undefined ? await scan() : await input.watch.read(() => jobFileSignature(sourcesFor(agents)), scan)
+  // A restart can see a partial agent list even though the host's own `get` knows the agent (the known stale-view
+  // window). Ask for each missing one directly and read the files again, so a file job loads without a config touch
+  // (GAP-30, GAP-37).
+  const missing = files.refused.filter((entry) => entry.code === "JOBS_AGENT_MISSING")
+  if (missing.length > 0 && input.agent.get !== undefined) {
+    const found: AgentInfo[] = []
+    for (const entry of missing) {
+      const got = await input.agent.get({ agentID: entry.agent, location: { directory: input.location } }).catch(() => undefined)
+      if (got?.data !== undefined) found.push(got.data as AgentInfo)
+    }
+    if (found.length > 0) {
+      const merged = [...agents]
+      for (const agent of found) if (!merged.some((entry) => (entry.id || entry.name) === (agent.id || agent.name))) merged.push(agent)
+      agents = merged
+      files = await readJobFiles(sourcesFor(agents))
+    }
+  }
   const byId = new Map(files.jobs.map((job) => [job.id, job] as const))
   for (const job of stored) if (!byId.has(job.id)) byId.set(job.id, job)
+  const guard = guardFor(agents)
   return { files, jobs: [...byId.values()], agents, known: listed.known, ...(guard === undefined ? {} : { guard }) }
 }
 
@@ -260,7 +282,7 @@ export function createReport(input: ReportInput): Report {
     const names = new Map(jobs.map((job) => [job.id, job.name] as const))
     const since = filter.since === undefined ? undefined : Date.parse(filter.since)
     const records = (await scanRuns(input.storage, filter.id)).filter((record) => since === undefined || !Number.isFinite(since) || Date.parse(record.slot) >= since)
-    return records.slice(0, Math.max(1, Math.min(50, filter.limit ?? 20))).map((record) => runView(record, names, filter.summaries === true, true))
+    return records.slice(0, Math.max(1, Math.min(50, filter.limit ?? 20))).map((record) => runView(record, names, filter.summaries === true, true, true))
   }
 
   return {
@@ -277,7 +299,7 @@ export function createReport(input: ReportInput): Report {
  * and is returned only where the docs say it lives: the `jobs_history` tool. Status and its RPC name what a run did,
  * never what was said in it.
  */
-export function runView(record: RunRecord, names: ReadonlyMap<string, string>, summaries = false, fullCalls = false): RunView {
+export function runView(record: RunRecord, names: ReadonlyMap<string, string>, summaries = false, fullCalls = false, includeResult = false): RunView {
   const name = names.get(record.job) ?? record.job
   const durationMs = record.startedAt !== undefined && record.endedAt !== undefined ? Math.max(0, record.endedAt - record.startedAt) : undefined
   return {
@@ -302,7 +324,7 @@ export function runView(record: RunRecord, names: ReadonlyMap<string, string>, s
     ...(record.files === undefined ? {} : { files: record.files }),
     ...(summaries && record.summary !== undefined ? { summary: jobOutput(record.summary, { name, at: record.slot }) } : {}),
     // A script's result is script output: framed exactly as a summary is, never raw data for a model to follow (SR-9).
-    ...(summaries && record.result !== undefined ? { result: jobOutput(JSON.stringify(record.result), { name, at: record.slot }) } : {}),
+    ...((summaries || includeResult) && record.result !== undefined ? { result: jobOutput(JSON.stringify(record.result), { name, at: record.slot }) } : {}),
   }
 }
 

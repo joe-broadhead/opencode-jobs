@@ -257,5 +257,24 @@ export function reachesOf(resolved: readonly ResolvedTool[]): readonly string[] 
     })
 }
 
+/** The bracket form for a plugin id with a hyphen, when a dotted attempt names a manifest entry (GAP-18). */
+export function hyphenHint(method: string, methods: Iterable<string>): string {
+  for (const entry of methods) {
+    if (entry.startsWith("host:")) continue
+    const at = entry.lastIndexOf(".")
+    const plugin = entry.slice(0, at)
+    const rest = entry.slice(at + 1)
+    if (plugin.includes("-") && method === `${plugin.replace(/-/g, ".")}.${rest}`) {
+      const accessor = plugin
+        .split(".")
+        .map((segment) => (segment.includes("-") ? `[${JSON.stringify(segment)}]` : `.${segment}`))
+        .join("")
+        .replace(/^\./, "")
+      return `Did you mean tools${accessor.startsWith("[") ? "" : "."}${accessor}.${rest}? A plugin id with a hyphen needs brackets. `
+    }
+  }
+  return ""
+}
+
 /** The methods that resolved to deny, which refuse the approval and later the run. */
 export const denied = (resolved: readonly ResolvedTool[]): readonly ResolvedTool[] => resolved.filter((tool) => tool.effect === "deny")

@@ -91,6 +91,19 @@ describe("one slot at a time", () => {
     expect(records.filter((record) => record.status === "succeeded")).toHaveLength(1)
   })
 
+  test("an every job whose slots passed while unloaded advances and records one missed run (GAP-31)", async () => {
+    const setup15 = setup({ jobs: [job({ schedule: { every: "15 minutes" }, policy: { catchup: "none" } })] })
+    await setup15.runner.tick(START)
+    expect((await readState(setup15.storage.storage, "five")).nextDueAt).toBe(START + 15 * MINUTE)
+    // Nothing runs for four slots: a stopped server, or a job not in the loaded set while its agents are unknown.
+    await setup15.runner.tick(START + 60 * MINUTE)
+    await setup15.runner.settle()
+    const missed = (await scanRuns(setup15.storage.storage)).filter((record) => record.status === "missed")
+    expect(missed).toHaveLength(1)
+    expect(missed[0]).toMatchObject({ count: 4, from: new Date(START + 15 * MINUTE).toISOString(), slot: new Date(START + 60 * MINUTE).toISOString() })
+    expect((await readState(setup15.storage.storage, "five")).nextDueAt).toBe(START + 75 * MINUTE)
+  })
+
   test("a job whose agent is missing is a failed run, not a throw", async () => {
     const setup5 = setup({ jobs: [job()], status: "failed" })
     await setup5.runner.tick(START)

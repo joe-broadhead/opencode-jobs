@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test"
 import type { Plugin } from "@opencode/plugin"
 import { createReport } from "../../src/jobs/report.js"
 import { parseJob } from "../../src/jobs/model.js"
-import { runJobTool, SCHEMAS, toolId, toolTransform, type ToolInput, type ToolName } from "../../src/jobs/tools.js"
+import { DESCRIPTIONS, runJobTool, SCHEMAS, toolId, toolTransform, type ToolInput, type ToolName } from "../../src/jobs/tools.js"
 import { defaultRules, evaluate as evaluateRule, type Rule } from "../../src/host/permissions.js"
 import { agentsFake, memoryStorage, testClock } from "./fake.js"
 
@@ -105,6 +105,19 @@ describe("every tool that changes something asserts before it acts", () => {
       else expect({ action, effect: defaultEffect(action) }).toEqual({ action, effect: "ask" })
     }
     expect(askTools()).toEqual(["create", "update", "delete", "run_now", "resume", "extend", "approve", "run_script"])
+  })
+
+  test("under the default access, no tool description claims a tool asks (VERIFY item 16)", () => {
+    for (const name of Object.keys(SCHEMAS) as ToolName[]) {
+      const description = DESCRIPTIONS[name]
+      expect({ name, asks: /\basks\b/.test(description) && !description.includes("ask-changes") }).toEqual({ name, asks: false })
+    }
+  })
+
+  test("an unclassified name follows the namespace effect under each access value (R18's amendment)", () => {
+    for (const [access, effect] of [["all", "allow"], ["ask-changes", "ask"], ["read-only", "deny"]] as const) {
+      expect({ access, effect: evaluateRule(defaultRules(access), "jobs_an_unclassified_name") }).toEqual({ access, effect })
+    }
   })
 
   test("the three access values drive the block: all allows every tool, ask-changes asks changes, read-only denies them", () => {

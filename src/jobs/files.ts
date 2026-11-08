@@ -242,7 +242,8 @@ async function readJobFile(path: string, context: ReadContext): Promise<Job | In
       ...(context.directory === undefined ? {} : { directory: context.directory }),
     })
     const refusal = context.guard?.(job.agent)
-    if (refusal !== undefined) return invalidAt(path, line("agent"), refusal.what, refusal.nextStep, refusal.code)
+    // R18: an unguarded agent is a status warning, not a refused file; the job loads and status names the agent.
+    if (refusal !== undefined && refusal.code !== "JOBS_AGENT_UNGUARDED") return invalidAt(path, line("agent"), refusal.what, refusal.nextStep, refusal.code)
     return job
   } catch (error) {
     if (!(error instanceof JobInputError)) throw error

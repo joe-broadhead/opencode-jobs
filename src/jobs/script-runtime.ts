@@ -13,7 +13,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { QuickJS, Intrinsics } from "quickjs-wasi"
 import { reasonOf } from "../redact.js"
 import type { FileWrite } from "./script-files.js"
-import type { ScriptCall, ScriptLimitFlags, ScriptLimits } from "./script.js"
+import { hyphenHint, type ScriptCall, type ScriptLimitFlags, type ScriptLimits } from "./script.js"
 
 /** One tool call the guest makes. The host resolves it against the manifest before anything is dispatched. */
 export type ScriptBridge = (method: string, input: unknown, signal: AbortSignal) => Promise<unknown>
@@ -181,7 +181,7 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
         if (!input.allowed.has(method)) {
           row.outcome = "refused"
           row.code = "JOBS_SCRIPT_UNKNOWN_TOOL"
-          settle(new Error(`JOBS_SCRIPT_UNKNOWN_TOOL: ${method} is not in the job's manifest.`))
+          settle(new Error(`JOBS_SCRIPT_UNKNOWN_TOOL: ${hyphenHint(method, input.allowed)}${method} is not in the job's manifest.`))
           return
         }
         try {

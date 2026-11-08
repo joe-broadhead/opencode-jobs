@@ -75,13 +75,13 @@ describe("job files", () => {
     expect(invalid[0]!.message).toStartWith(`JOBS_INVALID_FILE: ${join(GLOBAL, "notes.txt")}:1: The job folder could not be read`)
   })
 
-  test("a job whose agent is not guarded is refused at create, with the code, its path and the agent's line", async () => {
-    const { jobs, invalid } = await read({
+  test("a job whose agent is not guarded loads, with the code kept as a status warning (R18)", async () => {
+    const { jobs, invalid, refused } = await read({
       guard: (agent) => (agent === "jobs" ? { code: "JOBS_AGENT_UNGUARDED", what: `The agent "jobs" does not deny by default.`, nextStep: "Give it the read-only block." } : undefined),
     })
-    expect(jobs.map((job) => job.id)).toEqual(["nightly"])
-    const refused = invalid.find((file) => file.path === join(PROJECT, ".opencode/jobs/morning.md"))
-    expect(refused!.message).toBe(`JOBS_AGENT_UNGUARDED: ${join(PROJECT, ".opencode/jobs/morning.md")}:5: The agent "jobs" does not deny by default. Next step: Give it the read-only block.`)
+    expect(jobs.map((job) => job.id)).toEqual(["morning", "nightly"])
+    expect(invalid.some((file) => file.path.endsWith("morning.md"))).toBe(false)
+    expect(refused).toEqual([{ agent: "jobs", code: "JOBS_AGENT_UNGUARDED" }])
   })
 })
 

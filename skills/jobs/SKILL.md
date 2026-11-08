@@ -27,7 +27,7 @@ Reach for something else when:
   create one, because such a run can use every tool its agent can. If the host no longer lists the agent — which a
   plugin update can cause — the refusal is `JOBS_AGENT_MISSING`, and the next step is `opencode reload` in a terminal,
   or a restart. Never add an `allow` rule to get a job through an approval: a run cannot answer one.
-- **A model-created job expires after seven days.** `jobs_extend` moves the expiry, and it asks.
+- **A model-created job expires after seven days.** `jobs_extend` moves the expiry; under `ask-changes` it asks.
 
 ## The calls
 

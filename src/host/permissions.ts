@@ -66,9 +66,12 @@ const READS: readonly Rule[] = READ_AND_PAUSE.slice(0, 4)
  * Inserted after the base `* * allow` and before the agent's own rules, so a later rule wins.
  */
 export function defaultRules(access: "all" | "ask-changes" | "read-only"): readonly Rule[] {
-  if (access === "all") return [{ action: "jobs_*", resource: "*", effect: "allow" }]
-  if (access === "read-only") return [{ action: "jobs_*", resource: "*", effect: "deny" }, ...READS]
-  return [{ action: "jobs_*", resource: "*", effect: "ask" }, ...READ_AND_PAUSE]
+  // The namespace pattern's effect follows `access`, then the known reads (and the pauses, which only stop work) are
+  // allowed explicitly, as wisprflow's block does. A tool the vendor adds later therefore runs under `all`, asks under
+  // `ask-changes` and is denied under `read-only` (R18's namespace amendment).
+  const namespace: Rule = { action: "jobs_*", resource: "*", effect: access === "all" ? "allow" : access === "ask-changes" ? "ask" : "deny" }
+  if (access === "read-only") return [namespace, ...READS]
+  return [namespace, ...READ_AND_PAUSE]
 }
 
 /** The block for the default access (`all`). */

@@ -213,7 +213,10 @@ absolute one must be inside it or a `scriptFilesRoots` root. A root is a full re
 home directory and any ancestor of it or of OpenCode's own folders are refused. Symlinks at any component, `..`, `.git`
 and `.OPENCODE` (compared case-folded), OpenCode's own folders and special files are refused, and every open and rename
 re-checks the chain. Reading or writing outside the project also needs an `external_directory` allow in the agent's own
-permissions, on top of `scriptFilesRoots`; both are required, and a refusal names the missing one.
+permissions, on top of `scriptFilesRoots`; both are required, and a refusal names the missing one. The rule names the
+file's folder, for example
+`{ "action": "external_directory", "resource": "/srv/evidence/*", "effect": "allow" }`; a deny is honoured at the
+approval and again at every run.
 
 The approval digest covers each resolved path, so a saved "Always allow" names the exact files it grants. JSON is
 IEEE-754: a non-finite number (for example `1e999`) is refused with `JOBS_SCRIPT_FILE_INVALID` rather than written as
@@ -232,6 +235,11 @@ the remaining budget is refused; the script records what it saved and the next r
 bookmarks. Do not loop past a page that fails: the budget is a ceiling, not a retry cue.
 
 ### `jobs_run_script`
+
+A **file** script job is approved the same way: under `all` the leader approves it automatically at load, with its
+digest and audit record, and re-approves it whenever the digest changes; under `ask-changes` an all-read script is
+automatic and a changing one stays `unapproved` until a person runs `/jobs-approve <job>`; `read-only` leaves a change
+unapproved and the run skipped.
 
 The one-off: `{ code, uses, agent?, timeoutMs?, limits? }`. It validates, resolves and asks the same one approval, runs
 in a fresh session, returns the result to the calling session, and keeps no job. Use it for "run this once now"; a
