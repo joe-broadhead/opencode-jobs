@@ -9,7 +9,7 @@ describe("parseOptions", () => {
   })
 
   test("accepts the script file roots, and refuses a relative or too many", () => {
-    expect(parseOptions({ scriptFilesRoots: ["/tmp/one", "/tmp/one", "/tmp/two"] }).scriptFilesRoots).toEqual(["/tmp/one", "/tmp/two"])
+    expect(parseOptions({ scriptFilesRoots: ["/one", "/one", "/two"] }).scriptFilesRoots).toEqual(["/one", "/two"])
     expect(() => parseOptions({ scriptFilesRoots: ["relative"] })).toThrow("absolute directory paths")
     expect(parseOptions({ scriptFilesRoots: [] }).scriptFilesRoots).toEqual([])
   })
