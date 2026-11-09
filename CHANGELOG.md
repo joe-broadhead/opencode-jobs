@@ -2,10 +2,7 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.0.0] - Unreleased
-
-The release workflow (hey-jelly) sets `version` in `package.json` and this heading's version when it publishes;
-`package.json` stays `0.0.0` until then.
+## [Unreleased]
 
 ### Added
 
@@ -40,7 +37,7 @@ The release workflow (hey-jelly) sets `version` in `package.json` and this headi
 
 ### Added
 
-- The plugin loads on OpenCode `>=2.2.3 <2.3.0`, tested on 2.2.3, 2.2.4 and 2.2.5, and refuses a host outside the range
+- The plugin loads on OpenCode `>=2.2.3 <2.3.0`, tested on 2.2.3, 2.2.4, 2.2.5 and 2.2.6, and refuses a host outside the range
   unless `allowUntestedHost` is set.
 - `/jobs-status` and the `/jobs` dialog ("Jobs: Status" in the palette): a status model with the jobs there are, when
   they next run, the recent runs, the agents without the default rules, the OpenCode check and one next step.

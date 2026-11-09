@@ -265,6 +265,15 @@ Run `/jobs-status` first. Its last line is the next step.
 
 The plugin's storage stays in OpenCode's own database; removing the plugin does not delete it.
 
+## Known limits
+
+- **Runs happen only while OpenCode runs.** Nothing runs while OpenCode is closed. A slot due in that time runs when OpenCode next starts if it is no later than the job's `maxLate` (one hour by default); a later slot is skipped as expired.
+- **Scripts have fixed limits by default.** A script runs in a QuickJS VM with 64 MB of memory, 100 tool calls and 64 KB of output. A job can raise each one up to the maximum in [docs/scripting.md](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md).
+- **A changed declared file is re-approved under `all`.** The run record names the script's digest, but not yet the declared-file set (its paths, modes and caps), so the record alone does not show which file declaration a run used.
+- **Declared files are read on the host.** Each one is read up to its size limit, before the VM starts, and that memory is outside `memoryMb`.
+- **A restore can fail.** When a file cannot be put back after a failed commit, its run records `rollback_failed` and the error names the kept original, which a person must restore by hand.
+- **An agent without the default rules still runs its jobs.** Status warns with `JOBS_AGENT_UNGUARDED` and the block to paste; nothing blocks the run.
+
 ## Links
 
 - [Configuration](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/configuration.md)
