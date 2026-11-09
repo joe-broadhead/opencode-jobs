@@ -6,7 +6,7 @@ repository and the APIs that must never appear in it.
 ## Set up
 
 You need Node.js 22.18 or later, npm, and [Bun](https://bun.sh). CI and the release use Node.js 24 and Bun 1.4.4,
-the Bun inside stock OpenCode 2.2.3, 2.2.4 and 2.2.5.
+the Bun inside stock OpenCode 2.2.3, 2.2.4, 2.2.5 and 2.2.6.
 
 ```sh
 npm ci --ignore-scripts
@@ -42,8 +42,8 @@ npm run check
 | `unit` | `bun test ./test/unit`: every module in `src/`, the twelve tools, the status model, both RPC contracts, the docs, and the built TUI under OpenTUI 0.8's test renderer |
 | `build` | `node scripts/build.mjs`: deletes `dist/` and bundles `src/index.ts` and `src/tui.tsx` with esbuild into the self-contained `dist/index.js` and `dist/tui.js`. The TUI goes through Solid's universal transform first, so its props stay reactive. Fails if a bundle imports anything the host does not provide |
 | `icons` | `node scripts/check-icons.mjs`: the family's icon contract for `assets/icon.svg`, its two rasters and `opencode.icons` |
-| `host` | `bun test ./test/host`: the plugin inside an embedded OpenCode host, once on each tested release (`@opencode/sdk` 2.2.3, 2.2.4 and 2.2.5) |
-| `pack` | `bun test ./test/pack`: builds, packs and installs the package, imports both entry points, and loads it in stock OpenCode 2.2.3, 2.2.4 and 2.2.5 |
+| `host` | `bun test ./test/host`: the plugin inside an embedded OpenCode host, once on each tested release (`@opencode/sdk` 2.2.3, 2.2.4, 2.2.5 and 2.2.6) |
+| `pack` | `bun test ./test/pack`: builds, packs and installs the package, imports both entry points, and loads it in stock OpenCode 2.2.3, 2.2.4, 2.2.5 and 2.2.6 |
 | `forbidden` | `node scripts/check-forbidden.mjs`: scans `src/`, `test/`, `scripts/` and `dist/` for forbidden APIs and machine-local paths |
 | `copies` | `node scripts/check-copies.mjs`: the declaration kit (`test/support/jelly-kit.ts`) and the tools RPC outside its `PLUGIN-SPECIFIC` block equal the copy every plugin carries |
 | `whitelist` | Checks `package.json` against the approved package shape, and that `dist/` holds exactly `index.js` and `tui.js` |
@@ -57,7 +57,7 @@ node scripts/check.mjs typecheck unit
 Shortcuts: `npm run typecheck`, `npm run build`, `npm test` (the `unit` stage), `npm run test:host`,
 `npm run test:pack` and `npm run lint` (the `forbidden` stage).
 
-`TESTED_HOSTS` in `src/constants.ts` is the one list of tested OpenCode releases: 2.2.3, 2.2.4 and 2.2.5. The host
+`TESTED_HOSTS` in `src/constants.ts` is the one list of tested OpenCode releases: 2.2.3, 2.2.4, 2.2.5 and 2.2.6. The host
 and pack stages, status and CI all take their versions from it. Add a release there, and to the README's
 requirements, when every check passes on it.
 
@@ -80,8 +80,8 @@ The pack stage needs network access to the npm registry only when a binary is no
 contains exactly the `files` whitelist, with fewer than 30 entries and at most 128 KB, in fewer than 30 entries; that `dist/` holds only
 `index.js` and `tui.js`, with no relative import, dynamic `import()` or `require()`; and that they import only modules
 OpenCode provides. It installs the tarball next to the host packages that OpenCode 2.2.3 provides, imports both entry
-points under Bun, then installs the tarball alone and loads it with `opencode serve` from stock OpenCode 2.2.3, 2.2.4
-and 2.2.5, asserting that the plugin is active and that the status RPC answers. On each, it then reloads the plugin in place, as
+points under Bun, then installs the tarball alone and loads it with `opencode serve` from stock OpenCode 2.2.3, 2.2.4,
+2.2.5 and 2.2.6, asserting that the plugin is active and that the status RPC answers. On each, it then reloads the plugin in place, as
 `opencode plugin update` does. Whether that leaves the plugin without the job's agent is a host race that some machines
 never lose: when it does, the test asserts that the job fails closed with `JOBS_AGENT_MISSING`, runs nothing and
 recovers; when it does not, that the plugin kept the agent. It then takes the agent out of the
@@ -92,7 +92,8 @@ To use `opencode` binaries you already have, set `OPENCODE_BIN_2_2_3`, `OPENCODE
 
 ```sh
 OPENCODE_BIN_2_2_3=/path/to/opencode-2.2.3 OPENCODE_BIN_2_2_4=/path/to/opencode-2.2.4 \
-  OPENCODE_BIN_2_2_5=/path/to/opencode-2.2.5 node scripts/check.mjs pack
+  OPENCODE_BIN_2_2_5=/path/to/opencode-2.2.5 \
+  OPENCODE_BIN_2_2_6=/path/to/opencode-2.2.6 node scripts/check.mjs pack
 ```
 
 Otherwise the stage installs `@opencode/cli` with the binary for your platform (macOS or Linux, arm64 or x64), a few
