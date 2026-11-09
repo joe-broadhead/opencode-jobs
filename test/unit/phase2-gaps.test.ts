@@ -85,6 +85,15 @@ describe("GAP-32: a file script job's automatic approval", () => {
     expect(setup1.approved).toHaveLength(calls + 1)
   })
 
+  test("a file job whose agent denies a manifest tool records no approval (RR-7)", async () => {
+    const denyResolved: ResolvedTool[] = [{ method: "host:mem", action: "mem", class: "unclassified", kind: "host", effect: "deny" }]
+    const denied = await setup("all", denyResolved)
+    const job = scriptJob()
+    await denied.run(job)
+    expect(denied.approved).toHaveLength(0)
+    expect((await readState(denied.storage.storage, job.id)).approval).toBeUndefined()
+  })
+
   test("under `ask-changes` approves an all-read script and leaves a change unapproved", async () => {
     const setup1 = await setup("ask-changes", READ_RESOLVED)
     const read = scriptJob("return 1", ["x.posts.read"])

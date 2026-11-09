@@ -190,6 +190,8 @@ export async function reconcileFileScripts(input: Pick<ActionInput, "storage" | 
     }
     const outside = await input.scripts.external?.({ agent: job.agent, project: directory, files, location: directory })
     if (outside !== undefined) continue
+    // A tool the agent denies is never run, so an approval for it would only be a record of a run that cannot happen (RR-7).
+    if (denied(resolved).length > 0) continue
     const access = input.access ?? "all"
     const worst = worstClass(resolved, files)
     if (access === "read-only" && worst === "change") continue
