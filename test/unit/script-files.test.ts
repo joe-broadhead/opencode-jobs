@@ -264,4 +264,58 @@ describe("the commit's bounds and atomicity", () => {
     await commitFiles(snapshots, [{ name: "state", json: JSON.stringify({ n: 2 }) }], { now: () => Date.now() })
     expect(existsSync(stale)).toBe(false)
   })
+
+  test("cleans only this target's stale crash artifacts, and keeps young and unrelated files (RR-1)", async () => {
+    writeFileSync(join(root, "crash.json"), '{"n":1}')
+    const old = new Date(Date.now() - 24 * 3_600_000)
+    const staleTemp = join(root, ".crash.json.0123456789ab.tmp")
+    const staleBackup = join(root, ".crash.json.0123456789ab.bak")
+    const youngTemp = join(root, ".crash.json.abcdef123456.tmp")
+    const youngBackup = join(root, ".crash.json.abcdef123456.bak")
+    const other = join(root, ".other.json.0123456789ab.bak")
+    const user = join(root, "notes.bak")
+    for (const path of [staleTemp, staleBackup, other, user]) {
+      writeFileSync(path, "old")
+      utimesSync(path, old, old)
+    }
+    writeFileSync(youngTemp, "in flight")
+    writeFileSync(youngBackup, "in flight")
+    const snapshots = await snapshotFiles(await resolveScriptFiles(one("crash.json"), root))
+    await commitFiles(snapshots, [{ name: "state", json: '{"n":2}' }], { now: () => Date.now() })
+    expect(existsSync(staleTemp)).toBe(false)
+    expect(existsSync(staleBackup)).toBe(false)
+    for (const path of [youngTemp, youngBackup, other, user]) expect(existsSync(path)).toBe(true)
+  })
+
+  test("cleans a declared file's stale artifacts when another file in the folder is committed (RR-1)", async () => {
+    writeFileSync(join(root, "folder-a.json"), '{}')
+    writeFileSync(join(root, "folder-b.json"), '{}')
+    const backup = join(root, ".folder-a.json.0123456789ab.bak")
+    const temp = join(root, ".folder-a.json.abcdef123456.tmp")
+    const old = new Date(Date.now() - 24 * 3_600_000)
+    for (const path of [backup, temp]) {
+      writeFileSync(path, "old")
+      utimesSync(path, old, old)
+    }
+    const files = await resolveScriptFiles({ a: { path: "folder-a.json", mode: "read", format: "json" }, b: { path: "folder-b.json", mode: "readwrite", format: "json" } }, root)
+    const snapshots = await snapshotFiles(files)
+    await commitFiles(snapshots, [{ name: "b", json: '{"ok":true}' }], { now: () => Date.now() })
+    expect(existsSync(backup)).toBe(false)
+    expect(existsSync(temp)).toBe(false)
+  })
+
+  test("keeps stale backups for missing or invalid targets instead of guessing a restore (RR-1)", async () => {
+    for (const name of ["missing-recovery.json", "invalid-recovery.json"]) {
+      const target = join(root, name)
+      const backup = join(root, `.${name}.0123456789ab.bak`)
+      writeFileSync(backup, '{"original":true}')
+      const old = new Date(Date.now() - 24 * 3_600_000)
+      utimesSync(backup, old, old)
+      if (name.startsWith("invalid")) writeFileSync(target, "invalid JSON")
+      const snapshots = await snapshotFiles(await resolveScriptFiles(one(name, "write"), root))
+      await expect(commitFiles(snapshots, [{ name: "state", json: '{"new":true}' }], { now: () => Date.now() })).rejects.toThrow("JOBS_SCRIPT_FILE_CONFLICT")
+      expect(readFileSync(backup, "utf8")).toBe('{"original":true}')
+      expect(existsSync(target)).toBe(name.startsWith("invalid"))
+    }
+  })
 })

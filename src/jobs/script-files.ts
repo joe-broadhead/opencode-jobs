@@ -309,6 +309,7 @@ interface Planned {
   readonly snapshot: FileSnapshot
   readonly bytes: Buffer
   readonly hash: string
+  readonly current: Buffer | undefined
 }
 
 /** `stat` then read, never above the cap, so a grown conflict read cannot exhaust memory (DF-13). */
@@ -337,13 +338,26 @@ async function keep(original: string): Promise<string> {
   return backup
 }
 
-/** Removes temp files a killed process left in a folder this commit writes, older than an hour (DF-12). */
-async function cleanupTemps(directory: string, now: number): Promise<void> {
+/** Removes only this target's stale artifacts. A backup is recovery evidence if the target is missing or invalid. */
+async function cleanupTemps(file: ResolvedFile, current: Buffer | undefined, now: number): Promise<void> {
+  const directory = dirname(file.path)
+  let valid = current !== undefined
+  if (valid && file.format === "json") {
+    try {
+      refuseNonFinite(JSON.parse(current!.toString("utf8")), file)
+    } catch {
+      valid = false
+    }
+  }
+  const prefix = `.${basename(file.path)}.`
   const entries = await readdir(directory).catch(() => [] as string[])
   for (const entry of entries) {
-    if (!/^\..+\.[0-9a-f]{12}\.tmp$/.test(entry) || !entry.endsWith(".tmp")) continue
+    if (!entry.startsWith(prefix) || !/^[0-9a-f]{12}\.(tmp|bak)$/.test(entry.slice(prefix.length))) continue
     const path = join(directory, entry)
     const info = await lstat(path).catch(() => undefined)
+    if (entry.endsWith(".bak") && !valid && info?.isFile() === true) {
+      throw jobsError("JOBS_SCRIPT_FILE_CONFLICT", `The file ${JSON.stringify(file.path)} is missing or invalid and a backup exists at ${JSON.stringify(path)}.`, `Inspect the backup and restore or remove it by hand before running the job again.`)
+    }
     if (info === undefined || !info.isFile() || now - info.mtimeMs < 3_600_000) continue
     await unlink(path).catch(() => undefined)
   }
@@ -436,15 +450,20 @@ export async function commitFiles(
     if (before !== snapshot!.sha256) {
       fail(jobsError("JOBS_SCRIPT_FILE_CONFLICT", `The file ${JSON.stringify(file.name)} at ${JSON.stringify(file.path)} changed on disk after the run read it.`, `Let the next run read the new file, or remove the other writer.`))
     }
-    planned.push({ snapshot: snapshot!, bytes: bytes!, hash: sha256(bytes!) })
+    planned.push({ snapshot: snapshot!, bytes: bytes!, hash: sha256(bytes!), current })
   }
 
   // Every temp is written before any rename, and every original is kept aside before any rename (DF-4).
   const temps: { planned: Planned; temp: string; backup?: string }[] = []
   try {
-    const directories = new Set(planned.map((entry) => dirname(entry.snapshot.file.path)))
     const now = options.now?.() ?? 0
-    for (const directory of directories) await cleanupTemps(directory, now)
+    const directories = new Set(planned.map((entry) => dirname(entry.snapshot.file.path)))
+    for (const snapshot of snapshots) {
+      if (!directories.has(dirname(snapshot.file.path))) continue
+      const entry = planned.find((candidate) => candidate.snapshot === snapshot)
+      const current = entry === undefined ? await readBounded(snapshot.file, policyOf(snapshot.file, options.policy)).catch(() => undefined) : entry.current
+      await cleanupTemps(snapshot.file, current, now)
+    }
     for (const entry of planned) {
       const policy = policyOf(entry.snapshot.file, options.policy)
       await checkTarget(entry.snapshot.file.path, policy).catch((error) => fail(error))

@@ -218,6 +218,10 @@ file's folder, for example
 `{ "action": "external_directory", "resource": "/srv/evidence/*", "effect": "allow" }`; a deny is honoured at the
 approval and again at every run.
 
+On a later commit, stale temporary files and backups matching that target's generated names are removed after one hour.
+If the target is missing or invalid and a backup exists, the commit stops: inspect the backup and restore or remove it
+by hand. The plugin does not guess which backup to restore.
+
 The approval digest covers each resolved path, so a saved "Always allow" names the exact files it grants. JSON is
 IEEE-754: a non-finite number (for example `1e999`) is refused with `JOBS_SCRIPT_FILE_INVALID` rather than written as
 `null`. A run may buffer 8 MB across its files by default, up to 32 MB with `limits.maxFileBytes`; a write past the
