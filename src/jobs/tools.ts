@@ -253,15 +253,12 @@ export async function runJobTool(input: ToolInput, name: ToolName, raw: unknown,
       const runs = (await scanRuns(input.storage, job.id)).slice(0, 3)
       const names = new Map([[job.id, job.name]])
       const script = await input.report.script(job)
-      const safeJob = job.action.type === "script" ? { ...job, action: { type: "script" } } : job
-      // A script can throw file contents or a tool payload as its error, so get must not return that text.
-      const views = runs.map((run) => {
-        const view = runView(run, names, false, true)
-        return job.action.type === "script" ? { ...view, error: undefined } : view
-      })
+      const views = runs.map((run) => runView(run, names, false, true, true))
       return {
-        output: { job: safeJob, state, runs: views, ...(script === undefined ? {} : { script }) },
-        text: compact({ id: job.id, name: job.name, agent: job.agent, state, runs: runs.map((run) => run.status), ...(script === undefined ? {} : { script }) }),
+        output: { job, state, runs: views, ...(script === undefined ? {} : { script }) },
+        text: job.action.type === "script"
+          ? compact({ job, state, runs: views, ...(script === undefined ? {} : { script }) })
+          : compact({ id: job.id, name: job.name, agent: job.agent, state, runs: runs.map((run) => run.status) }),
       }
     }
     case "history": {

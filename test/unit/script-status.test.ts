@@ -33,6 +33,17 @@ async function report() {
 }
 
 describe("status and a revoked script", () => {
+  test("a script without an approval lists its declared manifest", async () => {
+    const storage = memoryStorage()
+    const clock = testClock(NOW, { instantBelow: 0 })
+    await putJob(storage.storage, job)
+    const report = createReport({ storage: storage.storage, location: "/nowhere", timezone: "UTC", clock: clock.clock, agent: agentsFake(), host: HOST, enabled: true, keepAliveMinutes: 20 })
+    const view = (await report.list())[0]!.script!
+    expect(view).toMatchObject({ tools: ["host:mem"], needsApproval: true })
+    expect(view.reason).toContain("/jobs-approve bookmarks")
+    expect(JSON.stringify(view)).not.toContain(script.code)
+  })
+
   test("names the job, says a tool is now denied, and gives the approve step", async () => {
     const status = await (await report()).status()
     expect(status.scriptJobs).toEqual({ approved: 0, unapproved: 1, names: ["bookmarks"], revoked: ["bookmarks"], automatic: 0 })

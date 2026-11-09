@@ -64,6 +64,8 @@ export interface ScriptGate {
     source?: { readonly messageID: string; readonly id: string }
     /** The job whose script this is, for the "where to read it" line; absent for a one-off tool call. */
     job?: string
+    /** A file job's definition path, when the script comes from a job file. */
+    jobFile?: string
     /** `auto` under the access policy: record the digest and the resolved tools without prompting (R18). */
     approved?: "auto" | "prompt"
   }): Promise<ScriptApproval>
@@ -321,7 +323,7 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
         // What the person approves: the source itself, a clear head when it is long, and where the rest is (SR-5).
         script: head,
         truncated: head.length < input.script.code.length,
-        where: input.job === undefined ? "the tool call's input" : `the original definition of job ${JSON.stringify(input.job)}`,
+        where: input.jobFile !== undefined ? `the job file ${JSON.stringify(input.jobFile)}` : input.job === undefined ? "the tool call's input" : `the jobs_get tool, job ${JSON.stringify(input.job)}`,
         tools: input.resolved.map((tool) => ({ method: tool.method, class: tool.class, effect: tool.effect, ...(tool.description === undefined ? {} : { description: tool.description }) })),
         writes: reachesOf(input.resolved),
         files: files.map((file) => ({ name: file.name, path: file.path, mode: file.mode, format: file.format, maxBytes: file.maxBytes })),

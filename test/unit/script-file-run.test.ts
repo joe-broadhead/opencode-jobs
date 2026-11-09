@@ -142,7 +142,7 @@ describe("a script's declared file", () => {
         expect(view.reason).toContain(access === "ask-changes" ? "/jobs-approve state" : "revoked")
         expect(listed.text).toContain(access === "ask-changes" ? "/jobs-approve state" : "revoked")
         expect(got.text).toContain(access === "ask-changes" ? "/jobs-approve state" : "revoked")
-        expect(JSON.stringify(got)).not.toContain("private-result")
+        expect(JSON.stringify(got.output["script"])).not.toContain("private-result")
         expect(JSON.stringify(view)).not.toContain("files.write")
       } finally {
         rmSync(setupRun.root, { recursive: true, force: true })
@@ -150,7 +150,7 @@ describe("a script's declared file", () => {
     }
   })
 
-  test("get omits script source, returned file contents, and errors containing file contents (RR-2)", async () => {
+  test("get returns the script definition and the same run error as history, without source in approval facts", async () => {
     for (const code of ["return files.state", "throw new Error(JSON.stringify(files.state))"]) {
       const setupRun = await setup(code, { access: "all", approved: "auto" })
       try {
@@ -162,8 +162,14 @@ describe("a script's declared file", () => {
         const report = createReport({ storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20, access: "all", scripts: setupRun.gate })
         const input = { storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, source: () => report.source(), wake: () => undefined, ready: true, report, assert: async () => undefined }
         const got = await runJobTool(input, "get", { id: setupRun.job.id })
-        expect(JSON.stringify(got)).not.toContain(code)
-        expect(JSON.stringify(got)).not.toContain("do-not-expose")
+        expect(got.output["job"]).toMatchObject({ action: { type: "script", script: { code, uses: ["host:mem"], files: { state: { path: "state.json", mode: "readwrite", format: "json" } } } } })
+        expect(got.text).toContain(code.replaceAll('"', '\\"'))
+        expect(JSON.stringify(got.output["script"])).not.toContain(code)
+        expect(JSON.stringify(got.output["script"])).not.toContain("do-not-expose")
+        const runs = got.output["runs"] as { error?: string }[]
+        const history = await report.history({ id: setupRun.job.id, summaries: true })
+        expect(runs[0]?.error).toBe(history[0]?.error)
+        if (code.startsWith("throw")) expect(runs[0]?.error).toContain("do-not-expose")
       } finally {
         rmSync(setupRun.root, { recursive: true, force: true })
       }

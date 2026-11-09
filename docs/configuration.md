@@ -199,8 +199,8 @@ tools; `access: "ask-changes"` makes the changes ask, and `"read-only"` denies t
 | --- | --- |
 | `jobs_status` | The compact status: state, counts, how many agents need the block, and the one next step. |
 | `jobs_list` | The jobs there are: id, name, state, agent and next run. Filter by state, or cap the list. |
-| `jobs_get` | One job, its runtime state and its last three runs. A script job includes approval facts, not its source or result. |
-| `jobs_history` | Recent runs, with each summary labelled as job output. This is the only surface that carries a run's output: status and its RPC name what a run did, never what was said in it. |
+| `jobs_get` | One job's definition, its runtime state and its last three runs. A script job also includes approval facts and a run's capped result. |
+| `jobs_history` | Recent runs, with each summary labelled as job output. Status and its RPC name what a run did, never what was said in it. |
 | `jobs_pause` | Pauses one job. |
 | `jobs_pause_all` | Pauses every job at once: the kill switch. It runs without asking, because it only stops work. |
 | `jobs_create` | Creates a job: name, schedule, action, agent, and optionally target, allow, policy, ends, expiry and jitter. |

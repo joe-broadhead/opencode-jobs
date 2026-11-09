@@ -208,7 +208,7 @@ export function createReport(input: ReportInput): Report {
     }
     return {
       digest: approval?.digest ?? digestOf(definition, files),
-      tools: approval?.resolved.map((tool) => tool.method) ?? [],
+      tools: approval?.resolved.map((tool) => tool.method) ?? [...definition.uses],
       ...(approval === undefined ? {} : { approvedAt: approval.at }),
       ...(approval?.approved === undefined ? {} : { approved: approval.approved }),
       needsApproval: problem === "unapproved",

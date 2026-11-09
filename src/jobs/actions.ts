@@ -154,6 +154,7 @@ async function scriptApproval(input: ActionInput, job: Job, call: ApprovalCall |
       resolved,
       files,
       job: job.id,
+      ...(job.source === "file" && job.sourcePath !== undefined ? { jobFile: job.sourcePath } : {}),
       approved,
       ...(call.messageID === undefined || call.id === undefined ? {} : { source: { messageID: call.messageID, id: call.id } }),
     })
@@ -203,6 +204,7 @@ export async function reconcileFileScripts(input: Pick<ActionInput, "storage" | 
         resolved,
         files,
         job: job.id,
+        ...(job.sourcePath === undefined ? {} : { jobFile: job.sourcePath }),
         approved: "auto",
       })
       await updateState(input.storage, job.id, (current) => ({ ...current, approval }))

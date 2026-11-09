@@ -3,12 +3,13 @@
 // ask becomes a coded refusal, never a hang or a 500.
 import { afterAll, describe, expect, test } from "bun:test"
 import type { Plugin } from "@opencode/plugin"
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { createJob } from "../../src/jobs/actions.js"
+import { approveJob, createJob } from "../../src/jobs/actions.js"
 import type { ActionInput } from "../../src/jobs/actions.js"
 import { readState } from "../../src/jobs/store.js"
 import { createReport } from "../../src/jobs/report.js"
+import { readJobFiles } from "../../src/jobs/files.js"
 import { execute } from "../../src/jobs/execute.js"
 import { runJobTool } from "../../src/jobs/tools.js"
 import { createScriptGate, type ScriptHost } from "../../src/jobs/script-gate.js"
@@ -159,6 +160,42 @@ test("an actual automatic approval becomes visible as unapproved or revoked afte
     expect(got.output["script"]).toEqual(script)
     expect(script.needsApproval).toBe(access === "ask-changes")
     expect(script.reason).toContain(access === "ask-changes" ? `/jobs-approve ${job.id}` : "revoked")
+  }
+})
+
+test("approval points to the full tool or file job definition, and get returns the long source and declared files (SR-5)", async () => {
+  const setupRun = setup()
+  const code = `// ${"x".repeat(9000)}\nreturn 1;`
+  const script: Script = { code, uses: ["x.posts.write"], files: { state: { path: "state.json", mode: "read", format: "json", maxBytes: 2048 } } }
+  writeFileSync(join(root, "state.json"), "{}")
+  const toolJob = await setupRun.create("ask-changes", script)
+  const toolRequest = setupRun.asserted[0] as { metadata: { where: string; truncated: boolean; script: string } }
+  expect(toolRequest.metadata).toMatchObject({ where: `the jobs_get tool, job ${JSON.stringify(toolJob.id)}`, truncated: true })
+  expect(toolRequest.metadata.script).toHaveLength(8192)
+  const clock = testClock(NOW, { instantBelow: 0 }).clock
+  const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
+  const report = createReport({ storage: setupRun.storage.storage, location: root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20, access: "ask-changes", scripts: setupRun.gate })
+  const got = await runJobTool({ ...setupRun.input, report, assert: async () => undefined }, "get", { id: toolJob.id })
+  expect(got.output["job"]).toMatchObject({ action: { type: "script", script } })
+  expect(got.text).toContain("x".repeat(9000))
+  expect(JSON.stringify(got.output["script"])).not.toContain("x".repeat(100))
+
+  const projectJobs = join(root, ".opencode", "jobs")
+  const globalJobs = join(root, "global-jobs")
+  mkdirSync(projectJobs, { recursive: true })
+  mkdirSync(globalJobs, { recursive: true })
+  const projectPath = join(projectJobs, "project-script.md")
+  const globalPath = join(globalJobs, "global-script.md")
+  const contents = `---\nname: File script\nschedule: { every: 1h }\nagent: build\naction: ${JSON.stringify({ type: "script", script })}\n---\n`
+  for (const path of [projectPath, globalPath]) writeFileSync(path, contents)
+  const files = await readJobFiles({ now: NOW, timezone: "UTC", projects: [root], global: globalJobs })
+  expect(files.invalid).toEqual([])
+  expect(files.jobs.map((job) => job.sourcePath).sort()).toEqual([globalPath, projectPath].sort())
+  const source = async () => ({ files, jobs: files.jobs, agents: [], known: true })
+  for (const fileJob of files.jobs) {
+    await approveJob({ ...setupRun.input, source, access: "ask-changes" }, fileJob.id, { sessionID: "ses_1", agent: "build" })
+    const request = setupRun.asserted.at(-1) as { metadata: { where: string; truncated: boolean } }
+    expect(request.metadata).toMatchObject({ where: `the job file ${JSON.stringify(fileJob.sourcePath)}`, truncated: true })
   }
 })
 

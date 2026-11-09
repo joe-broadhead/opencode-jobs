@@ -87,6 +87,8 @@ export interface Job {
   readonly id: string
   readonly name: string
   readonly source: JobSource
+  /** The definition's path for a file job, as discovered by the job-file reader. */
+  readonly sourcePath?: string
   readonly schedule: JobSchedule
   /** A deterministic delay after the slot, never before it. Zero unless the job sets it. */
   readonly jitterMs: number
