@@ -157,8 +157,8 @@ action:
   failed call's code; the result is capped at the job's `maxOutputBytes` (64 KB by default) and framed as script output.
   Status shows the first 20 calls of a run with `callCount` and `callsTruncated`; `jobs_get` and `jobs_history` keep every
   row. `jobs_get` returns the job's source and the capped result; `jobs_history` also returns the result as job output.
-  Inputs and tool results are never stored a second time. A failed run records the error's code and its first redacted
-  line; a successful run records the result and its declared-file writes. Every run records its session and the host's
+  Inputs and tool results are never stored a second time. A failed run records the code and a fixed
+  description, never the script's own thrown text, which can carry file content (a failed call's code is in its row); a successful run records the result and its declared-file writes. Every run records its session and the host's
   cost. `jobs_history`, the status model and the RPC run record carry the per-call rows.
 
 ### Declared files

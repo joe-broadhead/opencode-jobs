@@ -105,6 +105,22 @@ const codeOf = (message: string): string | undefined =>
     .map((match) => match[1]!)
     .find((code) => code.startsWith("JOBS_") || code.startsWith("permission.") || KNOWN_CODES.has(code))
 
+/**
+ * The fixed text a run's error carries for each family code a script can throw (RR-8). Its code is kept, its
+ * description is this table's, and the thrown message around the code is never kept. A code outside the table is the
+ * generic failure, so no thrown text reaches a record, a result, history or jobs_get.
+ */
+const FIXED_FAILURES = new Map<string, string>([
+  ["JOBS_SCRIPT_UNKNOWN_TOOL", "JOBS_SCRIPT_UNKNOWN_TOOL: The script called a tool that is not in the job's manifest. Next step: Add the tool to the job, or call it by its exact name; a hyphenated id is called as tools[\"id\"].method."],
+  ["JOBS_SCRIPT_FILE_MODE", "JOBS_SCRIPT_FILE_MODE: The script wrote to a file the job does not declare as writable. Next step: Declare the file as readwrite in the job, or stop writing to it."],
+  ["JOBS_SCRIPT_FILE_TOO_LARGE", "JOBS_SCRIPT_FILE_TOO_LARGE: The script wrote more data to a declared file than its limit allows. Next step: Write less data, or raise the file's maxBytes in the job."],
+])
+const GENERIC_FAILURE = "JOBS_SCRIPT_FAILED: the script failed. Next step: Check the run's calls for the code of a failed call, fix the script or its tools, then approve it again if it changed."
+const failureOf = (message: string): string => {
+  const code = codeOf(message)
+  return (code === undefined ? undefined : FIXED_FAILURES.get(code)) ?? GENERIC_FAILURE
+}
+
 export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult> {
   const wasm = quickjsWasm()
   const calls: MutableCall[] = []
@@ -272,8 +288,10 @@ export async function runScript(input: ScriptRunInput): Promise<ScriptRunResult>
                 ? "JOBS_SCRIPT_INTERRUPTED: the run was interrupted. Next step: Run it again with jobs_run_now, or wait for its next slot."
                 : external
                   ? "JOBS_SCRIPT_FAILED: a call was refused because its path is outside the agent's project. Next step: Add an `external_directory` allow for that path to the agent's permissions, and keep the declared file inside `scriptFilesRoots`."
-                  : "JOBS_SCRIPT_FAILED: the script failed. Next step: Read the script's error, fix the script or its tools, then approve it again if it changed."
-      return { ok: false, error: `${coded} (${message})`, calls: [...calls], limits: flags, outputTruncated: flags.outputTruncated, writes: [...buffer].map(([name, json]) => ({ name, json })) }
+                  : failureOf(message)
+      // The record keeps the code and this fixed text only. The script's own thrown text can carry file content, so it
+      // never reaches the run's error, its result, history or jobs_get (RR-8); a failed call's code stays in `calls`.
+      return { ok: false, error: coded, calls: [...calls], limits: flags, outputTruncated: flags.outputTruncated, writes: [...buffer].map(([name, json]) => ({ name, json })) }
     }
   } finally {
     closed = true

@@ -28,7 +28,7 @@ describe("the script runtime", () => {
     expect(result.writes).toEqual([{ name: "state", json: '{"n":2}' }])
   })
 
-  test("a structured host error is <name>: <first line>, with a code and a next step, never [object Object]", async () => {
+  test("a structured host error never reaches the record: the code and a next step, never [object Object] (RR-8)", async () => {
     const result = await run(`return await tools.host.mem({})`, {
       bridge: async () => {
         throw { name: "AbortError", message: "All fibers interrupted\nstack line" }
@@ -36,9 +36,11 @@ describe("the script runtime", () => {
     })
     expect(result.ok).toBe(false)
     expect(result.error).not.toContain("[object Object]")
-    expect(result.error).toContain("AbortError: All fibers interrupted")
+    expect(result.error).not.toContain("AbortError")
+    expect(result.error).not.toContain("All fibers interrupted")
     expect(result.error).not.toContain("stack line")
     expect(result.error).toContain("JOBS_SCRIPT_INTERRUPTED")
+    expect(result.calls[0]).toMatchObject({ method: "host:mem", outcome: "error" })
     expect(result.error).toContain("Next step:")
     expect(result.limits.interrupted).toBe(true)
     expect(result.limits.timedOut).toBe(false)
@@ -144,10 +146,28 @@ describe("the script runtime", () => {
 
     const thrown = await run(`throw new Error("boom\\nsecond line")`)
     expect(thrown.ok).toBe(false)
-    expect(thrown.error).toContain("boom")
+    expect(thrown.error).toStartWith("JOBS_SCRIPT_FAILED: the script failed.")
+    expect(thrown.error).not.toContain("boom")
     expect(thrown.error).not.toContain("second line")
     expect(thrown.error!.length).toBeLessThan(400)
   }, 20_000)
+
+  test("a script's thrown text never reaches the run's error; a failed call keeps only its code (RR-8)", async () => {
+    const secret = "CONFIDENTIAL_ROW_42"
+    const thrown = await run(`throw new Error("${secret}")`)
+    expect(thrown.ok).toBe(false)
+    expect(thrown.error).toBe("JOBS_SCRIPT_FAILED: the script failed. Next step: Check the run's calls for the code of a failed call, fix the script or its tools, then approve it again if it changed.")
+    expect(JSON.stringify(thrown)).not.toContain(secret)
+
+    const failedCall = await run(`return await tools.host.mem({})`, {
+      bridge: async () => {
+        throw new Error(`JOBS_TOOL_FAILED: ${secret} in the file body`)
+      },
+    })
+    expect(failedCall.ok).toBe(false)
+    expect(failedCall.calls[0]).toMatchObject({ method: "host:mem", outcome: "error", code: "JOBS_TOOL_FAILED" })
+    expect(JSON.stringify(failedCall)).not.toContain(secret)
+  })
 
   test("aborts an in-flight call when the cleanup signal fires", async () => {
     const controller = new AbortController()

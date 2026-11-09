@@ -169,7 +169,13 @@ describe("a script's declared file", () => {
         const runs = got.output["runs"] as { error?: string }[]
         const history = await report.history({ id: setupRun.job.id, summaries: true })
         expect(runs[0]?.error).toBe(history[0]?.error)
-        if (code.startsWith("throw")) expect(runs[0]?.error).toContain("do-not-expose")
+        // A script's thrown text can carry file content: the run's error is the code and a fixed description, never it (RR-8).
+        if (code.startsWith("throw")) {
+          expect(runs[0]?.error).toStartWith("JOBS_SCRIPT_FAILED: ")
+          expect(runs[0]?.error).not.toContain("do-not-expose")
+          expect(JSON.stringify(got.output["runs"])).not.toContain("do-not-expose")
+          expect(JSON.stringify(history)).not.toContain("do-not-expose")
+        }
       } finally {
         rmSync(setupRun.root, { recursive: true, force: true })
       }

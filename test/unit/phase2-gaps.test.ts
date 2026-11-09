@@ -176,6 +176,9 @@ describe("GAP-18: the runtime names the bracket form", () => {
       now: () => Date.now(),
     })
     expect(result.ok).toBe(false)
-    expect(result.error).toContain('tools["google-workspace"].gws.read')
+    // The run's error is the code and its fixed text, which names the bracket form; the thrown name is not kept (RR-8).
+    expect(result.error).toStartWith("JOBS_SCRIPT_UNKNOWN_TOOL: ")
+    expect(result.error).toContain('tools["id"].method')
+    expect(result.error).not.toContain("google-workspace")
   })
 })

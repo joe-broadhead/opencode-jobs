@@ -176,9 +176,9 @@ describe("running a script job", () => {
     expect(record.calls).toHaveLength(2)
     expect(record.calls![0]).toMatchObject({ method: "host:mem", class: "unclassified", outcome: "ok" })
     expect(record.calls![1]).toMatchObject({ method: "host:mem", class: "unclassified", outcome: "error", code: "JOBS_TOOL_FAILED" })
-    // The failed call's error is the code and one redacted line; no payload is kept.
+    // The run's error is the code and a fixed description; the failed call's own message is never kept (RR-8).
     expect(record.error).toStartWith("JOBS_SCRIPT_FAILED: ")
-    expect(record.error).toContain("the second call failed")
+    expect(record.error).not.toContain("the second call failed")
     expect(JSON.stringify(record.calls)).not.toContain("content")
   })
 

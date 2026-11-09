@@ -268,8 +268,8 @@ describe(`the script action in OpenCode ${HOST_VERSION}`, () => {
       const record = (await scanRuns(worker.storage, id))[0]!
       expect(record.status).toBe("failed")
       expect(record.result?.ok).toBe(false)
-      expect(record.result?.error).toContain("JOBS_SCRIPT_UNKNOWN_TOOL")
-      expect(record.calls?.[0]).toMatchObject({ method: "scripts.family.family_write", outcome: "refused" })
+      expect(record.result?.error).toStartWith("JOBS_SCRIPT_UNKNOWN_TOOL: ")
+      expect(record.calls?.[0]).toMatchObject({ method: "scripts.family.family_write", outcome: "refused", code: "JOBS_SCRIPT_UNKNOWN_TOOL" })
       expect(familyCalls.filter((call) => call.method === "write")).toHaveLength(before)
     } finally {
       await host.close()
