@@ -226,7 +226,8 @@ The approval digest covers each resolved path, so a saved "Always allow" names t
 IEEE-754: a non-finite number (for example `1e999`) is refused with `JOBS_SCRIPT_FILE_INVALID` rather than written as
 `null`. A run may buffer 8 MB across its files by default, up to 32 MB with `limits.maxFileBytes`; a write past the
 per-file cap or the run's total throws `JOBS_SCRIPT_FILE_TOO_LARGE` at the `files.write` call, so a loop cannot grow the
-host's memory.
+host's memory. The declared files a run reads are held on the host beside the VM, each up to its `maxBytes` (8 MB at most),
+and the read set is serialised once more for the script, so `memoryMb` does not bound that memory.
 
 **Cadence:** daily is the sensible choice. X has no `since_id` for bookmarks, and charges the same resource once per 24
 hours, so a daily run re-reads the newest page cheaply and stops at the first known id.
