@@ -9,16 +9,22 @@ The release workflow (hey-jelly) sets `version` in `package.json` and this headi
 
 ### Added
 
-- The `script` action: a job can run a confined program instead of a model prompt. Its `uses` manifest is its whole
-  reach, `/jobs-approve` re-approves it, and the run record keeps what each call did, never a payload.
+- The `script` action: a job can run a confined program instead of a model prompt. Its `uses` manifest names the tools
+  it can call, `/jobs-approve` re-approves it, and the run record keeps what each call did, never a payload.
 - The script runtime: QuickJS compiled to WebAssembly (MIT, bundled as `dist/quickjs.wasm` and in `NOTICE`), one VM per
-  run, with no filesystem, network, process, environment or timers; 100 calls, 64 MB and 64 KB by default, the job's
-  timeout for wall time, and the kill switch mid-call.
-- The approval: `jobs_create`, `jobs_update` and `jobs_run_script` ask once, bound to `script:sha256:<digest>` of the
-  source and the sorted manifest. A tool the agent denies refuses the create with `JOBS_SCRIPT_DENIED`; a changed
-  source, manifest or class makes the slot `skipped` with `JOBS_SCRIPT_UNAPPROVED` or `JOBS_SCRIPT_REVOKED`.
+  run, with no direct filesystem, network, process, environment or timers; 100 calls, 64 MB of VM memory and 64 KB of
+  output by default, the job's timeout for wall time, and the kill switch mid-call.
+- Declared files: a script can read a snapshot and buffer writes to named files. Writes commit after a successful run,
+  with path checks, conflict detection and rollback on failure. `scriptFilesRoots` permits paths outside the job's
+  directory; files outside the project also need the agent's `external_directory` permission.
+- The `access` option: `all` allows every Jobs tool by default, `ask-changes` asks for changes and `read-only` denies
+  them. The namespace rule covers tools added later; explicit later agent rules still win.
+- Script approval follows the manifest's worst class and includes declared file writes: `all` approves automatically,
+  `ask-changes` approves all-read scripts automatically and asks for changes, and `read-only` denies changes. The digest
+  binds the source, sorted manifest, file declarations and resolved paths. Eligible file jobs are approved at load.
+  Every run re-checks approval, permissions and access; a changed or revoked approval can skip the slot.
 - `jobs_approve`, `/jobs-approve`, and `jobs_run_script` (one run, nothing kept).
-- A status row for script jobs, the digest and approved tools in `jobs_get`, and `script` facts in the status model.
+- A status row for script jobs, script approval facts in the job list, and per-call facts in run records.
 
 ### Changed
 

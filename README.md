@@ -37,9 +37,9 @@ Run `opencode reload`, or restart OpenCode, then run `/jobs-status`.
 
 The model has fourteen `jobs_*` tools: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history` read, `jobs_pause` and
 `jobs_pause_all` pause, `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_run_now`, `jobs_resume`, `jobs_extend`,
-`jobs_approve` and `jobs_run_script` change a job or run a script. Pausing every job runs without asking, because it
-only stops work; every other change asks for approval, and the prompt is the yes. `jobs_history` is the only surface
-that returns what a run said. A failed run is retried for its slot by `policy.retries`, and `notify` posts a run's
+`jobs_approve` and `jobs_run_script` change a job or run a script. The default `access: "all"` allows every tool;
+`ask-changes` asks for changes except pauses, and `read-only` denies changes. `jobs_history` returns run summaries;
+`jobs_get` also returns a script run's capped result. A failed run is retried for its slot by `policy.retries`, and `notify` posts a run's
 outcome into a session as job output.
 
 A job is one of four things:
@@ -47,10 +47,10 @@ A job is one of four things:
 - a **prompt** the job's agent runs in a fresh session;
 - a **command**, such as `/morning`, run in that session;
 - a **reminder**, posted into a session you name with no model turn;
-- a **script**, a confined program that calls named plugin tools and no model. It is approved once, bound to its exact
-  source and tool list, and re-checked every slot; a changed script or tool needs `/jobs-approve`.
+- a **script**, a confined program that calls named plugin tools and no model. Its approval covers its source, tools and
+  declared files and is re-checked every slot; changes can require `/jobs-approve`.
 
-A script is the no-model path: `uses` is its whole reach, it cannot ask, and the record keeps only what each call did.
+A script is the no-model path: `uses` names the tools it can reach, it cannot ask, and the record keeps only what each call did.
 A job may also declare files it reads and writes, so a script can keep state between runs:
 
 ```yaml
@@ -214,7 +214,7 @@ Run `/jobs-status` first. Its last line is the next step.
 | The Runner row says it stopped | The location was unloaded, or the service restarted. Open a project to load it again: the missed slot runs once within the catch-up window. Set `experimental.location_idle_timeout` above `keepAliveMinutes` if it keeps happening. |
 | Agents without default rules | A job's agent does not deny by default. Paste the block `/jobs-status` prints for that agent. |
 | Agents OpenCode no longer lists | A plugin update can leave OpenCode's running plugin with a stale agent list, so jobs that name a configuration agent do not run. Run `opencode reload` in a terminal, or restart OpenCode; jobs resume on their own. |
-| `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, so the job is refused rather than run into prompts. Paste the block `/jobs-status` prints. |
+| `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default. Its jobs still run; review its permissions or paste the read-only block `/jobs-status` prints. |
 | `JOBS_AGENT_MISSING` | OpenCode no longer lists the job's agent here, which can happen after a plugin update. Run `opencode reload` in a terminal, or restart OpenCode; the next slot runs once it is back. |
 | `JOBS_SCRIPT_FILE_PATH` | A declared file's path is outside the job's directory and `scriptFilesRoots`, contains `..`, a symlink, a special file, `.git`, or OpenCode's own config or data. Fix the path; the file is never opened. |
 | `JOBS_SCRIPT_FILE_INVALID` | A declared JSON file is not valid JSON, or a text file was given a non-string value. Fix the file or the write. |

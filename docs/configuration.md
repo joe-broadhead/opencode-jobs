@@ -25,6 +25,8 @@ Set options with the object form of the plugin entry. Every option is optional.
 | `timezone` | An IANA zone name, such as `Europe/London` | The server's zone | The zone a job that names none runs in. A job's own `tz` wins. |
 | `concurrency` | A whole number from 1 to 8 | `2` | How many runs may be in flight at once, across every job. It bounds cost and file contention, and a run that arrives while the cap is reached waits for the next free slot. |
 | `keepAliveMinutes` | A whole number of minutes from 1 to 59 | `20` | How often the plugin touches its location with an empty session, so the location is never idle-unloaded and the runner keeps running (D2). Keep it below `experimental.location_idle_timeout`; 20 is below the default 60. |
+| `access` | `all`, `ask-changes` or `read-only` | `all` | Chooses the Jobs tool rules and script approval policy described below. |
+| `scriptFilesRoots` | An array of absolute directory paths | `[]` | Adds roots for declared script files; each root grants read and write access to its tree. |
 
 A wrong option fails setup with `OPTIONS_INVALID`, which names the option and the accepted values. Nothing runs until it
 is fixed.
@@ -106,8 +108,8 @@ A job that needs one more tool gets it from its agent, never from the job:
 Then point the job at `agent: jobs-reviewer`. A job's own `allow` list only narrows: it holds `deny` rules, and an
 `allow` entry in it is refused with `JOBS_ALLOW_WIDENS`.
 
-Never add an `allow` for a write to get a job through an approval. A run cannot ask, so the approval would be denied and
-the run would record `JOBS_UNATTENDED`. Leave the write out of the profile; a job that must write needs a person.
+A run cannot answer an approval: an `ask` is denied and recorded as `JOBS_UNATTENDED`. Decide which actions the agent
+may use unattended, and set its permissions deliberately rather than adding an allow only to silence a prompt.
 
 ## Scripts
 
@@ -127,7 +129,7 @@ action:
     limits: { maxCalls: 150, memoryMb: 64, maxOutputBytes: 65536 }
 ```
 
-`uses` is the manifest and the script's whole reach: a family method (`<plugin id>.<method>`, split at the last dot) or
+`uses` is the manifest of tools the script can reach: a family method (`<plugin id>.<method>`, split at the last dot) or
 a host tool (`host:<exact tool id>`). `files` declares the files the script may read and write:
 
 ```yaml
@@ -145,8 +147,8 @@ all, roll back on a failure), with a conflict check (`JOBS_SCRIPT_FILE_CONFLICT`
 `written`/`rolled_back`/`not_attempted` outcome. The digest covers each resolved path, and a file outside the project also needs the agent's
 `{ "action": "external_directory", "resource": "<folder>/*", "effect": "allow" }`, checked at approval and at every run.
 A file job is approved automatically at load under `all` (and under `ask-changes` when it is all-read); a changing one
-under `ask-changes` waits for `/jobs-approve`. The run re-resolves it every slot; a source, manifest, class or `access` change makes the slot
-`skipped` until `/jobs-approve <job>` re-approves it. The defaults are 100 calls, 64 MB, 64 KB and 8 MB of buffered
+under `ask-changes` waits for `/jobs-approve`. Every slot re-resolves the script and reapplies access. A changed digest or
+class can require `/jobs-approve <job>`; `read-only` revokes a changing script. The defaults are 100 calls, 64 MB, 64 KB and 8 MB of buffered
 files; `maxCalls` may go to 1,000, `memoryMb` to 512, `maxOutputBytes` to 1 MiB and `maxFileBytes` to 32 MiB. The wall clock is `policy.timeout`, and `timeoutMs` can narrow
 it. A script job may omit `agent`; it then runs as `build`. Its agent's rules must not deny its tools: the guarded
 `jobs` profile is for prompt jobs.
@@ -166,8 +168,8 @@ re-approves a script job after a change.
 
 ## Safety
 
-- **A job whose agent does not deny by default is refused**, at create and again when a slot starts, with
-  `JOBS_AGENT_UNGUARDED`. Nothing runs. Status names the agent and prints the block to paste.
+- **An agent that does not deny by default is a warning**, `JOBS_AGENT_UNGUARDED`, not a refusal. Its jobs run with the
+  agent's permissions; status names it and prints the read-only block to paste.
 - **A job whose agent the host no longer lists is refused**, at file read and again when a slot starts, with
   `JOBS_AGENT_MISSING`. This can happen after a plugin update: OpenCode's running plugin can keep a stale agent list
   while its own API still lists the agent. Nothing runs; status names the agent, and the next step is `opencode reload`
@@ -183,8 +185,8 @@ re-approves a script job after a change.
   multiply jobs: `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_resume`, `jobs_extend`, `jobs_run_now`,
   `jobs_approve` and `jobs_run_script`.
 - **The kill switch.** `/jobs-pause`, the `jobs_pause_all` tool and the palette's "Jobs: Pause or resume every job"
-  (which asks first) all set one state: nothing new starts, and a run in flight is interrupted. Resuming asks, and
-  `jobs_resume` with `{ "all": true }` is the tool for it. Status says every job is paused and how to resume.
+  (which asks first) all set one state: nothing new starts, and a run in flight is interrupted. Resume with `/jobs-pause`
+  or `jobs_resume` with `{ "all": true }`; the tool follows `access`. Status says every job is paused and how to resume.
 - **Job output is labelled.** A run's summary, a reminder and a notice are framed as output from a scheduled job, never
   as an instruction.
 
@@ -205,7 +207,7 @@ tools; `access: "ask-changes"` makes the changes ask, and `"read-only"` denies t
 | `jobs_update` | Replaces fields of a job a tool created. |
 | `jobs_delete` | Deletes a job a tool created; its run records stay for history. |
 | `jobs_run_now` | Runs a job once, now, as a manual run with its own slot: the schedule is untouched. An expired job is refused with `JOBS_EXPIRED`. |
-| `jobs_resume` | Resumes a paused job, or every job with `{ "all": true }`. It asks. |
+| `jobs_resume` | Resumes a paused job, or every job with `{ "all": true }`. It follows `access`. |
 | `jobs_extend` | Moves a job's expiry. |
 | `jobs_approve` | Re-approves a script job after its source, manifest or declared files change, and prints the new digest. |
 | `jobs_run_script` | Runs one script once, with the same approval and no job kept: the ad-hoc route. |
@@ -225,8 +227,7 @@ never expires on its own.
 | `/jobs-run <id>` | Runs a job now. Typing it is the approval for that run. |
 | `/jobs-approve <id>` | Re-approves a script job after a source, manifest or file change. |
 
-Typing a command is a person's own act. The model's `jobs_run_now` tool asks instead, because there the prompt is the
-yes.
+Typing a command is a person's own act. The model's `jobs_run_now` tool follows `access`: it asks under `ask-changes`.
 
 The `/jobs` dialog shows the same report with `r` to refresh and `Esc` to close; its hint reads exactly
 `r refresh · esc close`. It only reads: the kill switch is the palette command "Jobs: Pause or resume every job", which
@@ -267,9 +268,9 @@ A duration is a number and a unit: `30s`, `30m`, `24h` or `7d`. A project file r
 
 The file is the definition, so tools never edit or delete one: pausing a file job stores runtime state only. The job
 folders are checked once a minute, and a file is parsed again only when its modification time changed; a change is
-picked up within a minute. A file that cannot be read, does not parse, names a field that is refused, or names an agent
-that does not deny by default is listed by `/jobs-status` with its path, the line at fault and its code, and every other
-file still loads.
+picked up within a minute. A file that cannot be read, does not parse, names a refused field or a missing agent is listed
+by `/jobs-status` with its path, the line at fault and its code, and every other file still loads. An unguarded agent is
+a warning and does not prevent the file from loading.
 
 Run records are kept for 50 runs per job and 30 days, whichever keeps less. Retention never removes a run that is still
 `running` or a job's newest run, and a removed record's session goes with it unless that session is busy.
@@ -312,7 +313,7 @@ Both are read-only, and both answer a `STATUS_UNAVAILABLE` failure with a `nextS
 | RPC | Methods | What they give |
 | --- | --- | --- |
 | `jobs.scheduler` | `status`, `list`, `history` | The status model, a summary of the jobs, and the recent runs of one job or all of them. |
-| `jobs.scheduler.tools` | `describe`, `jobs_status`, `jobs_list`, `jobs_get`, `jobs_history` | A script's path to the plugin with no model. [Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md) covers it. |
+| `jobs.scheduler.tools` | `describe` and all fourteen Jobs tools | A script's path to the plugin with no model. Only an allowed method runs. [Scripting](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md) covers it. |
 
 The fields every plugin of this family shares are `version`, `host` (`version`, `range`, `tested`), `state`,
 `unguardedAgents` and `nextStep`. Jobs has no service to connect to, so `state` is `ready`, or `disabled` when the
@@ -338,7 +339,7 @@ its code and shown in status; it is not thrown at you.
 | `JOBS_INVALID_FILE` | A job file has no front matter, unclosed front matter, YAML that does not parse, or a field that is refused; the message names the file and the line. | Fix the file at the line the message names, then run `/jobs-status` again. |
 | `JOBS_ALLOW_WIDENS` | A job's `allow` list holds an `allow` entry, and a job may only narrow its agent's rules. | Move the grant to the job agent's own `permissions` in opencode.json, and keep the job's list to deny rules. |
 | `JOBS_TARGET_MISSING` | A job, session or agent the call names does not exist. | Run `jobs_list` to see the jobs there are, and create the session before naming it. |
-| `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default, so a job under it is refused instead of run into denied prompts. | Give the agent the read-only block, starting with the blanket deny, or point the job at an agent that has it; `/jobs-status` prints it. |
+| `JOBS_AGENT_UNGUARDED` | The job's agent does not deny by default; its jobs still run under its permissions. | Review the agent's permissions; `/jobs-status` prints a read-only block. |
 | `JOBS_AGENT_MISSING` | OpenCode no longer lists the job's agent, which can happen after a plugin update. No job that names it runs. | Run `opencode reload` in a terminal, or restart OpenCode; every slot re-checks, so the next slot runs once the agent is back. |
 | `JOBS_SCRIPT_FILE_PATH` | A declared file's path is outside the allowed roots, or has a symlink, `..`, `.git`, a special file, or OpenCode's own directories. | Fix the path; it is never opened. |
 | `JOBS_SCRIPT_FILE_INVALID` | A declared JSON file is invalid, or a text write was not a string. | Fix the file or the value. |

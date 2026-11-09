@@ -73,7 +73,8 @@ reaches. Under the default `access: "all"` it is approved automatically, and the
 `ask-changes` an all-read script with no file writes is automatic and anything else shows one prompt with the source,
 each tool's class and one line per file; `read-only` denies a script that changes anything. A tool the agent denies
 refuses the create with `JOBS_SCRIPT_DENIED`: never add an `allow` to get past it. A changed source, tool list or
-declared file is `skipped` with `JOBS_SCRIPT_UNAPPROVED` until `/jobs-approve <id>`.
+declared file needs a matching approval. Eligible file jobs are automatically re-approved at load; otherwise a run can
+be skipped with `JOBS_SCRIPT_UNAPPROVED` until `/jobs-approve <id>`.
 
 A script may declare files it reads and writes: `files: { bookmarks: { path, mode: "read" | "write" | "readwrite",
 format: "json" | "text", maxBytes? } }`. `files.<name>` is the value (a missing file is `null`); `await

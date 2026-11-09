@@ -16,7 +16,7 @@ code comments carry the detail.
 | `src/jobs/report.ts` | Reads the store once for every surface: the status model, the jobs list and the run history. |
 | `src/jobs/actions.ts` | Every change: create, update, delete, pause, resume, extend, run now, pause all. |
 | `src/jobs/watch.ts` | The job-file watch: one mtime check a minute, a parse only when a file changed. |
-| `src/jobs/tools.ts` | The twelve tools and the four tools-RPC reads, over `actions.ts` and `report.ts`. |
+| `src/jobs/tools.ts` | The fourteen tools and their tools-RPC methods, over `actions.ts` and `report.ts`. |
 | `src/host/tools-rpc.ts` | The shared tools-RPC v2 module: the one file copied verbatim from the family's shared copy, with only its `PLUGIN-SPECIFIC` block edited. It holds the second evaluate hook. |
 | `src/jobs/script.ts` | A script's definition, digest, approval, limits and the run session's rules. |
 | `src/jobs/script-gate.ts` | Manifest resolution (family `describe`, host tools) and the one `jobs_script` approval. |
@@ -40,8 +40,8 @@ rare, and the record decides the slot when it happens.
 
 ## What a run does
 
-1. Check that the job's agent is listed and still denies by default, or record the slot as skipped with
-   `JOBS_AGENT_MISSING` (reason `missing`) or `JOBS_AGENT_UNGUARDED`.
+1. Check that the job's agent is listed, or record the slot as skipped with `JOBS_AGENT_MISSING` (reason `missing`). An
+   agent that does not deny by default is a status warning, not a refusal.
 2. Create the run's session as that agent, as a child of the one parked `Jobs` parent, with the job's deny-only rules
    and the metadata that marks it as a run session.
 3. Prompt it, or run its command, or post a reminder.
@@ -58,8 +58,9 @@ or the five-failure pause.
 
 ## Unattended safety
 
-A job runs as the agent it names, and that agent's `permissions` are the whole profile. Session rules only deny: the
-job's own deny list plus the tools that would let a run create, change or run another job. One
+A job runs as the agent it names, and that agent's `permissions` are the profile. A prompt job's session rules add the
+job's deny list and deny tools that would let a run create, change or run another job. A script session allows only its
+resolved manifest, without overriding an agent deny, and also denies those job changes. One
 `permission.hook("evaluate")` turns an `ask` inside a run session into a `deny` with `JOBS_UNATTENDED`. It matches a
 process-wide registry of the sessions this plugin created for runs — `globalThis`, so a hot reload keeps it, and
 adoption registers an adopted session again — and it only ever tightens.

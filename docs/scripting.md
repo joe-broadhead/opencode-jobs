@@ -85,7 +85,7 @@ cannot manage jobs from inside a run (D-I).
 | `jobs_get` | read | One job, its runtime state, its approval and its last runs. `{ "id" }` |
 | `jobs_history` | read | Recent runs, with each summary labelled as job output. `{ "id"?, "limit"?, "since"? }` |
 | `jobs_pause`, `jobs_pause_all` | write | Pause one job, or the kill switch. |
-| `jobs_create`, `jobs_update`, `jobs_delete` | write | Change a job. A script job asks for its script's approval here. |
+| `jobs_create`, `jobs_update`, `jobs_delete` | write | Change a job. Script approval follows the `access` policy. |
 | `jobs_run_now`, `jobs_resume`, `jobs_extend` | write | Start, resume and extend a job. |
 | `jobs_approve` | write | Approve a script job again after its source, manifest or a class changed. |
 | `jobs_run_script` | write | Run one script once, with no model, and return its output to the session that asked. |
@@ -128,7 +128,7 @@ action:
       return { saved, author: me.data?.username ?? null };
 ```
 
-- **The manifest is the whole reach.** `uses` names every method the script may call; the runtime refuses anything
+- **The manifest names every tool.** `uses` names every method the script may call; the runtime refuses anything
   else, and the run session allows exactly the manifest's actions. A method the agent resolves to `deny` is never
   granted.
 - **One approval.** `jobs_create`, `jobs_update` and `jobs_run_script` bind the script to
@@ -137,11 +137,11 @@ action:
   manifest or file declaration is re-digested); under `ask-changes` a script whose manifest is all reads and whose files
   are all `read` is approved automatically, and anything else asserts `jobs_script` once, showing the source, each
   tool's class and one line per file; `read-only` denies a script that changes anything. The prompt's "Always allow"
-  saves that exact digest, so a changed byte, tool or path asks again. A `deny` refuses the create with
+  saves that exact digest, so a changed byte, tool or path needs a new approval. A `deny` refuses the create with
   `JOBS_SCRIPT_DENIED`.
-- **Re-checked every slot.** A run re-resolves the manifest against the agent, compares the hashes and each tool's
-  class, and is `skipped` with `unapproved` or `revoked` if anything changed. `/jobs-approve <job>` (or the
-  `jobs_approve` tool) is the one act that restores it; status names the job and the command.
+- **Re-checked every slot.** A run re-resolves the manifest and files, compares the hashes and each tool's class, and
+  reapplies access and the agent's rules. It skips an unapproved or revoked script. `/jobs-approve <job>` (or the
+  `jobs_approve` tool) renews an approval; a revoked permission or access policy must also be fixed.
 - **The agent.** A script job names an agent, `build` when none is named. The agent is where the user's denies live; a
   script job does not need the guarded `jobs` profile, and status says so plainly: a script's tools must not be denied
   by its agent. The guarded profile is for prompt jobs.
@@ -241,7 +241,7 @@ digest and audit record, and re-approves it whenever the digest changes; under `
 automatic and a changing one stays `unapproved` until a person runs `/jobs-approve <job>`; `read-only` leaves a change
 unapproved and the run skipped.
 
-The one-off: `{ code, uses, agent?, timeoutMs?, limits? }`. It validates, resolves and asks the same one approval, runs
+The one-off: `{ code, uses, files?, agent?, timeoutMs?, limits? }`. It validates, resolves and follows the same approval policy, runs
 in a fresh session, returns the result to the calling session, and keeps no job. Use it for "run this once now"; a
 scheduled job is the durable form.
 

@@ -47,7 +47,7 @@ What a run can do is the agent's own `permissions`, and nothing else:
 4. **A run cannot schedule.** Inside a job session, the session's own rules deny creating, updating, deleting,
    extending, resuming and running a job, so a prompt that asks for one cannot grow the schedule.
 5. **Changing a job follows `access`.** Under the default `all`, the tools that create, update, delete, run and
-   resume a job are allowed without a prompt, and their changes are recorded in the run records and status. Under
+   resume a job are allowed without a prompt. Under
    `ask-changes` they ask, and the prompt is the yes; under `read-only` they are denied. Pausing is allowed under `all`
    and `ask-changes`, because it only stops work.
 6. **The kill switch** stops every job at once, and is never silent: `/jobs-pause` posts what it did into the session,
@@ -58,11 +58,12 @@ What a run can do is the agent's own `permissions`, and nothing else:
 ## What runs unattended
 
 With the default `access: "all"`, a script job is approved without a prompt, and so is an all-read script under
-`ask-changes`. The digest, the resolved tools and the declared files are recorded, an audit line records the automatic
-approval, and a changed source, manifest or file declaration is re-digested and approved again under the same policy.
+`ask-changes`. The approval record keeps the digest, the resolved tools, the declared files and whether approval was
+automatic; a changed source, manifest or file declaration needs a new approval under the same policy.
 The files a script may touch are the job's declared files only, under the path policy in
 [docs/scripting.md](https://github.com/joe-broadhead/opencode-jobs/blob/HEAD/docs/scripting.md#declared-files); a write
-is committed only after a successful run, atomically, and never over a file that changed since the run read it.
+is committed only after a successful run and never over a file that changed since the run read it. Each file is replaced
+by rename; a multi-file commit attempts to roll back if a rename fails.
 An `ask` with nobody present still becomes a `deny`.
 
 ## Scripts
@@ -74,7 +75,7 @@ reads with no model, and adds no authority:
 - A script names a session that names an agent, and runs as them, under that agent's rules and the session's own.
 - An ask on a script's call is denied, not prompted, because no one is there to answer it: the call is marked, and the
   tools RPC's permission hook turns its ask into a deny. The hook only ever tightens.
-- The methods are `describe` and the four reads: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history`. No write, no
-  pause and no run-now is a method, even with an allow rule.
+- The methods are `describe` and all fourteen Jobs tools. Only an allowed method runs; a job's run session denies the
+  tools that create, change or multiply jobs.
 - The RPC is reachable only by callers of the OpenCode server API, who already hold the server's full authority. The
   session is not a login: it scopes a script to what its agent may do.
