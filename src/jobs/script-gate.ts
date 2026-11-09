@@ -321,7 +321,7 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
         // What the person approves: the source itself, a clear head when it is long, and where the rest is (SR-5).
         script: head,
         truncated: head.length < input.script.code.length,
-        where: input.job === undefined ? "the tool call's input" : `the jobs_get tool, job ${JSON.stringify(input.job)}`,
+        where: input.job === undefined ? "the tool call's input" : `the original definition of job ${JSON.stringify(input.job)}`,
         tools: input.resolved.map((tool) => ({ method: tool.method, class: tool.class, effect: tool.effect, ...(tool.description === undefined ? {} : { description: tool.description }) })),
         writes: reachesOf(input.resolved),
         files: files.map((file) => ({ name: file.name, path: file.path, mode: file.mode, format: file.format, maxBytes: file.maxBytes })),

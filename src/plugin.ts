@@ -51,6 +51,16 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
       const ready = problems.length === 0
       // The job files are checked once a minute, and parsed again only when one changed.
       const watch = createFileWatch(() => clock.now())
+      const scripts = createScriptGate({
+        rpc: ctx.rpc,
+        tool: ctx.tool,
+        agent: ctx.agent,
+        plugin: ctx.plugin,
+        mcp: ctx.mcp,
+        location: ctx.location.directory,
+        permission: ctx.permission,
+        now: () => clock.now(),
+      })
       const report = createReport({
         storage: ctx.storage,
         location: ctx.location.directory,
@@ -63,16 +73,8 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         problems,
         watch,
         scriptFilesRoots: options.scriptFilesRoots,
-      })
-      const scripts = createScriptGate({
-        rpc: ctx.rpc,
-        tool: ctx.tool,
-        agent: ctx.agent,
-        plugin: ctx.plugin,
-        mcp: ctx.mcp,
-        location: ctx.location.directory,
-        permission: ctx.permission,
-        now: () => clock.now(),
+        access: options.access,
+        scripts,
       })
       const actions: ActionInput = {
         storage: ctx.storage,

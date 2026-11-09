@@ -9,11 +9,13 @@ import { createJob } from "../../src/jobs/actions.js"
 import type { ActionInput } from "../../src/jobs/actions.js"
 import { readState } from "../../src/jobs/store.js"
 import { createReport } from "../../src/jobs/report.js"
+import { execute } from "../../src/jobs/execute.js"
+import { runJobTool } from "../../src/jobs/tools.js"
 import { createScriptGate, type ScriptHost } from "../../src/jobs/script-gate.js"
 import { runScriptOnce } from "../../src/jobs/script-oneoff.js"
 import type { Script } from "../../src/jobs/script.js"
 import type { Access } from "../../src/options.js"
-import { agentsFake, memoryStorage, testClock } from "./fake.js"
+import { agentsFake, memoryStorage, sessionFake, testClock } from "./fake.js"
 
 const NOW = Date.UTC(2026, 11, 6, 9, 0, 0)
 const root = realpathSync(mkdtempSync(join(realpathSync("/tmp"), "jobs-access-")))
@@ -65,7 +67,7 @@ function setup(options: { readonly answer?: "yes" | "no" } = {}) {
   const gate = input.scripts!
   const create = (access: Access, script: Script) =>
     createJob({ ...input, access }, { name: "Script", schedule: { every: "1h" }, agent: "build", action: { type: "script", script } }, { sessionID: "ses_1", agent: "build" })
-  return { asserted, create, gate, storage, source: () => report.source() }
+  return { asserted, create, gate, storage, input, source: () => report.source() }
 }
 
 const readScript: Script = { code: "return tools.x.posts.read({});", uses: ["x.posts.read"] }
@@ -122,6 +124,42 @@ describe("R18: the access policy decides a script's approval", () => {
     await expect(run.create("read-only", writeScript)).rejects.toThrow(/JOBS_SCRIPT_DENIED: .*"read-only"/)
     await expect(run.create("read-only", readwriteFile("readwrite"))).rejects.toThrow("JOBS_SCRIPT_DENIED")
   })
+})
+
+test("an actual automatic approval becomes visible as unapproved or revoked after access changes (RR-2)", async () => {
+  const setupRun = setup()
+  const job = await setupRun.create("all", writeScript)
+  expect((await readState(setupRun.storage.storage, job.id)).approval?.approved).toBe("auto")
+  const clock = testClock(NOW, { instantBelow: 100 }).clock
+  for (const [index, access] of (["ask-changes", "read-only"] as const).entries()) {
+    const result = await execute({
+      storage: setupRun.storage.storage,
+      session: sessionFake().session,
+      agents: { get: async () => ({ data: { id: "build", name: "build", permissions: ALLOW } }) } as never,
+      clock,
+      location: root,
+      token: "leader-1",
+      job,
+      slot: NOW + index * 60_000,
+      attempt: 1,
+      late: false,
+      active: () => true,
+      scripts: setupRun.gate,
+      tool: { list: async () => [] } as never,
+      rpc: (() => ({})) as never,
+      access,
+    })
+    expect(result.record?.reason).toBe(access === "ask-changes" ? "unapproved" : "revoked")
+    const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
+    const report = createReport({ storage: setupRun.storage.storage, location: root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20, access, scripts: setupRun.gate })
+    const input = { ...setupRun.input, report, assert: async () => undefined }
+    const listed = await runJobTool(input, "list", {})
+    const got = await runJobTool(input, "get", { id: job.id })
+    const script = (listed.output["jobs"] as { script: { needsApproval: boolean; reason: string } }[])[0]!.script
+    expect(got.output["script"]).toEqual(script)
+    expect(script.needsApproval).toBe(access === "ask-changes")
+    expect(script.reason).toContain(access === "ask-changes" ? `/jobs-approve ${job.id}` : "revoked")
+  }
 })
 
 describe("R18: the same policy for the ad-hoc jobs_run_script", () => {

@@ -210,7 +210,7 @@ describe("the approval's own payload", () => {
     const asked = setup.asserted[0] as { action: string; resources: string[]; metadata: Record<string, unknown> }
     expect(asked.action).toBe("jobs_script")
     expect(asked.resources).toEqual([`script:sha256:${approval.digest}`])
-    expect(asked.metadata).toMatchObject({ digest: approval.digest, truncated: true, where: 'the jobs_get tool, job "job_1"' })
+    expect(asked.metadata).toMatchObject({ digest: approval.digest, truncated: true, where: 'the original definition of job "job_1"' })
     expect(String(asked.metadata.script)).toStartWith("// a long script")
     expect(String(asked.metadata.script).length).toBe(8192)
     expect((asked.metadata.tools as unknown[]).length).toBe(4)

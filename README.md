@@ -38,8 +38,8 @@ Run `opencode reload`, or restart OpenCode, then run `/jobs-status`.
 The model has fourteen `jobs_*` tools: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history` read, `jobs_pause` and
 `jobs_pause_all` pause, `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_run_now`, `jobs_resume`, `jobs_extend`,
 `jobs_approve` and `jobs_run_script` change a job or run a script. The default `access: "all"` allows every tool;
-`ask-changes` asks for changes except pauses, and `read-only` denies changes. `jobs_history` returns run summaries;
-`jobs_get` also returns a script run's capped result. A failed run is retried for its slot by `policy.retries`, and `notify` posts a run's
+`ask-changes` asks for changes except pauses, and `read-only` denies changes. `jobs_history` returns run summaries and
+script results. A failed run is retried for its slot by `policy.retries`, and `notify` posts a run's
 outcome into a session as job output.
 
 A job is one of four things:

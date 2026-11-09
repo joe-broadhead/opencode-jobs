@@ -24,7 +24,9 @@ import type { Clock } from "./clock.js"
 import { nextRun } from "./cron.js"
 import { jobFileSignature, readJobFiles, type AgentGuard, type JobFiles } from "./files.js"
 import type { Job } from "./model.js"
-import { approvalCurrent, digestOf } from "./script.js"
+import { approvalAccess, approvalCurrent, approvalMatches, denied, digestOf } from "./script.js"
+import type { ScriptGate } from "./script-gate.js"
+import type { Access } from "../options.js"
 import { resolveScriptFiles } from "./script-files.js"
 import { cut, oneLine } from "../redact.js"
 import { jobOutput } from "./safety.js"
@@ -47,6 +49,8 @@ export interface ReportInput {
   readonly watch?: FileWatch
   /** Extra roots a script's declared files may live in, so status can compare resolved paths (DF-10). */
   readonly scriptFilesRoots?: readonly string[]
+  readonly access?: Access
+  readonly scripts?: Pick<ScriptGate, "resolve" | "external">
 }
 
 /** Every job this instance knows, and what the file reader refused. */
@@ -76,7 +80,7 @@ export interface JobView {
   /** A refused file's coded message, with its path and the line at fault. */
   readonly message?: string
   /** A script job's digest, its tools and whether the stored approval still covers it. */
-  readonly script?: { readonly digest: string; readonly tools: readonly string[]; readonly approvedAt?: number; readonly approved?: "auto" | "prompt"; readonly needsApproval: boolean }
+  readonly script?: { readonly digest: string; readonly tools: readonly string[]; readonly approvedAt?: number; readonly approved?: "auto" | "prompt"; readonly needsApproval: boolean; readonly reason?: string }
 }
 
 /** What `jobs_history` and the RPC's `history` return. */
@@ -162,6 +166,7 @@ export interface Report {
   compact(): Promise<CompactStatus>
   list(input?: { readonly state?: JobView["state"]; readonly limit?: number }): Promise<readonly JobView[]>
   history(input?: HistoryInput): Promise<readonly RunViewWithSummary[]>
+  script(job: Job): Promise<JobView["script"]>
   /** The jobs as the runner and the tools see them, with the source they came from. */
   source(): Promise<Source>
 }
@@ -169,14 +174,45 @@ export interface Report {
 export function createReport(input: ReportInput): Report {
   const source = () => readSource(input)
 
-  /** True when the approval covers this script and the files as they resolve now, not only as declared (DF-10). */
-  const approvedNow = async (job: Job, state: JobState): Promise<boolean> => {
-    if (job.action.type !== "script") return true
+  const script = async (job: Job): Promise<JobView["script"]> => {
+    if (job.action.type !== "script") return undefined
+    const state = await readState(input.storage, job.id)
+    const definition = job.action.script
+    const approval = state.approval
+    let files = approval?.files ?? []
+    let problem: "unapproved" | "revoked" | undefined
+    let reason: string | undefined
     try {
-      const files = await resolveScriptFiles(job.action.script.files, job.target.directory ?? input.location, input.scriptFilesRoots ?? [])
-      return approvalCurrent(state.approval, job.action.script, files)
+      const directory = job.target.directory ?? input.location
+      files = await resolveScriptFiles(definition.files, directory, input.scriptFilesRoots ?? [])
+      const resolved = input.scripts === undefined ? approval?.resolved ?? [] : await input.scripts.resolve(definition.uses, job.agent, directory)
+      const matches = input.scripts === undefined ? approvalCurrent(approval, definition, files) : approvalMatches(approval, definition, resolved, files)
+      if (!matches) {
+        problem = "unapproved"
+        reason = `The script or its resolved tools or files changed. Approve it with /jobs-approve ${job.id}.`
+      } else if (await input.scripts?.external?.({ agent: job.agent, project: directory, files, location: directory }) !== undefined) {
+        problem = "revoked"
+        reason = "The agent does not allow external_directory for a declared file. Fix its permissions."
+      } else {
+        problem = approvalAccess(approval, resolved, files, input.access ?? "all")
+        if (problem === "unapproved") reason = `The access policy needs a person's approval. Run /jobs-approve ${job.id}.`
+        else if (problem === "revoked") reason = 'The access policy is read-only and the script changes something. Change access to allow it.'
+        else if (denied(resolved).length > 0) {
+          problem = "revoked"
+          reason = "The agent denies a tool in the manifest. Fix its permissions."
+        }
+      }
     } catch {
-      return false
+      problem = "unapproved"
+      reason = `The script's tools or files cannot be resolved. Fix them, then run /jobs-approve ${job.id}.`
+    }
+    return {
+      digest: approval?.digest ?? digestOf(definition, files),
+      tools: approval?.resolved.map((tool) => tool.method) ?? [],
+      ...(approval === undefined ? {} : { approvedAt: approval.at }),
+      ...(approval?.approved === undefined ? {} : { approved: approval.approved }),
+      needsApproval: problem === "unapproved",
+      ...(reason === undefined ? {} : { reason: `${problem}: ${reason}` }),
     }
   }
 
@@ -196,17 +232,7 @@ export function createReport(input: ReportInput): Report {
       ...(at === undefined ? {} : { nextRunAt: at }),
       ...(state.lastRun === undefined ? {} : { lastRunAt: state.lastRun }),
       ...(job.expires === undefined ? {} : { expires: job.expires }),
-      ...(job.action.type === "script"
-        ? {
-            script: {
-              digest: digestOf(job.action.script, state.approval?.files ?? []),
-              tools: [...job.action.script.uses],
-              ...(state.approval === undefined ? {} : { approvedAt: state.approval.at }),
-              ...(state.approval?.approved === undefined ? {} : { approved: state.approval.approved }),
-              needsApproval: !(await approvedNow(job, state)),
-            },
-          }
-        : {}),
+      ...(job.action.type === "script" ? { script: await script(job) } : {}),
     }
   }
 
@@ -290,6 +316,7 @@ export function createReport(input: ReportInput): Report {
     compact: () => status().then((model) => compactStatus(model)),
     list,
     history,
+    script,
     source,
   }
 }

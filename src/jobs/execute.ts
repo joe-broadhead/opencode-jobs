@@ -16,7 +16,7 @@ import type { Clock } from "./clock.js"
 import { jobsError } from "../constants.js"
 import type { Job, JobAction } from "./model.js"
 import { forgetJobSession, jobOutput, openJobSession, SELF_DENIES } from "./safety.js"
-import { approvalMatches, denied, limitsOf, manifestDigest, scriptSessionRules, sourceHash, worstClass, type Script } from "./script.js"
+import { approvalAccess, approvalMatches, denied, limitsOf, manifestDigest, scriptSessionRules, sourceHash, type Script } from "./script.js"
 import { createBridge } from "./script-bridge.js"
 import type { ScriptGate } from "./script-gate.js"
 import { commitFiles, filePolicy, resolveScriptFiles, snapshotFiles, FileCommitError, type FileRecord, type FileSnapshot } from "./script-files.js"
@@ -457,12 +457,11 @@ async function executeScript(input: ExecuteInput, script: Script): Promise<RunRe
     return skipScript(input, key, "revoked", "JOBS_SCRIPT_DENIED", `The file ${JSON.stringify(outside.name)} at ${JSON.stringify(outside.path)} is outside the project, and the script's agent does not allow external_directory for it.`, `Add this rule to that agent's permissions: ${JSON.stringify({ action: "external_directory", resource: outside.resource, effect: "allow" })}, then approve the script again. No call was made and nothing was written.`)
   }
   // DF-2: the access policy is re-applied at every run, before the first call or write.
-  const access = input.access ?? "all"
-  const worst = worstClass(resolved, resolvedFiles)
-  if (access === "read-only" && worst === "change") {
+  const accessProblem = approvalAccess(state.approval, resolved, resolvedFiles, input.access ?? "all")
+  if (accessProblem === "revoked") {
     return skipScript(input, key, "revoked", "JOBS_SCRIPT_DENIED", `The script ${JSON.stringify(job.id)} changes something, and the plugin's access option is now "read-only".`, `Set the plugin option "access" to "ask-changes" or "all", then approve the script again. No call was made and nothing was written.`)
   }
-  if (access === "ask-changes" && worst === "change" && state.approval?.approved !== "prompt") {
+  if (accessProblem === "unapproved") {
     return skipScript(input, key, "unapproved", "JOBS_SCRIPT_UNAPPROVED", `The script ${JSON.stringify(job.id)} changes something, and its approval was automatic; "ask-changes" needs a person's approval of this exact digest.`, `Approve it with the jobs_approve tool or /jobs-approve ${job.id}. No call was made and nothing was written.`)
   }
   const revoked = denied(resolved)

@@ -65,6 +65,9 @@ describe("status and a revoked script", () => {
       const status = await report.status()
       // The declared path alone still matches; the resolved path does not, so status must not say approved.
       expect(status.scriptJobs).toMatchObject({ approved: 0, unapproved: 1, names: ["state"] })
+      const view = (await report.list())[0]!.script!
+      expect(view.needsApproval).toBe(true)
+      expect(view.reason).toContain("/jobs-approve state")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

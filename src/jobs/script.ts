@@ -134,6 +134,14 @@ export interface ScriptApproval {
 export const worstClass = (resolved: readonly ResolvedTool[], files: readonly ResolvedFile[] = []): "read" | "change" =>
   resolved.some((tool) => tool.class !== "read") || files.some((file) => file.mode !== "read") ? "change" : "read"
 
+/** The access restriction the next run applies to an otherwise matching approval. */
+export function approvalAccess(approval: ScriptApproval | undefined, resolved: readonly ResolvedTool[], files: readonly ResolvedFile[], access: "all" | "ask-changes" | "read-only"): "unapproved" | "revoked" | undefined {
+  if (worstClass(resolved, files) === "read") return undefined
+  if (access === "read-only") return "revoked"
+  if (access === "ask-changes" && approval?.approved !== "prompt") return "unapproved"
+  return undefined
+}
+
 /** One narrowed rule, as the run session takes it. */
 export interface Rule {
   readonly action: string

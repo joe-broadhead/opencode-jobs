@@ -7,8 +7,10 @@ import { parseJob, type Job } from "../../src/jobs/model.js"
 import { digestOf, filesDigest, manifestDigest, sourceHash, type ResolvedTool, type Script, type ScriptApproval } from "../../src/jobs/script.js"
 import { resolveScriptFiles } from "../../src/jobs/script-files.js"
 import type { ScriptGate } from "../../src/jobs/script-gate.js"
-import { putState, scanRuns } from "../../src/jobs/store.js"
-import { memoryStorage, sessionFake } from "./fake.js"
+import { putJob, putState, scanRuns } from "../../src/jobs/store.js"
+import { createReport } from "../../src/jobs/report.js"
+import { runJobTool } from "../../src/jobs/tools.js"
+import { agentsFake, memoryStorage, sessionFake, testClock } from "./fake.js"
 
 const START = Date.UTC(2026, 11, 6, 9, 0, 0)
 const RESOLVED: readonly ResolvedTool[] = [{ method: "host:mem", action: "mem", class: "unclassified", kind: "host", effect: "allow" }]
@@ -54,7 +56,7 @@ describe("a script's declared file", () => {
         rpc: (() => ({})) as never,
         ...(extra.access === undefined ? {} : { access: extra.access }),
       } as never)
-    return { root, storage, session, run, file: () => JSON.parse(readFileSync(join(root, "state.json"), "utf8")) }
+    return { root, storage, session, run, job, gate, file: () => JSON.parse(readFileSync(join(root, "state.json"), "utf8")) }
   }
 
   test("is written after a successful run, and not after an error, a timeout or a limit", async () => {
@@ -117,6 +119,54 @@ describe("a script's declared file", () => {
       expect(prompted.file()).toEqual({ n: 2 })
     } finally {
       rmSync(prompted.root, { recursive: true, force: true })
+    }
+  })
+
+  test("list and get report the same approval skip as the executor after access changes (RR-2)", async () => {
+    for (const access of ["ask-changes", "read-only"] as const) {
+      const setupRun = await setup('await files.write("state", { n: 2 }); return "private-result"', { access, approved: "auto" })
+      try {
+        await putJob(setupRun.storage.storage, setupRun.job)
+        const result = await setupRun.run(START)
+        expect(result.status).toBe("skipped")
+        expect(result.record?.reason).toBe(access === "read-only" ? "revoked" : "unapproved")
+        const clock = testClock(START, { instantBelow: 0 }).clock
+        const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
+        const report = createReport({ storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20, access, scripts: setupRun.gate })
+        const view = (await report.list())[0]!.script!
+        const input = { storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, source: () => report.source(), wake: () => undefined, ready: true, report, assert: async () => undefined }
+        const listed = await runJobTool(input, "list", {})
+        const got = await runJobTool(input, "get", { id: setupRun.job.id })
+        expect(got.output["script"]).toEqual(view)
+        expect(view).toMatchObject({ approved: "auto", needsApproval: access === "ask-changes", tools: ["host:mem"] })
+        expect(view.reason).toContain(access === "ask-changes" ? "/jobs-approve state" : "revoked")
+        expect(listed.text).toContain(access === "ask-changes" ? "/jobs-approve state" : "revoked")
+        expect(got.text).toContain(access === "ask-changes" ? "/jobs-approve state" : "revoked")
+        expect(JSON.stringify(got)).not.toContain("private-result")
+        expect(JSON.stringify(view)).not.toContain("files.write")
+      } finally {
+        rmSync(setupRun.root, { recursive: true, force: true })
+      }
+    }
+  })
+
+  test("get omits script source, returned file contents, and errors containing file contents (RR-2)", async () => {
+    for (const code of ["return files.state", "throw new Error(JSON.stringify(files.state))"]) {
+      const setupRun = await setup(code, { access: "all", approved: "auto" })
+      try {
+        writeFileSync(join(setupRun.root, "state.json"), '{"privateMarker":"do-not-expose"}')
+        await putJob(setupRun.storage.storage, setupRun.job)
+        await setupRun.run(START)
+        const clock = testClock(START, { instantBelow: 0 }).clock
+        const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
+        const report = createReport({ storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20, access: "all", scripts: setupRun.gate })
+        const input = { storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, source: () => report.source(), wake: () => undefined, ready: true, report, assert: async () => undefined }
+        const got = await runJobTool(input, "get", { id: setupRun.job.id })
+        expect(JSON.stringify(got)).not.toContain(code)
+        expect(JSON.stringify(got)).not.toContain("do-not-expose")
+      } finally {
+        rmSync(setupRun.root, { recursive: true, force: true })
+      }
     }
   })
 

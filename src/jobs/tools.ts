@@ -20,7 +20,7 @@ import { runView } from "./report.js"
 
 /** What the tools and the tools RPC read and change. */
 export interface ToolInput extends ActionInput {
-  readonly report: Pick<Report, "status" | "compact" | "list" | "history">
+  readonly report: Pick<Report, "status" | "compact" | "list" | "history" | "script">
   /** The host's permission check: every tool call asserts its own action first, so the host can answer by access. */
   readonly assert: Plugin.Context["permission"]["assert"]
   /** The script gate: a manifest's resolution and the one script approval. Absent only in unit fakes. */
@@ -245,16 +245,23 @@ export async function runJobTool(input: ToolInput, name: ToolName, raw: unknown,
         ...(args["state"] === undefined ? {} : { state: args["state"] as never }),
         ...(args["limit"] === undefined ? {} : { limit: Number(args["limit"]) }),
       })
-      return { output: { jobs: [...jobs] }, text: compact({ jobs: jobs.map((job) => `${job.id} ${job.name} ${job.state}`) }) }
+      return { output: { jobs: [...jobs] }, text: compact({ jobs: jobs.map((job) => ({ id: job.id, name: job.name, state: job.state, ...(job.script === undefined ? {} : { script: job.script }) })) }) }
     }
     case "get": {
       const job = await findJob(input, id())
       const state = await readState(input.storage, job.id)
       const runs = (await scanRuns(input.storage, job.id)).slice(0, 3)
       const names = new Map([[job.id, job.name]])
+      const script = await input.report.script(job)
+      const safeJob = job.action.type === "script" ? { ...job, action: { type: "script" } } : job
+      // A script can throw file contents or a tool payload as its error, so get must not return that text.
+      const views = runs.map((run) => {
+        const view = runView(run, names, false, true)
+        return job.action.type === "script" ? { ...view, error: undefined } : view
+      })
       return {
-        output: { job, state, runs: runs.map((run) => runView(run, names, false, true, true)) },
-        text: compact({ id: job.id, name: job.name, agent: job.agent, state, runs: runs.map((run) => run.status) }),
+        output: { job: safeJob, state, runs: views, ...(script === undefined ? {} : { script }) },
+        text: compact({ id: job.id, name: job.name, agent: job.agent, state, runs: runs.map((run) => run.status), ...(script === undefined ? {} : { script }) }),
       }
     }
     case "history": {
