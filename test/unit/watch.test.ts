@@ -81,4 +81,16 @@ describe("the job-file watch", () => {
     healthy.change()
     expect((await healthy.read()).invalid).toEqual([])
   })
+
+  test("retries a file refused for a missing agent every 5 s, even when a caller polls faster (RR-3)", async () => {
+    const refused = { jobs: [], invalid: [], refused: [{ path: "/work/.opencode/jobs/late.md", code: "JOBS_AGENT_MISSING", message: "JOBS_AGENT_MISSING: late." }] } as unknown as JobFiles
+    const setup = harness(refused)
+    await setup.read()
+    for (const offset of [4_000, 8_000, 12_000, 16_000]) {
+      setup.at(NOW + offset)
+      await setup.read()
+    }
+    // The first scan, then one each time 5 s have passed since the last parse: a 4 s caller no longer starves the retry.
+    expect(setup.scans).toEqual([NOW, NOW + 8_000, NOW + 16_000])
+  })
 })

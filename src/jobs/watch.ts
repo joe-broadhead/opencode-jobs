@@ -15,7 +15,9 @@ export interface FileWatch {
 }
 
 export function createFileWatch(now: () => number, everyMs = MINUTE, retryMs = 5_000): FileWatch {
-  let last: { readonly at: number; readonly signature: string; readonly files: JobFiles } | undefined
+  // checkedAt is the last signature read; scannedAt is the last parse. The retry is measured from the parse, so a caller
+  // that polls more often than retryMs still gets one (RR-3).
+  let last: { readonly checkedAt: number; readonly scannedAt: number; readonly signature: string; readonly files: JobFiles } | undefined
   return {
     async read(signature, scan) {
       const at = now()
@@ -23,14 +25,14 @@ export function createFileWatch(now: () => number, everyMs = MINUTE, retryMs = 5
       // list has not changed: a restart's first scan can see a partial list, and the file must load when it fills in
       // (GAP-30). Healthy files keep the one-stat-a-minute cost.
       const missing = last?.files.refused.some((entry) => entry.code === "JOBS_AGENT_MISSING") === true
-      if (last !== undefined && at - last.at < everyMs && !missing) return last.files
+      if (last !== undefined && at - last.checkedAt < everyMs && !missing) return last.files
       const current = await signature()
-      if (last !== undefined && current === last.signature && (!missing || at - last.at < retryMs)) {
-        last = { at, signature: current, files: last.files }
+      if (last !== undefined && current === last.signature && (!missing || at - last.scannedAt < retryMs)) {
+        last = { ...last, checkedAt: at }
         return last.files
       }
       const files = await scan()
-      last = { at, signature: current, files }
+      last = { checkedAt: at, scannedAt: at, signature: current, files }
       return files
     },
   }
