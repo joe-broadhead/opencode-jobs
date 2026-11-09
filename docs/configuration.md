@@ -144,7 +144,7 @@ that tree, so `/`, the home directory and its ancestors are refused. Symlinks at
 `.OPENCODE` (case-folded), OpenCode's own folders and special files are refused (`JOBS_SCRIPT_FILE_PATH`). The file is snapshotted before the run and a write is
 committed only on success, in one multi-file commit (validate all, temp and fsync each, keep each original aside, rename
 all, roll back on a failure), with a conflict check (`JOBS_SCRIPT_FILE_CONFLICT`) and a per-file
-`written`/`rolled_back`/`not_attempted` outcome. The digest covers each resolved path, and a file outside the project also needs the agent's
+`written`/`rolled_back`/`rollback_failed`/`not_attempted` outcome. The digest covers each resolved path, and a file outside the project also needs the agent's
 `{ "action": "external_directory", "resource": "<folder>/*", "effect": "allow" }`, checked at approval and at every run.
 A file job is approved automatically at load under `all` (and under `ask-changes` when it is all-read); a changing one
 under `ask-changes` waits for `/jobs-approve`. Every slot re-resolves the script and reapplies access. A changed digest or

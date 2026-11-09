@@ -206,7 +206,8 @@ action:
 The run reads `bookmarks.json` into a frozen `files.bookmarks` and buffers `files.write`; the last write to a name
 wins. Nothing is committed unless every declared write validates: a multi-file commit writes each temp, keeps each
 original aside, renames all of them, and rolls every one back if a rename fails, so the record's per-file outcome is
-`written`, `rolled_back` or `not_attempted`, never a false "nothing written". Each rename is a temp file then a rename,
+`written`, `rolled_back`, `rollback_failed` or `not_attempted`, never a false "nothing written". A restore that itself fails is
+`rollback_failed`, and the error names the kept original to put back by hand. Each rename is a temp file then a rename,
 mode 0600 for a new file, fsynced first, and happens only if the file did not change since the snapshot (otherwise
 `JOBS_SCRIPT_FILE_CONFLICT`, and the other writer's file stays). A relative path resolves against the job's directory; an
 absolute one must be inside it or a `scriptFilesRoots` root. A root is a full read/write grant to that tree, so `/`, the

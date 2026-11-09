@@ -53,7 +53,7 @@ export interface FileWrite {
 }
 
 /** What happened to one file in a commit. */
-export type FileOutcome = "written" | "rolled_back" | "not_attempted"
+export type FileOutcome = "written" | "rolled_back" | "rollback_failed" | "not_attempted"
 
 /** One file's record: what was read and written, never the content. */
 export interface FileRecord {
@@ -501,15 +501,19 @@ export async function commitFiles(
       })
     }
   } catch (error) {
-    // Restore the ones that landed, newest first, from the kept originals; remove the rest.
+    // Restore the ones that landed, newest first, from the kept originals; remove the rest. A restore that fails is
+    // recorded as rollback_failed, never as put back, and the error names the path a person must finish by hand (RR-4).
+    const stuck: string[] = []
     for (const entry of [...landed].reverse()) {
       const target = entry.planned.snapshot.file.path
-      if (entry.backup !== undefined) await rename(entry.backup, target).catch(() => undefined)
-      else await unlink(target).catch(() => undefined)
+      // A new file with nothing to put back is restored by removing it; one already gone counts as restored.
+      const undo = entry.backup !== undefined ? rename(entry.backup, target) : unlink(target).catch((error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? undefined : Promise.reject(error)))
+      const restored = await undo.then(() => true, () => false)
+      if (!restored) stuck.push(entry.backup ?? target)
       records.set(entry.planned.snapshot.file.name, {
         ...records.get(entry.planned.snapshot.file.name)!,
         bytesWritten: 0,
-        outcome: "rolled_back",
+        outcome: restored ? "rolled_back" : "rollback_failed",
         sha256After: undefined,
       })
     }
@@ -518,7 +522,9 @@ export async function commitFiles(
       if (entry.backup !== undefined && !landed.includes(entry)) await unlink(entry.backup).catch(() => undefined)
     }
     for (const directory of new Set(temps.map((entry) => dirname(entry.planned.snapshot.file.path)))) await syncDirectory(directory)
-    throw new FileCommitError(error, [...records.values()])
+    const cause = error instanceof Error ? error.message.split("\n")[0] : String(error)
+    const reason = stuck.length === 0 ? error : new Error(`${cause}; a restore failed, so ${stuck.map((path) => JSON.stringify(path)).join(", ")} must be put back by hand from the kept original`)
+    throw new FileCommitError(reason, [...records.values()])
   }
   for (const entry of temps) {
     await unlink(entry.temp).catch(() => undefined)

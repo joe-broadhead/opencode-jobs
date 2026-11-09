@@ -175,6 +175,38 @@ describe("the commit's bounds and atomicity", () => {
     for (const name of names) expect(JSON.parse(readFileSync(join(root, `${name}.json`), "utf8"))).toEqual({ v: "old" })
   })
 
+  test("records rollback_failed, and names the kept original, when the restore itself fails (RR-4)", async () => {
+    const names = ["a", "b"] as const
+    const files: Script["files"] = Object.fromEntries(names.map((name) => [name, { path: `${name}.json`, mode: "readwrite" as const, format: "json" as const }]))
+    for (const name of names) writeFileSync(join(root, `${name}.json`), JSON.stringify({ v: "old" }))
+    const snapshots = await snapshotFiles(await resolveScriptFiles(files, root))
+    const fs = await import("node:fs/promises")
+    let calls = 0
+    const failure = await commitFiles(
+      snapshots,
+      names.map((name) => ({ name, json: JSON.stringify({ v: "new" }) })),
+      {
+        rename: async (from, to) => {
+          calls += 1
+          // The second rename fails, and "a"'s kept original is gone, so its restore fails too.
+          if (calls === 2) {
+            for (const entry of await fs.readdir(root)) if (entry.endsWith(".bak")) await fs.unlink(join(root, entry))
+            throw new Error("injected rename failure")
+          }
+          await fs.rename(from, to)
+        },
+      },
+    ).catch((error) => error)
+    expect(failure).toBeInstanceOf(FileCommitError)
+    const records = (failure as FileCommitError).records
+    const byName = new Map(records.map((record) => [record.name, record]))
+    expect(byName.get("a")?.outcome).toBe("rollback_failed")
+    expect(byName.get("b")?.outcome).toBe("not_attempted")
+    // The error names the kept original a person must put back, and never claims the file was restored.
+    expect((failure as Error).message).toContain(".bak")
+    expect((failure as Error).message).toContain("must be put back by hand")
+  })
+
   test("refuses a leaf swapped for a symlink between the check and the open (DF-6)", async () => {
     writeFileSync(join(root, "swap-leaf.json"), JSON.stringify({ where: "inside" }))
     writeFileSync(join(outside, "secret.json"), JSON.stringify({ where: "OUTSIDE" }))
