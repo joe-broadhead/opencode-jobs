@@ -100,5 +100,5 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
 - machine-local home and temp paths;
 - `.tsx` or `.jsx` files in `dist/`.
 
-The pack test also rejects anything in `dist/` other than the two bundles, any relative, dynamic or `require` import in
+The pack test also rejects anything in `dist/` other than the two bundles and `quickjs.wasm` (the script runtime's data file), and any relative, dynamic or `require` import in
 them, and any import of a module OpenCode does not provide.
