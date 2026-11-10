@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.0.0] - 2026-11-10
 
 ### Added
 
@@ -35,9 +35,13 @@ All notable changes to this project are documented here. The format follows [Kee
 - `ctx.agent.get` is called without a location, where the job runs in the leader's own directory (a location passed back
   could fail for a project-level plugin on 2.2.4).
 
-## [0.0.0] - 2026-11-10
+## Earlier releases on npm
 
-### Added
+These versions were published to npm before the plugin moved to GitHub releases. Their Git tags have been removed.
+
+### npm 0.0.0 - 2026-11-07
+
+#### Added
 
 - The plugin loads on OpenCode `>=2.2.3 <2.3.0`, tested on 2.2.3, 2.2.4, 2.2.5 and 2.2.6, and refuses a host outside the range
   unless `allowUntestedHost` is set.
