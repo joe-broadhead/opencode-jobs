@@ -14,5 +14,6 @@ describe("the jobs skill description", () => {
   test("carries the two example questions that a user asks about scheduled jobs", () => {
     expect(description).toContain("what jobs do I have scheduled")
     expect(description).toContain("is the 9am job paused")
+    expect(description).toContain("when did the 9am job last run")
   })
 })
