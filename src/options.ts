@@ -33,7 +33,7 @@ export const MAX_CONCURRENCY = 8
 export const MIN_KEEPALIVE_MINUTES = 1
 export const MAX_KEEPALIVE_MINUTES = 59
 
-const EXAMPLE = `"plugins": [{ "package": "@joe-broadhead/opencode-jobs", "options": { "enabled": true } }]`
+const EXAMPLE = `"plugins": [{ "package": "github:joe-broadhead/opencode-jobs#v0.0.0", "options": { "enabled": true } }]`
 const ACCEPTED = {
   enabled: "true or false (true by default)",
   allowUntestedHost: "true or false (false by default)",

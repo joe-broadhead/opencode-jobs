@@ -23,9 +23,7 @@ Run `opencode reload`, or restart OpenCode, then run `/jobs-status`.
 
 `opencode plugin add opencode-jobs` (unscoped) installs a different, unrelated systemd plugin.
 
-**Update** with `opencode plugin update github:joe-broadhead/opencode-jobs#v0.0.0`, then run `opencode reload`.
-
-A Git install is removed and updated by its installed spec: `opencode plugin remove github:joe-broadhead/opencode-jobs#v0.0.0`. `opencode plugin update` and `opencode plugin check` take the same spec.
+Each release has its own tag, and a Git install does not update by itself. To move to a newer release, remove the old entry with `opencode plugin remove github:joe-broadhead/opencode-jobs#v0.0.0`, then add the new tag with `opencode plugin add github:joe-broadhead/opencode-jobs#v<version>`.
 
 The install takes the GitHub release tag. Its commit carries the built `dist/`, so the install runs no build.
 A new release is a new tag: install it with its own `#v<version>` spec.
@@ -179,7 +177,7 @@ Set options with the object form of the plugin entry. Every option is optional.
 {
   "plugins": [
     {
-      "package": "@joe-broadhead/opencode-jobs",
+      "package": "github:joe-broadhead/opencode-jobs#v0.0.0",
       "options": { "enabled": true, "concurrency": 2, "keepAliveMinutes": 20 }
     }
   ]
@@ -199,7 +197,7 @@ Put the plugin entry in the system config: `/Library/Application Support/opencod
 
 ```json
 {
-  "plugins": [{ "package": "@joe-broadhead/opencode-jobs", "options": { "concurrency": 2 } }],
+  "plugins": [{ "package": "github:joe-broadhead/opencode-jobs#v0.0.0", "options": { "concurrency": 2 } }],
   "experimental": { "location_idle_timeout": "60 minutes" }
 }
 ```
@@ -279,6 +277,7 @@ The plugin's storage stays in OpenCode's own database; removing the plugin does 
 - **Declared files are read on the host.** Each one is read up to its size limit, before the VM starts, and that memory is outside `memoryMb`.
 - **A restore can fail.** When a file cannot be put back after a failed commit, its run records `rollback_failed` and the error names the kept original, which a person must restore by hand.
 - **An agent without the default rules still runs its jobs.** Status warns with `JOBS_AGENT_UNGUARDED` and the block to paste; nothing blocks the run.
+- Updates are not automatic for a Git install, and `opencode plugin update` and `opencode plugin check` do not work on one: to move to a newer release, remove the old entry and add the new tag.
 
 ## Links
 

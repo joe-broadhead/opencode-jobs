@@ -11,7 +11,7 @@ Set options with the object form of the plugin entry. Every option is optional.
 {
   "plugins": [
     {
-      "package": "@joe-broadhead/opencode-jobs",
+      "package": "github:joe-broadhead/opencode-jobs#v0.0.0",
       "options": { "enabled": true, "concurrency": 2, "keepAliveMinutes": 20 }
     }
   ]
