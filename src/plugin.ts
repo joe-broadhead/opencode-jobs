@@ -1,4 +1,5 @@
 import { Plugin } from "@opencode/plugin"
+import { fileURLToPath } from "node:url"
 import { registerCommands } from "./commands.js"
 import { PLUGIN_ID } from "./constants.js"
 import { checkHost } from "./host-version.js"
@@ -22,6 +23,7 @@ import { ownedMethods, toolTransform, type ToolInput } from "./jobs/tools.js"
 import { createFileWatch, type FileWatch } from "./jobs/watch.js"
 import { parseOptions, type Access } from "./options.js"
 import { registerStatusRpc } from "./rpc.js"
+import { loadSkills, skillTransform } from "./skill.js"
 
 /** Injected by tests: a clock, and whether the loop ticks itself. Production passes nothing. */
 export interface JobsDeps {
@@ -112,6 +114,8 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
             job: { id: "script", name: "Script" },
           }),
       }
+      // The jobs skill, read from the package root: OpenCode lists it, so a question about scheduled jobs loads it.
+      const skills = await loadSkills(fileURLToPath(new URL("../", import.meta.url)))
       // Transforms replay on every rebuild, so each registration is disposed on cleanup in reverse order.
       const stops = [
         await registerCommands(ctx, {
@@ -134,6 +138,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
           for (const { id } of editor.list()) editor.update(id, (info) => insertDefaultRules(info.permissions, options.access))
         }).then((registration) => registration.dispose),
         await ctx.tool.transform(toolTransform(tools)).then((registration) => registration.dispose),
+        await ctx.skill.transform(skillTransform(skills)).then((registration) => registration.dispose),
       ]
       const worker = options.enabled && ready
         ? startWorker(ctx, {

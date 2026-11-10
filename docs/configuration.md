@@ -333,6 +333,7 @@ its code and shown in status; it is not thrown at you.
 | --- | --- | --- |
 | `OPTIONS_INVALID` | An option is unknown, or its value is the wrong type or outside its range. | Fix the plugin options in opencode.json; the message names the accepted values and gives an example. |
 | `HOST_UNTESTED` | OpenCode is outside `>=2.2.3 <2.3.0`, and `allowUntestedHost` is not set. | Use a supported OpenCode, or set `"allowUntestedHost": true`. |
+| `SKILLS_INVALID` | The jobs skill's file, `skills/jobs/SKILL.md`, is missing or its front matter does not name it, so the skill is not listed. | Reinstall the plugin. |
 | `STATUS_UNAVAILABLE` | The status could not be read, or the plugin is not running in this location. | Restart OpenCode, then run `/jobs-status` again. |
 | `JOBS_INVALID_SCHEDULE` | The schedule names two kinds or none, the cron expression is not five fields or never fires, the interval is under a minute, or the zone or time does not exist. | Use a five-field cron expression, an interval of at least a minute, and an IANA time zone such as `Europe/London`. |
 | `JOBS_INVALID_JOB` | A field other than the schedule is missing or wrong — the name, the action, the agent, the policy, `ends` or `jitter` — or a tool tried to change or delete a job defined by a file. | Set the field the message names; it gives the accepted values. A file job is edited in its file. |

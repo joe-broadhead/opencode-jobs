@@ -247,6 +247,7 @@ Run `/jobs-status` first. Its last line is the next step.
 | `/jobs` is missing | The plugin did not start. Run `/plugins` to see the error. |
 | `OPTIONS_INVALID` | An option is unknown or has a wrong value. The message names the option and the accepted values. |
 | `HOST_UNTESTED` | Your OpenCode is outside `>=2.2.3 <2.3.0`, so the plugin did not start. Use OpenCode `>=2.2.3 <2.3.0`, or set `"allowUntestedHost": true` to run anyway. |
+| `SKILLS_INVALID` | The jobs skill's file is missing or its front matter does not name it, so OpenCode does not list the skill. Next step: Reinstall the plugin. |
 | `STATUS_UNAVAILABLE` | The status could not be read, or the plugin is not running. Follow the next step in the message. |
 
 ## What this is not

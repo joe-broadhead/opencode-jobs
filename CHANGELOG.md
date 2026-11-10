@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- The jobs skill is registered with OpenCode, so a question about scheduled jobs loads it.
 - The Jelly declaration has an `access` setting (default `all`), so Jelly can show and change the access option.
 - The `script` action: a job can run a confined program instead of a model prompt. Its `uses` manifest names the tools
   it can call, `/jobs-approve` re-approves it, and the run record keeps what each call did, never a payload.
