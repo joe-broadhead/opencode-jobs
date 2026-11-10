@@ -69,7 +69,7 @@ describe("docs", () => {
     const repo = pkg.name.replace("@joe-broadhead/", "")
     for (const file of FILES.filter((name) => name !== "CHANGELOG.md")) {
       // The README install line names the release tag, and CONTRIBUTING's release steps name the version.
-      const body = file === "CONTRIBUTING.md" ? flat(file).replace(/### Releasing.*?(?=### |$)/, "") : flat(file).replace(`${repo}#v${pkg.version}`, "")
+      const body = file === "CONTRIBUTING.md" ? flat(file).replace(/### Releasing.*?(?=### |$)/, "") : flat(file).replaceAll(`${repo}#v${pkg.version}`, "")
       expect({ file, version: body.includes(pkg.version) }).toEqual({ file, version: false })
       expect({ file, tag: new RegExp(`${repo}@\\d`).test(flat(file)) }).toEqual({ file, tag: false })
     }
@@ -137,7 +137,7 @@ describe("docs", () => {
 
   test("the README's Uninstall removes the plugin, and its commands are the ones the plugin registers", () => {
     const uninstall = /## Uninstall\n([\s\S]*?)## Links/.exec(text("README.md"))?.[1] ?? ""
-    expect(uninstall).toContain("opencode plugin remove @joe-broadhead/opencode-jobs")
+    expect(uninstall).toContain("opencode plugin remove github:joe-broadhead/opencode-jobs#v0.0.0")
     expect(flat("README.md")).toContain("`/jobs-status`")
     expect(flat("README.md")).toContain("Jobs: Status")
   })

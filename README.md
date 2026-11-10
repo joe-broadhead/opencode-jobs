@@ -21,6 +21,12 @@ opencode plugin add github:joe-broadhead/opencode-jobs#v0.0.0
 
 Run `opencode reload`, or restart OpenCode, then run `/jobs-status`.
 
+`opencode plugin add opencode-jobs` (unscoped) installs a different, unrelated systemd plugin.
+
+**Update** with `opencode plugin update github:joe-broadhead/opencode-jobs#v0.0.0`, then run `opencode reload`.
+
+A Git install is removed and updated by its installed spec: `opencode plugin remove github:joe-broadhead/opencode-jobs#v0.0.0`. `opencode plugin update` and `opencode plugin check` take the same spec.
+
 The install takes the GitHub release tag. Its commit carries the built `dist/`, so the install runs no build.
 A new release is a new tag: install it with its own `#v<version>` spec.
 
@@ -260,7 +266,7 @@ Run `/jobs-status` first. Its last line is the next step.
 ## Uninstall
 
 1. Pause first if a job is mid-run: `/jobs-pause`.
-2. Remove the plugin: `opencode plugin remove @joe-broadhead/opencode-jobs`, then `opencode reload`.
+2. Remove the plugin: `opencode plugin remove github:joe-broadhead/opencode-jobs#v0.0.0`, then `opencode reload`.
 3. Remove the agent block you copied into `opencode.json`, or the job agent's Markdown file.
 
 The plugin's storage stays in OpenCode's own database; removing the plugin does not delete it.
