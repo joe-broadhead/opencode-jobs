@@ -36,7 +36,7 @@ describe("the jelly declaration", () => {
     expect(jelly.rpc).toEqual([])
     expect(jelly.views).toEqual([])
     expect(jelly.signIns).toEqual([])
-    expect(jelly.contributes).toEqual({ homeFeeds: [], homeWidgets: [], workKinds: [], settings: [] })
+    expect(jelly.contributes).toEqual({ homeFeeds: [], homeWidgets: [], workKinds: [], settings: [{ key: "access", label: "Access", type: "string", default: "all", description: "all, ask-changes or read-only. all allows every jobs tool; ask-changes asks before a change; read-only denies every change." }] })
     expect(jelly.skills).toEqual(["jobs"])
   })
 

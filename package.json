@@ -188,7 +188,15 @@
       "homeFeeds": [],
       "homeWidgets": [],
       "workKinds": [],
-      "settings": []
+      "settings": [
+        {
+          "key": "access",
+          "label": "Access",
+          "type": "string",
+          "default": "all",
+          "description": "all, ask-changes or read-only. all allows every jobs tool; ask-changes asks before a change; read-only denies every change."
+        }
+      ]
     }
   }
 }

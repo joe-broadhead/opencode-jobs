@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- The Jelly declaration has an `access` setting (default `all`), so Jelly can show and change the access option.
 - The `script` action: a job can run a confined program instead of a model prompt. Its `uses` manifest names the tools
   it can call, `/jobs-approve` re-approves it, and the run record keeps what each call did, never a payload.
 - The script runtime: QuickJS compiled to WebAssembly (MIT, bundled as `dist/quickjs.wasm` and in `NOTICE`), one VM per
