@@ -1,6 +1,6 @@
 ---
 name: jobs
-description: Schedule a prompt, a slash command, a reminder or a no-model script to run later, inside OpenCode, with unattended permissions.
+description: Schedule, list, check, pause, resume or run a prompt, a slash command, a reminder or a no-model script to run later, inside OpenCode, with unattended permissions. Use it for "what jobs do I have scheduled" and "is the 9am job paused".
 ---
 
 # Jobs
