@@ -128,9 +128,15 @@ describe("the path policy on a case-insensitive file system", () => {
     const decomposed = composed.normalize("NFD")
     mkdirSync(join(root, decomposed), { recursive: true })
     writeFileSync(join(root, decomposed, "state.json"), "{}")
-    // The same folder, written decomposed and composed, resolves to the path on disk; neither is a reserved name.
-    const files = await resolveScriptFiles(one(join(composed, "state.json")), root)
+    // The folder is named by the decomposed spelling on disk, and that spelling resolves on every filesystem. A filesystem
+    // that normalises names (macOS's APFS) also shows the composed spelling as this folder; byte-exact ones (Linux) do not,
+    // so the composed reference is checked only where it names the same folder.
+    const files = await resolveScriptFiles(one(join(decomposed, "state.json")), root)
     expect(files[0]!.path.normalize("NFD")).toBe(join(root, decomposed, "state.json").normalize("NFD"))
+    if (existsSync(join(root, composed))) {
+      const viaComposed = await resolveScriptFiles(one(join(composed, "state.json")), root)
+      expect(viaComposed[0]!.path.normalize("NFD")).toBe(join(root, decomposed, "state.json").normalize("NFD"))
+    }
   })
 })
 
