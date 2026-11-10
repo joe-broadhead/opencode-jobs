@@ -42,8 +42,10 @@ followed by the session's; the **last matching rule wins**, as on the model path
 - A default-deny tool becomes usable only when the agent has a later explicit `allow` for it. That is the documented
   opt-in, not a bypass: a resolved deny always refuses.
 
+Create the session once, with the agent the script runs as, and give the project as its `location`. A session made without a location belongs to the service's default location, where the project's agents may not exist, and each call then fails `Agent not found`.
+
 ```sh
-opencode api post /api/session -d '{"title":"script","agent":"build"}'
+opencode api post /api/session -d '{"title":"script","agent":"build","location":{"directory":"/path/to/project"}}'
 ```
 
 ## Calling a method
