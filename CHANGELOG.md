@@ -35,7 +35,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - `ctx.agent.get` is called without a location, where the job runs in the leader's own directory (a location passed back
   could fail for a project-level plugin on 2.2.4).
 
-## [0.0.0] - 2026-11-07
+## [0.0.0] - 2026-11-10
 
 ### Added
 

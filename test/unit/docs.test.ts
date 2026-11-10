@@ -64,11 +64,14 @@ describe("docs", () => {
     expect(flat(file)).not.toMatch(/provisional|not yet (?:checked|published|signed|built)|private package|TODO/i)
   })
 
-  test("no doc names the plugin's version or a tag", () => {
-    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { version: string }
+  test("no doc names the plugin's version or a tag, except the install spec and the release steps", () => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { version: string; name: string }
+    const repo = pkg.name.replace("@joe-broadhead/", "")
     for (const file of FILES.filter((name) => name !== "CHANGELOG.md")) {
-      expect({ file, version: flat(file).includes(pkg.version) }).toEqual({ file, version: false })
-      expect({ file, tag: /opencode-jobs@\d/.test(flat(file)) }).toEqual({ file, tag: false })
+      // The README install line names the release tag, and CONTRIBUTING's release steps name the version.
+      const body = file === "CONTRIBUTING.md" ? flat(file).replace(/### Releasing.*?(?=### |$)/, "") : flat(file).replace(`${repo}#v${pkg.version}`, "")
+      expect({ file, version: body.includes(pkg.version) }).toEqual({ file, version: false })
+      expect({ file, tag: new RegExp(`${repo}@\\d`).test(flat(file)) }).toEqual({ file, tag: false })
     }
   })
 
