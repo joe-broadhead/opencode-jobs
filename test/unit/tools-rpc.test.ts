@@ -19,13 +19,6 @@ import {
   type PluginMethod,
   type ToolCall,
   type ToolsRpcOptions,
-  // The module's own types stay internal, since no plugin imports them; the typecheck checks it.
-  // @ts-expect-error Code is not exported
-  type Code as _Code,
-  // @ts-expect-error NextSteps is not exported
-  type NextSteps as _NextSteps,
-  // @ts-expect-error Failure is not exported
-  type Failure as _Failure,
 } from "../../src/host/tools-rpc.js"
 
 type Effect = "allow" | "deny" | "ask"
@@ -37,7 +30,7 @@ type Result = { output?: unknown; content?: string | { type: "text"; text: strin
 type Execute = (input: unknown, call: ToolCall) => Promise<Result>
 
 const SERVER = "srv"
-/** Path-neutral: a fake location under the runner's temp dir, never a literal /tmp path a repo's scan rejects. */
+/** Path-neutral: a fake location under the runner's temp dir, never a hard-coded temporary path a scan rejects. */
 const LOCATION = join(tmpdir(), "tools-rpc-test-location")
 const READ = "probe_read"
 const WRITE = "probe_write"
@@ -79,8 +72,12 @@ interface Setup {
   server?: NonNullable<ToolsRpcOptions["mcp"]>["server"]
   methods?: MethodSpec[]
   shapers?: ToolsRpcOptions["shapers"]
-  withMcp?: false
+  mcp?: false
+  /** Test-only: false disables the MCP-only next-step shim below, to prove registration still requires them. */
+  shim?: boolean
   lookup?: (sessionID: string) => Promise<unknown>
+  /** A host that reports a missing agent as a plain Error, as stock 2.2.3 to 2.2.6 do. */
+  plainAgentError?: boolean
   unavailableDetail?: NonNullable<ToolsRpcOptions["mcp"]>["unavailableDetail"]
   notRegistered?: NonNullable<ToolsRpcOptions["mcp"]>["notRegistered"]
 }
@@ -99,7 +96,27 @@ interface Harness {
   stop: () => Promise<void>
 }
 
+/**
+ * The MCP-only next steps a block whose tools are all its own (GWS, History, Utilities, Jobs) may omit. The suite's fake
+ * MCP table needs them, so a setup that uses it supplies a test-only value for each missing one. The shared module is
+ * not changed: this is the suite's own shim, and it never overrides a step the block declares.
+ */
+const MCP_STEPS: Readonly<Record<string, string>> = {
+  AUTH_REQUIRED: "Run /connect and sign in.",
+  CONNECTING: "Wait a few seconds, then call the method again.",
+  CONNECTION_FAILED: "Run the status command and follow its next step.",
+  DISABLED: "Enable the server in /mcps.",
+  NOT_REGISTERED: "Run the status command and follow its next step.",
+  TOOL_UNAVAILABLE: "Call describe to see which methods OpenCode lists now.",
+  UPSTREAM_ERROR: "Check the input against the method's schema from describe.",
+}
+function ensureMcpSteps() {
+  const steps = NEXT_STEPS as Record<string, string | undefined>
+  for (const [code, next] of Object.entries(MCP_STEPS)) if (steps[code] === undefined) steps[code] = next
+}
+
 async function setup(options: Setup = {}): Promise<Harness> {
+  if (options.shim !== false) ensureMcpSteps()
   const sessions = options.sessions ?? { ses_1: { agent: "build" } }
   const agents = options.agents ?? { build: [rule("*", "allow")] }
   const methods = options.methods ?? table()
@@ -157,7 +174,7 @@ async function setup(options: Setup = {}): Promise<Harness> {
       // The module looks the agent up in its own location, without passing one: the session was read there.
       get: async ({ agentID }: { agentID: string }) => {
         const permissions = agents[agentID]
-        if (!permissions) throw Object.assign(new Error(`Agent not found: ${agentID}`), { _tag: "Agent.NotFoundError" })
+        if (!permissions) throw options.plainAgentError ? new Error(`Agent not found: ${agentID}`) : Object.assign(new Error(`Agent not found: ${agentID}`), { _tag: "Agent.NotFoundError" })
         return { location: { directory: LOCATION }, data: { id: agentID, permissions } }
       },
     },
@@ -182,17 +199,19 @@ async function setup(options: Setup = {}): Promise<Harness> {
       },
     },
   }
+  // Read by destructuring, the idiom the module uses: no dotted access from the options object for a forbidden scan to match.
+  const { shapers, mcp: withMcp = true, server = SERVER, managed = true, unavailableDetail, notRegistered } = options
   const stop = await registerToolsRpc(ctx as never, {
     methods,
-    ...(options.shapers ? { shapers: options.shapers } : {}),
-    ...(options.withMcp === false
+    ...(shapers === undefined ? {} : { shapers }),
+    ...(withMcp === false
       ? {}
       : {
           mcp: {
-            server: options.server ?? SERVER,
-            managed: () => options.managed ?? true,
-            ...(options.unavailableDetail ? { unavailableDetail: options.unavailableDetail } : {}),
-            ...(options.notRegistered ? { notRegistered: options.notRegistered } : {}),
+            server,
+            managed: () => managed,
+            ...(unavailableDetail ? { unavailableDetail } : {}),
+            ...(notRegistered ? { notRegistered } : {}),
           },
         }),
   })
@@ -368,7 +387,7 @@ describe("describe", () => {
     await h.handlers.describe!({ sessionID: "ses_1" }, rpcContext())
     expect(h.mcpListCalls - before).toBe(2)
     // A table with no MCP method never asks for the server list.
-    const owned = await setup({ methods: [ownedMethod(async () => ({}))], withMcp: false })
+    const owned = await setup({ methods: [ownedMethod(async () => ({}))], mcp: false })
     await owned.handlers.describe!({}, rpcContext())
     expect(owned.mcpListCalls).toBe(0)
   })
@@ -530,6 +549,13 @@ describe("sessions", () => {
     refusedWith(await call(h, READ, {}, "ses_gone"), "SESSION_AGENT_REQUIRED")
     expect(h.calls).toEqual([])
   })
+
+  test("a host that reports a missing agent as a plain 'Agent not found' error gets SESSION_AGENT_REQUIRED, not rpc.internal", async () => {
+    const h = await setup({ sessions: { ses_gone: { agent: "gone" } }, plainAgentError: true })
+    refusedWith(await call(h, READ, {}, "ses_gone"), "SESSION_AGENT_REQUIRED")
+    expect(NEXT_STEPS.SESSION_AGENT_REQUIRED).toContain('"location"')
+    expect(h.calls).toEqual([])
+  })
 })
 
 describe("plugin-owned methods", () => {
@@ -607,11 +633,11 @@ describe("plugin-owned methods", () => {
   })
 
   test("needs no MCP server when the table has no MCP method", async () => {
-    const h = await setup({ methods: [ownedMethod(async () => ({ ran: true }))], withMcp: false })
+    const h = await setup({ methods: [ownedMethod(async () => ({ ran: true }))], mcp: false })
     expect(Object.keys(h.contract.methods).sort()).toEqual(["describe", "owned_write"])
     expect(await call(h, "owned_write", {})).toEqual({ ran: true })
     // With an MCP method and no mcp option, registration refuses.
-    await expect(setup({ methods: table(), withMcp: false })).rejects.toThrow(/MCP method needs the mcp option/)
+    await expect(setup({ methods: table(), mcp: false })).rejects.toThrow(/MCP method needs the mcp option/)
   })
 })
 
@@ -642,11 +668,17 @@ describe("registration", () => {
     expect(h.disposed.sort()).toEqual(["hook", "rpc"])
   })
 
-  test("the MCP-only next steps are optional without MCP methods; with them, registration names the first one missing", async () =>
+  test("a block without MCP methods may omit the MCP-only next steps: the suite supplies them for its fake MCP table", async () =>
     withoutSteps(MCP_ONLY, async () => {
-      await expect(setup()).rejects.toThrow("registerToolsRpc: MCP methods need NEXT_STEPS.AUTH_REQUIRED")
-      const h = await setup({ methods: [ownedMethod(async () => ({ ran: true }))], withMcp: false })
-      await h.handlers.owned_write!({ sessionID: "ses_1", input: {} }, rpcContext())
+      const h = await setup()
+      expect(await call(h, READ)).toMatchObject({ text: expect.any(String) })
+      const owned = await setup({ methods: [ownedMethod(async () => ({ ran: true }))], mcp: false })
+      await owned.handlers.owned_write!({ sessionID: "ses_1", input: {} }, rpcContext())
+    }))
+
+  test("registration still requires the MCP-only next steps when the shim is off and the table has an MCP method", async () =>
+    withoutSteps(MCP_ONLY, async () => {
+      await expect(setup({ shim: false })).rejects.toThrow("registerToolsRpc: MCP methods need NEXT_STEPS.AUTH_REQUIRED")
     }))
 })
 
