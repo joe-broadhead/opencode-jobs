@@ -288,9 +288,11 @@ function startWorker(ctx: Plugin.Context, input: WorkerInput): Worker {
         onBeat: (at, ok) => void putBeat(ctx.storage, { at, ok }).catch(() => undefined),
       })
       input.deps.onWorker?.(worker)
-      // Adoption re-attaches to runs the last leader left busy; it must not block the loop.
+      // Adoption re-attaches to runs the last leader left busy; it must not block the loop. The runner above starts
+      // before adoption finishes, so adoption skips the runs this leadership is already executing.
+      const own = runner
       void jobs()
-        .then((known) => adopt({ storage: ctx.storage, session: ctx.session, clock: input.clock, active: () => leader.isLeader, jobs: known, signal: stopped.signal }))
+        .then((known) => adopt({ storage: ctx.storage, session: ctx.session, clock: input.clock, active: () => leader.isLeader, jobs: known, owned: (record) => own.owns(record.job, record.slot), signal: stopped.signal }))
         .then(() => runner?.wake(), () => undefined)
       if (input.loop) {
         runner.start()

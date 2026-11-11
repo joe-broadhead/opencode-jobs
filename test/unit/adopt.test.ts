@@ -27,7 +27,7 @@ const input = (overrides: { record?: RunRecord; session?: ReturnType<typeof sess
     clock,
     active,
     run: () =>
-      adopt({ storage: storage.storage, session: session.session, clock: clock.clock, active: () => active.current, jobs: [job()] }),
+      adopt({ storage: storage.storage, session: session.session, clock: clock.clock, active: () => active.current, jobs: [job()], owned: () => false }),
     record: overrides.record ?? running(),
   }
 }
@@ -63,6 +63,22 @@ describe("adoption after a reload or a crash", () => {
     expect(adopted.finalised[0]).toMatchObject({ status: "interrupted" })
   })
 
+  test("a run this leader's runner is still executing is not an orphan", async () => {
+    // The session is gone, so an adoption that did not skip the record would finalise it at once, not wait.
+    const setup = input({ session: sessionFake({ gone: true }) })
+    await putRun(setup.storage.storage, setup.record)
+    const adopted = await adopt({
+      storage: setup.storage.storage,
+      session: setup.session.session,
+      clock: setup.clock.clock,
+      active: () => true,
+      jobs: [job()],
+      owned: (record) => record.job === "five",
+    })
+    expect(adopted).toEqual({ finalised: [], reattached: 0 })
+    expect(await getRun(setup.storage.storage, "five", SLOT)).toMatchObject({ status: "running", sessionID: "ses_1" })
+  })
+
   test("a finished record is left alone", async () => {
     const setup = input()
     await putRun(setup.storage.storage, { ...setup.record, status: "succeeded", outcome: "succeeded", endedAt: START })
@@ -82,7 +98,7 @@ describe("adoption after a reload or a crash", () => {
       },
     }
     const setup = input({ storage: base, session: sessionFake({ answer: "done", outcome: "succeeded" }) })
-    const counted = { ...setup, run: () => adopt({ storage, session: setup.session.session, clock: setup.clock.clock, active: () => true, jobs: [job()] }) }
+    const counted = { ...setup, run: () => adopt({ storage, session: setup.session.session, clock: setup.clock.clock, active: () => true, jobs: [job()], owned: () => false }) }
     await putRun(base.storage, setup.record)
     const first = await counted.run()
     const second = await counted.run()

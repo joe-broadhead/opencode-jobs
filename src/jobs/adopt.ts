@@ -8,7 +8,8 @@
  *
  * Finalising exactly once is a check-then-write: the record is read again immediately before the write, and a record
  * that is no longer open is left alone. The old instance cooperates by writing nothing once it has stopped leading
- * (`execute.ts`), so the two leaders cannot both close the same record.
+ * (`execute.ts`), so the two leaders cannot both close the same record. A run the new leader's own runner is still
+ * executing is not an orphan: its execute finishes it, so adoption skips it.
  */
 import type { Clock } from "./clock.js"
 import { DEFAULTS, type Job } from "./model.js"
@@ -27,6 +28,11 @@ export interface AdoptInput {
   readonly active: () => boolean
   /** The jobs as this leader sees them, for their timeouts; a record whose job is gone gets the default timeout. */
   readonly jobs: readonly Job[]
+  /**
+   * True for a record this leader's runner is still executing. Its execute finishes that record, so adoption must not
+   * take it for an orphan: a timeout here would interrupt a run that is working.
+   */
+  readonly owned: (record: RunRecord) => boolean
   readonly signal?: AbortSignal
 }
 
@@ -53,6 +59,7 @@ export async function adopt(input: AdoptInput): Promise<Adopted> {
 
   for (const record of open) {
     if (!input.active()) break
+    if (input.owned(record)) continue
     const current = await getRun(storage, record.job, record.slot)
     if (current === undefined || isTerminal(current.status)) continue
 

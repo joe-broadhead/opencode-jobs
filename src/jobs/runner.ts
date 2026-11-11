@@ -92,6 +92,14 @@ export class Runner {
     this.door.ring()
   }
 
+  /**
+   * True while a run of this runner is in flight for the job's slot. Its execute writes the record, so adoption leaves
+   * it alone. A runner starts with no runs, so a record a previous leader left is never one of these.
+   */
+  owns(jobID: string, slotKey: string): boolean {
+    return [...(this.runs.get(jobID) ?? [])].some((handle) => slotISO(handle.slot) === slotKey)
+  }
+
   /** Stops starting anything new. In-flight runs keep their sessions; they write nothing once `active` is false. */
   stop(): void {
     this.looping = false
