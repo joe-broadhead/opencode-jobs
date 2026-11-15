@@ -256,6 +256,13 @@ describe("R18: the same policy for the ad-hoc jobs_run_script", () => {
     expect(run.asserted).toHaveLength(0)
   })
 
+  test("`all` approves a change with no prompt (OD-29)", async () => {
+    const run = setup()
+    // The fake has no session to run in, so the call fails after its approval; the approval itself asked nothing.
+    await once(run.gate, "all").catch(() => undefined)
+    expect(run.asserted).toHaveLength(0)
+  })
+
   test("`ask-changes` with nobody to answer refuses with JOBS_UNCHECKED, and no second attempt leaks an internal error", async () => {
     const run = setup({ answer: "no" })
     await expect(once(run.gate, "ask-changes")).rejects.toThrow(/JOBS_UNCHECKED: .*needs a person's approval/)

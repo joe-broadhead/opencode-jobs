@@ -110,8 +110,6 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
   const snapshots = await snapshotFiles(resolvedFiles, { policy })
   const controller = new AbortController()
   const stop = () => controller.abort()
-  if (input.signal?.aborted === true) stop()
-  else input.signal?.addEventListener("abort", stop, { once: true })
   const created = await input.session.create({
     location: { directory: input.location },
     agent: agentID,
@@ -120,6 +118,9 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
     metadata: { jobs: { script: "one-off" } },
   })
   rememberJobSession(created.id)
+  // The call's stop signal ends the script; the listener is removed in the `finally` below, whatever happens.
+  if (input.signal?.aborted === true) stop()
+  else input.signal?.addEventListener("abort", stop, { once: true })
   try {
     const bridge = createBridge({ rpc: input.rpc, tool: input.tool, session: input.session, agent: input.agentDomain, sessionID: created.id, agentID, manifest: resolved })
     const outcome = await runScript({
