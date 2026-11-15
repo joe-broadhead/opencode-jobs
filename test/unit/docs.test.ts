@@ -122,7 +122,13 @@ describe("docs", () => {
 
   test("under the default access no model-facing guide claims a tool asks (VERIFY item 16)", () => {
     for (const file of ["skills/jobs/SKILL.md", "docs/jelly.md"]) {
+      // Jelly's shared block is jelly's own text, word for word (the kit's drift check holds it byte for byte); it
+      // states what asks at each access level, so its lines are not this guide's claims.
+      let inBlock = false
       for (const line of text(file).split("\n")) {
+        if (line === "<!-- family-block:start -->") inBlock = true
+        if (line === "<!-- family-block:end -->") inBlock = false
+        if (inBlock) continue
         const falseClaim = /\basks\b/.test(line) && !line.includes("ask-changes") && !line.includes("agent asks")
         expect({ file, line, falseClaim }).toEqual({ file, line, falseClaim: false })
       }
