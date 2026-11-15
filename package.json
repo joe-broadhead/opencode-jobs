@@ -1,6 +1,6 @@
 {
   "name": "@joe-broadhead/opencode-jobs",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Unofficial OpenCode plugin that runs agent prompts, slash commands, reminders and no-model scripts on cron, interval and one-off schedules, inside OpenCode, with run history and unattended permissions",
   "keywords": [
@@ -37,7 +37,7 @@
     "CHANGELOG.md"
   ],
   "opencode": {
-    "host": ">=2.2.3 <2.3.0",
+    "host": ">=2.2.3 <2.4.0",
     "icons": [
       {
         "src": "assets/icon.svg",
@@ -197,7 +197,24 @@
           "label": "Access",
           "type": "string",
           "default": "all",
-          "description": "all, ask-changes or read-only. all allows every jobs tool; ask-changes asks before a change; read-only denies every change."
+          "choices": [
+            {
+              "value": "all",
+              "label": "Allowed",
+              "description": "Every tool runs without asking, reads and changes alike."
+            },
+            {
+              "value": "ask-changes",
+              "label": "Ask before changes",
+              "description": "Reads run without asking. Each change asks you first."
+            },
+            {
+              "value": "read-only",
+              "label": "Read only",
+              "description": "Reads run. Changes never run."
+            }
+          ],
+          "description": "What Jobs' tools and scripts may do without asking. Generates default rules for agents with a base allow rule."
         }
       ]
     }

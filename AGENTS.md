@@ -8,8 +8,8 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
 ## Rules
 
 - **Public API only.** Use only the public `@opencode/plugin` 2.2.3 API. `opencode.host` in `package.json` and
-  `SUPPORTED_HOST` in `src/constants.ts` both say exactly `>=2.2.3 <2.3.0`, never `^2.2.3`. `TESTED_HOSTS` in
-  `src/constants.ts` is the one list of tested releases (2.2.3, 2.2.4, 2.2.5 and 2.2.6): status calls only those tested, and
+  `SUPPORTED_HOST` in `src/constants.ts` both say exactly `>=2.2.3 <2.4.0`, never `^2.2.3`. `TESTED_HOSTS` in
+  `src/constants.ts` is the one list of tested releases (2.2.3 to 2.2.7 and 2.3.0): status calls only those tested, and
   the host and pack stages and CI run on each. Inside the range an untested release still starts.
 - **Greenfield.** No legacy, migration code, compatibility shim, dual path or deprecated alias, and nothing dead.
   Delete rather than deprecate.
@@ -21,8 +21,8 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   external. `tsc` only typechecks. No declaration files, and no `.tsx` or JSX in `dist/`; the TUI source is `src/tui.tsx`, built
   through Solid's Babel transform before esbuild.
 - **Default rules follow `access`, never a grant.** The plugin inserts one block after each agent's base allow, chosen by
-  the `access` option: `all` (the default) allows every `jobs_` tool; `ask-changes` asks for a change and allows the four
-  reads and the two pauses; `read-only` allows the reads and denies every change. It weakens no deny, and inserts
+  the `access` option: `all` (the default) allows every `jobs_` tool; `ask-changes` allows the four reads and asks for every
+  change, a pause included; `read-only` allows the reads and denies every change. It weakens no deny, and inserts
   nothing into an agent without a base allow. A job runs as the agent it names, and that agent's own `permissions` are
   its profile; a run's session rules only ever narrow them. An agent that does not deny by default is a status warning
   (`JOBS_AGENT_UNGUARDED`, the code kept and shown) and its job still runs. An agent the host no longer lists — a plugin
@@ -40,7 +40,8 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   `evaluate` one. Neither ever turns a deny into anything, and neither touches a session it did not create.
 - **Tools assert.** The host does not check a plugin tool's `options.permission` before running it, so every tool in
   `src/jobs/tools.ts` asserts its own action before it acts; `test/unit/permission-audit.test.ts` fails any write that
-  does not, and lists `jobs_pause`/`jobs_pause_all` as the one no-ask exception.
+  does not. Under `ask-changes` every one of them asks, the two pauses included; `/jobs-pause`, a command, is the
+  kill switch that never asks.
 - **The kill switch.** `pause/all` in the plugin's storage stops every job at once: the runner starts nothing and
   interrupts what is in flight, and `/jobs-pause` sets and clears it. `enabled: false` stops the runner at setup
   instead, and status says which of the two is in force.

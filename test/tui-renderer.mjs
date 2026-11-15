@@ -10,7 +10,7 @@ const { createComponent, createSignal, Show } = await import("solid-js")
 const { createElement, insert, testRender } = await import("@opentui/solid")
 const { default: plugin } = await import("../dist/tui.js")
 
-const HOST = { version: "2.2.3", range: ">=2.2.3 <2.3.0", tested: true }
+const HOST = { version: "2.2.3", range: ">=2.2.3 <2.4.0", tested: true }
 const RULE = { action: "*", resource: "*", effect: "deny" }
 const status = (overrides = {}) => ({
   version: "0.0.0-test",

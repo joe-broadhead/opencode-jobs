@@ -12,7 +12,9 @@ import { createReport } from "../../src/jobs/report.js"
 import { readJobFiles } from "../../src/jobs/files.js"
 import { execute } from "../../src/jobs/execute.js"
 import { runJobTool } from "../../src/jobs/tools.js"
-import { createScriptGate, type ScriptHost } from "../../src/jobs/script-gate.js"
+import { createScriptGate, scriptDecision, type ScriptHost } from "../../src/jobs/script-gate.js"
+import { approvalAccess, approvalResource, type ScriptApproval } from "../../src/jobs/script.js"
+import { defaultRules, evaluate } from "../../src/host/permissions.js"
 import { runScriptOnce } from "../../src/jobs/script-oneoff.js"
 import type { Script } from "../../src/jobs/script.js"
 import type { Access } from "../../src/options.js"
@@ -53,7 +55,7 @@ function setup(options: { readonly answer?: "yes" | "no" } = {}) {
   const storage = memoryStorage()
   const clock = testClock(NOW, { instantBelow: 0 })
   const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
-  const report = createReport({ storage: storage.storage, location: root, timezone: "UTC", clock: clock.clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20 })
+  const report = createReport({ storage: storage.storage, location: root, timezone: "UTC", clock: clock.clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }, enabled: true, keepAliveMinutes: 20 })
   const input: ActionInput = {
     storage: storage.storage,
     agent,
@@ -77,6 +79,38 @@ const readwriteFile = (mode: "read" | "write" | "readwrite"): Script => ({
   code: "return files.state;",
   uses: ["x.posts.read"],
   files: { state: { path: "state.json", mode, format: "json" } },
+})
+
+describe("OD-29: a script's one approval follows access like every other jobs tool", () => {
+  const ACCESS: readonly Access[] = ["all", "ask-changes", "read-only"]
+
+  test("all approves without a prompt; ask-changes asks for a change; read-only denies a change; a read never asks", () => {
+    expect(ACCESS.map((access) => [access, scriptDecision(access, "change"), scriptDecision(access, "read")])).toEqual([
+      ["all", "auto", "auto"],
+      ["ask-changes", "prompt", "auto"],
+      ["read-only", "deny", "auto"],
+    ])
+  })
+
+  test("the jobs_script prompt falls under the jobs_* pattern, which gives the same answer in the default rules", () => {
+    const expected = { all: "allow", "ask-changes": "ask", "read-only": "deny" } as const
+    for (const access of ACCESS) expect(evaluate([...ALLOW, ...defaultRules(access)], "jobs_script", approvalResource("x"))).toBe(expected[access])
+  })
+
+  test("a run re-checks an approval with the same answer the approval got", () => {
+    const tool = (cls: "read" | "write") => ({ method: "x.posts.m", action: "x_m", class: cls, kind: "family" as const, effect: "allow" as const })
+    const approval = (approved: "auto" | "prompt") => ({ approved }) as ScriptApproval
+    for (const access of ACCESS) {
+      for (const cls of ["read", "write"] as const) {
+        const decision = scriptDecision(access, cls === "read" ? "read" : "change")
+        const auto = approvalAccess(approval("auto"), [tool(cls)], [], access)
+        const prompted = approvalAccess(approval("prompt"), [tool(cls)], [], access)
+        if (decision === "auto") expect([auto, prompted]).toEqual([undefined, undefined])
+        if (decision === "prompt") expect([auto, prompted]).toEqual(["unapproved", undefined])
+        if (decision === "deny") expect([auto, prompted]).toEqual(["revoked", "revoked"])
+      }
+    }
+  })
 })
 
 describe("R18: the access policy decides a script's approval", () => {
@@ -152,7 +186,7 @@ test("an actual automatic approval becomes visible as unapproved or revoked afte
     })
     expect(result.record?.reason).toBe(access === "ask-changes" ? "unapproved" : "revoked")
     const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
-    const report = createReport({ storage: setupRun.storage.storage, location: root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20, access, scripts: setupRun.gate })
+    const report = createReport({ storage: setupRun.storage.storage, location: root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }, enabled: true, keepAliveMinutes: 20, access, scripts: setupRun.gate })
     const input = { ...setupRun.input, report, assert: async () => undefined }
     const listed = await runJobTool(input, "list", {})
     const got = await runJobTool(input, "get", { id: job.id })
@@ -174,7 +208,7 @@ test("approval points to the full tool or file job definition, and get returns t
   expect(toolRequest.metadata.script).toHaveLength(8192)
   const clock = testClock(NOW, { instantBelow: 0 }).clock
   const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
-  const report = createReport({ storage: setupRun.storage.storage, location: root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20, access: "ask-changes", scripts: setupRun.gate })
+  const report = createReport({ storage: setupRun.storage.storage, location: root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }, enabled: true, keepAliveMinutes: 20, access: "ask-changes", scripts: setupRun.gate })
   const got = await runJobTool({ ...setupRun.input, report, assert: async () => undefined }, "get", { id: toolJob.id })
   expect(got.output["job"]).toMatchObject({ action: { type: "script", script } })
   expect(got.text).toContain("x".repeat(9000))
@@ -219,6 +253,13 @@ describe("R18: the same policy for the ad-hoc jobs_run_script", () => {
   test("`read-only` denies a change before any session or prompt", async () => {
     const run = setup()
     await expect(once(run.gate, "read-only")).rejects.toThrow(/JOBS_SCRIPT_DENIED: .*"read-only"/)
+    expect(run.asserted).toHaveLength(0)
+  })
+
+  test("`all` approves a change with no prompt (OD-29)", async () => {
+    const run = setup()
+    // The fake has no session to run in, so the call fails after its approval; the approval itself asked nothing.
+    await once(run.gate, "all").catch(() => undefined)
     expect(run.asserted).toHaveLength(0)
   })
 

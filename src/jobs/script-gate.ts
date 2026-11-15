@@ -12,6 +12,7 @@ import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node
 import type { Plugin } from "@opencode/plugin"
 import { Rpc } from "@opencode/plugin/rpc"
 import { evaluate, type Rule } from "../host/permissions.js"
+import type { Access } from "../options.js"
 import { JobInputError } from "./model.js"
 import {
   approvalResource,
@@ -66,7 +67,10 @@ export interface ScriptGate {
     job?: string
     /** A file job's definition path, when the script comes from a job file. */
     jobFile?: string
-    /** `auto` under the access policy: record the digest and the resolved tools without prompting (R18). */
+    /**
+     * `auto` when `scriptDecision` approves without a prompt: record the digest and the resolved tools, and ask nothing.
+     * `prompt` (the default) asks the one digest-bound `jobs_script` prompt. A caller never passes a `deny` here.
+     */
     approved?: "auto" | "prompt"
   }): Promise<ScriptApproval>
   /**
@@ -74,6 +78,25 @@ export interface ScriptGate {
    * `external_directory`. Absent only in unit fakes (GAP-34, R19).
    */
   external?(input: { readonly agent: string; readonly project: string; readonly files: readonly ResolvedFile[]; readonly location?: string }): Promise<{ readonly name: string; readonly path: string; readonly resource: string } | undefined>
+}
+
+/**
+ * What the `access` option makes of a script's one approval, from the manifest's worst class (the methods it uses and
+ * the files it may write). It follows the family rule (OD-29), so a script is treated like any other jobs tool:
+ *
+ * - `all` (the default): approved without a prompt, reads and changes alike; the digest and the audit record are kept;
+ * - `ask-changes`: an all-read script is approved without a prompt, and a change asks once, through the digest-bound
+ *   `jobs_script` prompt;
+ * - `read-only`: an all-read script is approved without a prompt, and a change is denied.
+ *
+ * Every path that approves a script (a create or update, `jobs_approve`, a job file at load, a one-off run) takes its
+ * answer from here, so none of them can prompt at `all` or approve a change at `read-only`.
+ */
+export type ScriptDecision = "auto" | "prompt" | "deny"
+
+export function scriptDecision(access: Access, worst: "read" | "change"): ScriptDecision {
+  if (worst === "read" || access === "all") return "auto"
+  return access === "ask-changes" ? "prompt" : "deny"
 }
 
 /** How much source the approval prompt carries; the rest is named by `where`. */
@@ -309,6 +332,9 @@ export function createScriptGate(host: ScriptHost): ScriptGate {
     const bytes = Buffer.byteLength(input.script.code, "utf8")
     const head = input.script.code.slice(0, SOURCE_HEAD)
     const approved = input.approved ?? "prompt"
+    // The one prompt, bound to the digest. `scriptDecision` sends a script here only under `ask-changes`, for a change:
+    // at `all` nothing asks (OD-29), and at `read-only` a change was refused before this. The action also falls under
+    // the `jobs_*` pattern of the default rules, which follows `access` the same way (allow, ask, deny).
     if (approved === "prompt") await host.permission.assert({
       sessionID: input.sessionID,
       agent: input.agent,

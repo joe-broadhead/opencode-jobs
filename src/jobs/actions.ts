@@ -19,7 +19,7 @@ import type { Source } from "./report.js"
 import { approvalMatches, denied, worstClass, type ScriptApproval } from "./script.js"
 import type { Access } from "../options.js"
 import { resolveScriptFiles } from "./script-files.js"
-import type { ScriptGate } from "./script-gate.js"
+import { scriptDecision, type ScriptGate } from "./script-gate.js"
 import { getRun, putJob, putState, readState, removeJob, setPauseAll, slotISO, updateState, type PauseRecord } from "./store.js"
 
 export interface ActionInput {
@@ -133,9 +133,8 @@ async function scriptApproval(input: ActionInput, job: Job, call: ApprovalCall |
       `Add this rule to that agent's permissions: ${JSON.stringify({ action: "external_directory", resource: outside.resource, effect: "allow" })}, then approve the script again.`,
     )
   }
-  const access = input.access ?? "all"
-  const worst = worstClass(resolved, files)
-  if (access === "read-only" && worst === "change") {
+  const decision = scriptDecision(input.access ?? "all", worstClass(resolved, files))
+  if (decision === "deny") {
     throw jobsError(
       "JOBS_SCRIPT_DENIED",
       `The script ${JSON.stringify(job.id)} changes something, and the plugin's access option is "read-only".`,
@@ -144,8 +143,8 @@ async function scriptApproval(input: ActionInput, job: Job, call: ApprovalCall |
   }
   // An update that leaves the source, the manifest and the resolution unchanged keeps the approval it already had.
   if (previous !== undefined && approvalMatches(previous, job.action.script, resolved, files)) return previous
-  // R18/GAP-21: `all` approves automatically; `ask-changes` auto-approves an all-read script and asks for a change.
-  const approved = access === "all" || worst === "read" ? "auto" : "prompt"
+  // OD-29: `all` approves without a prompt; `ask-changes` approves an all-read script and asks once for a change.
+  const approved = decision
   try {
     return await input.scripts.approve({
       sessionID: call.sessionID,
@@ -192,10 +191,9 @@ export async function reconcileFileScripts(input: Pick<ActionInput, "storage" | 
     if (outside !== undefined) continue
     // A tool the agent denies is never run, so an approval for it would only be a record of a run that cannot happen (RR-7).
     if (denied(resolved).length > 0) continue
-    const access = input.access ?? "all"
-    const worst = worstClass(resolved, files)
-    if (access === "read-only" && worst === "change") continue
-    if (access === "ask-changes" && worst === "change") continue
+    // Only what `scriptDecision` approves without a prompt is approved here; a change under `ask-changes` waits for a
+    // person's /jobs-approve, and one under `read-only` is never approved.
+    if (scriptDecision(input.access ?? "all", worstClass(resolved, files)) !== "auto") continue
     const state = await readState(input.storage, job.id)
     if (approvalMatches(state.approval, job.action.script, resolved, files)) continue
     try {

@@ -11,7 +11,7 @@ Set options with the object form of the plugin entry. Every option is optional.
 {
   "plugins": [
     {
-      "package": "github:joe-broadhead/opencode-jobs#v0.0.0",
+      "package": "github:joe-broadhead/opencode-jobs#v0.0.1",
       "options": { "enabled": true, "concurrency": 2, "keepAliveMinutes": 20 }
     }
   ]
@@ -21,7 +21,7 @@ Set options with the object form of the plugin entry. Every option is optional.
 | Option | Values | Default | Effect |
 | --- | --- | --- | --- |
 | `enabled` | `true` or `false` | `true` | `false` stops the runner and leaves the tools, the commands, the dialog and both RPCs working. `/jobs-pause` pauses every job without a restart; this option stops the runner altogether. |
-| `allowUntestedHost` | `true` or `false` | `false` | Starts on an OpenCode version outside `>=2.2.3 <2.3.0`, with the `OpenCode` status row saying it is outside the range. |
+| `allowUntestedHost` | `true` or `false` | `false` | Starts on an OpenCode version outside `>=2.2.3 <2.4.0`, with the `OpenCode` status row saying it is outside the range. |
 | `timezone` | An IANA zone name, such as `Europe/London` | The server's zone | The zone a job that names none runs in. A job's own `tz` wins. |
 | `concurrency` | A whole number from 1 to 8 | `2` | How many runs may be in flight at once, across every job. It bounds cost and file contention, and a run that arrives while the cap is reached waits for the next free slot. |
 | `keepAliveMinutes` | A whole number of minutes from 1 to 59 | `20` | How often the plugin touches its location with an empty session, so the location is never idle-unloaded and the runner keeps running (D2). Keep it below `experimental.location_idle_timeout`; 20 is below the default 60. |
@@ -42,22 +42,21 @@ set: OpenCode's base `* * allow` is the grant. Jobs inserts one block directly a
   { "action": "jobs_status", "resource": "*", "effect": "allow" },
   { "action": "jobs_list", "resource": "*", "effect": "allow" },
   { "action": "jobs_get", "resource": "*", "effect": "allow" },
-  { "action": "jobs_history", "resource": "*", "effect": "allow" },
-  { "action": "jobs_pause", "resource": "*", "effect": "allow" },
-  { "action": "jobs_pause_all", "resource": "*", "effect": "allow" }
+  { "action": "jobs_history", "resource": "*", "effect": "allow" }
 ]
 ```
 
 That is `all`, the default. With `"access": "ask-changes"` the namespace rule is `jobs_* ask` and the same four reads
-and two pauses follow as explicit allows; with `"access": "read-only"` it is `jobs_* deny` plus the four reads. A tool
+follow as explicit allows, so every change asks, a pause included; with `"access": "read-only"` it is `jobs_* deny` plus the four reads. A tool
 the vendor adds later therefore runs under `all`, asks under `ask-changes` and is denied under `read-only`. Every later
 rule still wins, because the last match wins, so an agent's own `deny` or `allow` is untouched.
 
-The access option also decides a script's approval: `all` approves automatically (the digest and the audit record are
-still kept); `ask-changes` approves an all-read script with no file writes automatically and asks once per version for
+The access option also decides a script's approval, the same way it decides Jobs' own tools: `all` approves without a
+prompt (the digest and the audit record are still kept); `ask-changes` approves an all-read script with no file writes automatically and asks once per version for
 anything else; `read-only` allows the all-read case and denies the rest. **An `ask` with nobody present becomes a
-`deny`**, so a run never waits. Pausing every job needs no prompt under `all` or `ask-changes`, because it only stops
-work; under `read-only` even a pause is denied.
+`deny`**, so a run never waits. The `jobs_pause` and `jobs_pause_all` tools follow `access` like every other change:
+they run under `all`, ask under `ask-changes` and are denied under `read-only`. `/jobs-pause`, a command, does not go
+through these rules: it pauses every job without asking under any access.
 
 A job runs as the agent it names, and that agent's own `permissions` are the whole profile. The read-only profile to
 start from, pasted into `opencode.json`:
@@ -202,7 +201,7 @@ tools; `access: "ask-changes"` makes the changes ask, and `"read-only"` denies t
 | `jobs_get` | One job's definition, its runtime state and its last three runs. A script job also includes approval facts and a run's capped result. |
 | `jobs_history` | Recent runs, with each summary labelled as job output. Status and its RPC name what a run did, never what was said in it. |
 | `jobs_pause` | Pauses one job. |
-| `jobs_pause_all` | Pauses every job at once: the kill switch. It runs without asking, because it only stops work. |
+| `jobs_pause_all` | Pauses every job at once: the kill switch. It follows `access`; `/jobs-pause` does the same and never asks. |
 | `jobs_create` | Creates a job: name, schedule, action, agent, and optionally target, allow, policy, ends, expiry and jitter. |
 | `jobs_update` | Replaces fields of a job a tool created. |
 | `jobs_delete` | Deletes a job a tool created; its run records stay for history. |
@@ -289,7 +288,7 @@ Jobs status
 - Recent runs: Morning brief succeeded 4 s
 - Failures needing attention: none
 - Agents without default rules: none
-- OpenCode: 2.2.5 (tested; supported range >=2.2.3 <2.3.0)
+- OpenCode: 2.2.5 (tested; supported range >=2.2.3 <2.4.0)
 - Next step: Nothing to do.
 ```
 
@@ -332,7 +331,7 @@ its code and shown in status; it is not thrown at you.
 | Code | When | Next step |
 | --- | --- | --- |
 | `OPTIONS_INVALID` | An option is unknown, or its value is the wrong type or outside its range. | Fix the plugin options in opencode.json; the message names the accepted values and gives an example. |
-| `HOST_UNTESTED` | OpenCode is outside `>=2.2.3 <2.3.0`, and `allowUntestedHost` is not set. | Use a supported OpenCode, or set `"allowUntestedHost": true`. |
+| `HOST_UNTESTED` | OpenCode is outside `>=2.2.3 <2.4.0`, and `allowUntestedHost` is not set. | Use a supported OpenCode, or set `"allowUntestedHost": true`. |
 | `SKILLS_INVALID` | The jobs skill's file, `skills/jobs/SKILL.md`, is missing or its front matter does not name it, so the skill is not listed. | Reinstall the plugin. |
 | `STATUS_UNAVAILABLE` | The status could not be read, or the plugin is not running in this location. | Restart OpenCode, then run `/jobs-status` again. |
 | `JOBS_INVALID_SCHEDULE` | The schedule names two kinds or none, the cron expression is not five fields or never fires, the interval is under a minute, or the zone or time does not exist. | Use a five-field cron expression, an interval of at least a minute, and an IANA time zone such as `Europe/London`. |

@@ -15,6 +15,7 @@ import type { Clock } from "./clock.js"
 import { DEFAULTS, type Job } from "./model.js"
 import { getRun, putRun, scanRuns, type RunOutcome, type RunRecord, type RunStatus, type Storage } from "./store.js"
 import { isTerminal, summaryOf, type Session } from "./execute.js"
+import { forgetBackground, settle } from "./background.js"
 import { forgetJobSession, rememberJobSession } from "./safety.js"
 
 /** How long adoption waits for a busy run before its own interrupt, when the remaining timeout is spent. */
@@ -101,11 +102,10 @@ async function inspect(input: AdoptInput & { record: RunRecord }, reattach: () =
     reattach()
     const spent = record.startedAt === undefined ? 0 : clock.now() - record.startedAt
     const remaining = Math.max(MIN_WAIT, timeoutOf(input) - spent)
-    const wait = session.wait({ sessionID: record.sessionID }).then(
-      () => "done" as const,
-      () => "done" as const,
-    )
+    // As a fresh run does, it waits until the session is idle with no subagent or shell of its own still running.
+    const wait = settle(session, record.sessionID).then(() => "done" as const)
     const race = await Promise.race([wait, clock.sleep(remaining, input.signal).then(() => "timeout" as const)])
+    forgetBackground(record.sessionID)
     if (race === "timeout" && input.signal?.aborted !== true) await session.interrupt({ sessionID: record.sessionID }).catch(() => undefined)
   }
 

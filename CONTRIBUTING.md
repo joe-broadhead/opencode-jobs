@@ -6,7 +6,7 @@ repository and the APIs that must never appear in it.
 ## Set up
 
 You need Node.js 22.18 or later, npm, and [Bun](https://bun.sh). CI and the release use Node.js 24 and Bun 1.4.4,
-the Bun inside stock OpenCode 2.2.3, 2.2.4, 2.2.5 and 2.2.6.
+the Bun inside stock OpenCode 2.2.3 to 2.2.7 and 2.3.0.
 
 ```sh
 npm ci --ignore-scripts
@@ -42,8 +42,8 @@ npm run check
 | `unit` | `bun test ./test/unit`: every module in `src/`, the twelve tools, the status model, both RPC contracts, the docs, and the built TUI under OpenTUI 0.8's test renderer |
 | `build` | `node scripts/build.mjs`: deletes `dist/` and bundles `src/index.ts` and `src/tui.tsx` with esbuild into the self-contained `dist/index.js` and `dist/tui.js`. The TUI goes through Solid's universal transform first, so its props stay reactive. Fails if a bundle imports anything the host does not provide |
 | `icons` | `node scripts/check-icons.mjs`: the family's icon contract for `assets/icon.svg`, its two rasters and `opencode.icons` |
-| `host` | `bun test ./test/host`: the plugin inside an embedded OpenCode host, once on each tested release (`@opencode/sdk` 2.2.3, 2.2.4, 2.2.5 and 2.2.6) |
-| `pack` | `bun test ./test/pack`: builds, packs and installs the package, imports both entry points, and loads it in stock OpenCode 2.2.3, 2.2.4, 2.2.5 and 2.2.6 |
+| `host` | `bun test ./test/host`: the plugin inside an embedded OpenCode host, once on each tested release (`@opencode/sdk` 2.2.3 to 2.2.7 and 2.3.0) |
+| `pack` | `bun test ./test/pack`: builds, packs and installs the package, imports both entry points, and loads it in stock OpenCode 2.2.3 to 2.2.7 and 2.3.0 |
 | `forbidden` | `node scripts/check-forbidden.mjs`: scans `src/`, `test/`, `scripts/` and `dist/` for forbidden APIs and machine-local paths |
 | `copies` | `node scripts/check-copies.mjs`: the declaration kit (`test/support/jelly-kit.ts`) and the tools RPC outside its `PLUGIN-SPECIFIC` block equal the copy every plugin carries |
 | `whitelist` | Checks `package.json` against the approved package shape, and that `dist/` holds exactly `index.js`, `tui.js` and `quickjs.wasm`, the script runtime's data file |
@@ -59,14 +59,14 @@ node scripts/check.mjs typecheck unit
 Shortcuts: `npm run typecheck`, `npm run build`, `npm test` (the `unit` stage), `npm run test:host`,
 `npm run test:pack` and `npm run lint` (the `forbidden` stage).
 
-`TESTED_HOSTS` in `src/constants.ts` is the one list of tested OpenCode releases: 2.2.3, 2.2.4, 2.2.5 and 2.2.6. The host
+`TESTED_HOSTS` in `src/constants.ts` is the one list of tested OpenCode releases: 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7 and 2.3.0. The host
 and pack stages, status and CI all take their versions from it. Add a release there, and to the README's
 requirements, when every check passes on it.
 
 The host stage starts an embedded OpenCode host in a temporary home folder, once for each tested release. A request to
 any address other than the local machine fails the test. 2.2.3 is the locked `@opencode/sdk`; the stage installs the
 others from npm, outside this repository's lockfile, into a temporary folder that it deletes afterwards. To run the
-host stage on one other OpenCode 2.2.x only, install that SDK in a separate folder and point `HOST_SDK_DIR` at it:
+host stage on one other OpenCode release only, install that SDK in a separate folder and point `HOST_SDK_DIR` at it:
 
 ```sh
 mkdir ../sdk-2.2.6 && cd ../sdk-2.2.6 && npm init -y && npm install @opencode/sdk@2.2.6 --ignore-scripts && cd -
@@ -83,19 +83,20 @@ contains exactly the `files` whitelist, with fewer than 30 entries and at most 1
 `index.js` and `tui.js`, with no relative import, dynamic `import()` or `require()`; and that they import only modules
 OpenCode provides. It installs the tarball next to the host packages that OpenCode 2.2.3 provides, imports both entry
 points under Bun, then installs the tarball alone and loads it with `opencode serve` from stock OpenCode 2.2.3, 2.2.4,
-2.2.5 and 2.2.6, asserting that the plugin is active and that the status RPC answers. On each, it then reloads the plugin in place, as
+2.2.5, 2.2.6, 2.2.7 and 2.3.0, asserting that the plugin is active and that the status RPC answers. On each, it then reloads the plugin in place, as
 `opencode plugin update` does. Whether that leaves the plugin without the job's agent is a host race that some machines
 never lose: when it does, the test asserts that the job fails closed with `JOBS_AGENT_MISSING`, runs nothing and
 recovers; when it does not, that the plugin kept the agent. It then takes the agent out of the
 configuration and reloads, so every machine asserts that the job fails closed, runs nothing across a slot, and runs the
 next slot exactly once when the agent is back.
 
-To use `opencode` binaries you already have, set `OPENCODE_BIN_2_2_3`, `OPENCODE_BIN_2_2_4` and `OPENCODE_BIN_2_2_5`:
+To use `opencode` binaries you already have, set `OPENCODE_BIN_<version>` for each, such as `OPENCODE_BIN_2_3_0`:
 
 ```sh
 OPENCODE_BIN_2_2_3=/path/to/opencode-2.2.3 OPENCODE_BIN_2_2_4=/path/to/opencode-2.2.4 \
   OPENCODE_BIN_2_2_5=/path/to/opencode-2.2.5 \
-  OPENCODE_BIN_2_2_6=/path/to/opencode-2.2.6 node scripts/check.mjs pack
+  OPENCODE_BIN_2_2_6=/path/to/opencode-2.2.6 OPENCODE_BIN_2_2_7=/path/to/opencode-2.2.7 \
+  OPENCODE_BIN_2_3_0=/path/to/opencode-2.3.0 node scripts/check.mjs pack
 ```
 
 Otherwise the stage installs `@opencode/cli` with the binary for your platform (macOS or Linux, arm64 or x64), a few
@@ -180,7 +181,7 @@ Before the approval, the workflow:
 - **verifies** on a fresh runner: the commit's identity, one parent on `master`, `package.json` exactly the parent's
   without the lifecycle scripts, only regular files in the allowed paths, no `package.json` under `dist/`, and a second,
   independent build of the parent (its own job) equal to the committed `dist/` byte for byte;
-- **installs** the release commit with `plugin add` on each stock OpenCode host (2.2.3 to 2.2.6);
+- **installs** the release commit with `plugin add` on each stock OpenCode host (2.2.3 to 2.2.7 and 2.3.0);
 - **packs** the commit before installing anything and keeps that tarball, then runs the pack stage against a copy;
 - **stages** the Release: verifies the attested native files, writes `SHA256SUMS` and the notes (the version's CHANGELOG
   section), and shows them all in the run summary with the sha256 of `SHA256SUMS`.

@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.1] - 2026-11-15
+
+### Changed
+
+- Admits OpenCode 2.3: the host range is `>=2.2.3 <2.4.0`, tested on 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7 and 2.3.0.
+- A job run that starts a subagent waits for it. From OpenCode 2.3.0 every subagent runs in the background, so a run
+  is finished only when its session is idle with no subagent or shell of its own still running; before, it was
+  recorded at the first idle, with a partial summary. The job's timeout still bounds the whole run.
+- A person's Stop ends a `jobs_run_script` call's script (OpenCode 2.3.0 aborts the call's signal on Stop): it ends as
+  interrupted (`JOBS_SCRIPT_INTERRUPTED`) and writes none of its declared files.
+- Jelly: the `access` setting offers Jelly's three choices, "Allowed" (`all`, the default), "Ask before changes"
+  (`ask-changes`) and "Read only" (`read-only`), so Jelly shows a choice instead of a free text field (needs a Jelly
+  that includes app#1301).
+- A script's approval follows `access` like every other Jobs tool: at the default `all` no script asks for approval;
+  `ask-changes` asks once, through the digest-bound `jobs_script` prompt, before a script that can change something;
+  `read-only` denies one. Every path that approves a script (create, update, `jobs_approve`, a job file at load, a
+  one-off run) takes the answer from one place, and the docs and the skill say so.
+- Jelly: the declaration is checked against the tool registry: the fourteen tools, in order, each `allow` at the
+  default access, with the four reads read-only and the two pauses, like every other change, not read-only.
+  `docs/jelly.md` now says what each access value does in Jelly, and that the `access` setting is declared.
+- Under `ask-changes`, `jobs_pause` and `jobs_pause_all` ask like every other change (they were allowed), so the
+  plugin's own rules give what Jelly gives the same declaration: only the four reads run without asking.
+  `/jobs-pause`, a command, still pauses every job without asking.
+- Releases come from the family's release kit: the release workflow is started on a `master` commit whose CI passed,
+  makes the release commit itself, and creates the tag and the GitHub Release only after the owner approves. Pull
+  requests run CI on Linux; a push to `master` also runs macOS. Jobs ships no native files, so a release carries none.
+- `npm run check` runs the kit's tool drift check. Jobs serves only its own tools (`test/fixtures/tool-registry.json`
+  says `"upstream": "none"`), so no live capture is expected.
+- `package.json` is `"private": true`, so nothing can be published to npm by mistake. Installs from the GitHub release
+  tag are unaffected.
+
 ## [0.0.0] - 2026-11-10
 
 ### Added

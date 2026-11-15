@@ -10,7 +10,7 @@ import { MISSING_NEXT } from "../../src/host/permissions.js"
 import { createFileWatch } from "../../src/jobs/watch.js"
 
 const NOW = Date.UTC(2026, 11, 6, 9, 0, 0)
-const HOST = { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }
+const HOST = { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }
 const RULES = [
   { action: "*", resource: "*", effect: "deny" as const },
   { action: "read", resource: "*", effect: "allow" as const },

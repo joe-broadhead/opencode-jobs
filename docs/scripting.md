@@ -135,7 +135,7 @@ action:
   granted.
 - **One approval.** `jobs_create`, `jobs_update` and `jobs_run_script` bind the script to
   `script:sha256:<digest>`, where the digest covers the source, the sorted manifest and the declared files. Under the
-  default `access: "all"` the approval is automatic and recorded (the digest is still computed, and a changed source,
+  default `access: "all"` the approval is automatic, with no prompt, and recorded, as every Jobs tool is allowed there (the digest is still computed, and a changed source,
   manifest or file declaration is re-digested); under `ask-changes` a script whose manifest is all reads and whose files
   are all `read` is approved automatically, and anything else asserts `jobs_script` once, showing the source, each
   tool's class and one line per file; `read-only` denies a script that changes anything. The prompt's "Always allow"

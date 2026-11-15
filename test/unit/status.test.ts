@@ -12,7 +12,7 @@ import {
 } from "../../src/status.js"
 
 const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string }
-const TESTED = { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }
+const TESTED = { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }
 const facts = (overrides: Partial<StatusFacts> = {}): StatusFacts => ({ host: TESTED, enabled: true, keepAliveMinutes: 20, ...overrides })
 const runner = { location: "/work", pid: 41, since: Date.UTC(2026, 11, 6, 8, 0, 0) }
 const job = (id: string, name: string, at: number) => ({ id, name, at })
@@ -97,7 +97,7 @@ describe("the status text", () => {
         "- Recent runs: none",
         "- Failures needing attention: none",
         "- Agents without default rules: none",
-        "- OpenCode: 2.2.5 (tested; supported range >=2.2.3 <2.3.0)",
+        "- OpenCode: 2.2.5 (tested; supported range >=2.2.3 <2.4.0)",
         `- Next step: ${NOTHING_TO_DO}`,
       ].join("\n"),
     )
@@ -140,11 +140,11 @@ describe("the status text", () => {
   })
 
   test("calls an untested release untested, and explains the override outside the range", () => {
-    expect(formatStatus(buildStatus(facts({ host: { version: "2.2.6", range: ">=2.2.3 <2.3.0", tested: false } })))).toContain(
-      "- OpenCode: 2.2.6 (untested; supported range >=2.2.3 <2.3.0)",
+    expect(formatStatus(buildStatus(facts({ host: { version: "2.2.10", range: ">=2.2.3 <2.4.0", tested: false } })))).toContain(
+      "- OpenCode: 2.2.10 (untested; supported range >=2.2.3 <2.4.0)",
     )
-    expect(formatStatus(buildStatus(facts({ host: { version: "2.3.0", range: ">=2.2.3 <2.3.0", tested: false } })))).toContain(
-      "It is outside the supported range; the plugin runs because allowUntestedHost is true. If a job misbehaves, use OpenCode 2.2.3, 2.2.4, 2.2.5 or 2.2.6.",
+    expect(formatStatus(buildStatus(facts({ host: { version: "2.4.0", range: ">=2.2.3 <2.4.0", tested: false } })))).toContain(
+      "It is outside the supported range; the plugin runs because allowUntestedHost is true. If a job misbehaves, use OpenCode 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7 or 2.3.0.",
     )
   })
 

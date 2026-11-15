@@ -18,6 +18,7 @@ import type { Job, JobAction } from "./model.js"
 import { forgetJobSession, jobOutput, openJobSession, SELF_DENIES } from "./safety.js"
 import { approvalAccess, approvalMatches, denied, limitsOf, manifestDigest, scriptSessionRules, sourceHash, type Script } from "./script.js"
 import { createBridge } from "./script-bridge.js"
+import { forgetBackground, settle } from "./background.js"
 import type { ScriptGate } from "./script-gate.js"
 import { commitFiles, filePolicy, resolveScriptFiles, snapshotFiles, FileCommitError, type FileRecord, type FileSnapshot } from "./script-files.js"
 import { runScript } from "./script-runtime.js"
@@ -315,15 +316,18 @@ async function paused(input: Pick<ExecuteInput, "storage">): Promise<boolean> {
  * A cleanup during the wait returns `done`, so the old instance never interrupts a session the new leader adopts.
  */
 async function bounded(input: { session: Session; sessionID: string; timeoutMs: number; clock: Clock; signal?: AbortSignal; interrupt: () => Promise<void> }): Promise<"done" | "timeout"> {
-  const wait = input.session.wait({ sessionID: input.sessionID }).then(
-    () => "done" as const,
-    () => "done" as const,
-  )
-  const race = await Promise.race([wait, input.clock.sleep(input.timeoutMs, input.signal).then(() => "timeout" as const)])
-  if (race === "done" || input.signal?.aborted === true) return "done"
-  await input.interrupt()
-  await Promise.race([wait, input.clock.sleep(INTERRUPT_GRACE, input.signal)])
-  return "timeout"
+  // A run's session is done when it is idle with no subagent or shell of its own still running (OpenCode 2.3.0 runs
+  // every subagent in the background); see background.ts.
+  const wait = settle(input.session, input.sessionID).then(() => "done" as const)
+  try {
+    const race = await Promise.race([wait, input.clock.sleep(input.timeoutMs, input.signal).then(() => "timeout" as const)])
+    if (race === "done" || input.signal?.aborted === true) return "done"
+    await input.interrupt()
+    await Promise.race([wait, input.clock.sleep(INTERRUPT_GRACE, input.signal)])
+    return "timeout"
+  } finally {
+    forgetBackground(input.sessionID)
+  }
 }
 
 /** The outcome the host reports, which is the source of truth after a wait, and the last assistant text as the summary. */
