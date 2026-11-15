@@ -137,7 +137,8 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         await registerSafety(ctx.permission),
         // A run is finished only when its session is idle with no subagent or shell of its own still running.
         await registerBackground(ctx.session),
-        // Every agent gets the default rules after its base allow: the jobs tools ask, the reads and pauses are allowed.
+        // Every agent gets the default rules after its base allow, by `access`: at the default `all` every jobs tool runs;
+        // at `ask-changes` the four reads run and every other tool asks; at `read-only` only the four reads run.
         await ctx.agent.transform((editor) => {
           for (const { id } of editor.list()) editor.update(id, (info) => insertDefaultRules(info.permissions, options.access))
         }).then((registration) => registration.dispose),

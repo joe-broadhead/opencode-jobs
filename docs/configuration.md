@@ -42,22 +42,21 @@ set: OpenCode's base `* * allow` is the grant. Jobs inserts one block directly a
   { "action": "jobs_status", "resource": "*", "effect": "allow" },
   { "action": "jobs_list", "resource": "*", "effect": "allow" },
   { "action": "jobs_get", "resource": "*", "effect": "allow" },
-  { "action": "jobs_history", "resource": "*", "effect": "allow" },
-  { "action": "jobs_pause", "resource": "*", "effect": "allow" },
-  { "action": "jobs_pause_all", "resource": "*", "effect": "allow" }
+  { "action": "jobs_history", "resource": "*", "effect": "allow" }
 ]
 ```
 
 That is `all`, the default. With `"access": "ask-changes"` the namespace rule is `jobs_* ask` and the same four reads
-and two pauses follow as explicit allows; with `"access": "read-only"` it is `jobs_* deny` plus the four reads. A tool
+follow as explicit allows, so every change asks, a pause included; with `"access": "read-only"` it is `jobs_* deny` plus the four reads. A tool
 the vendor adds later therefore runs under `all`, asks under `ask-changes` and is denied under `read-only`. Every later
 rule still wins, because the last match wins, so an agent's own `deny` or `allow` is untouched.
 
 The access option also decides a script's approval, the same way it decides Jobs' own tools: `all` approves without a
 prompt (the digest and the audit record are still kept); `ask-changes` approves an all-read script with no file writes automatically and asks once per version for
 anything else; `read-only` allows the all-read case and denies the rest. **An `ask` with nobody present becomes a
-`deny`**, so a run never waits. Pausing every job needs no prompt under `all` or `ask-changes`, because it only stops
-work; under `read-only` even a pause is denied.
+`deny`**, so a run never waits. The `jobs_pause` and `jobs_pause_all` tools follow `access` like every other change:
+they run under `all`, ask under `ask-changes` and are denied under `read-only`. `/jobs-pause`, a command, does not go
+through these rules: it pauses every job without asking under any access.
 
 A job runs as the agent it names, and that agent's own `permissions` are the whole profile. The read-only profile to
 start from, pasted into `opencode.json`:
@@ -202,7 +201,7 @@ tools; `access: "ask-changes"` makes the changes ask, and `"read-only"` denies t
 | `jobs_get` | One job's definition, its runtime state and its last three runs. A script job also includes approval facts and a run's capped result. |
 | `jobs_history` | Recent runs, with each summary labelled as job output. Status and its RPC name what a run did, never what was said in it. |
 | `jobs_pause` | Pauses one job. |
-| `jobs_pause_all` | Pauses every job at once: the kill switch. It runs without asking, because it only stops work. |
+| `jobs_pause_all` | Pauses every job at once: the kill switch. It follows `access`; `/jobs-pause` does the same and never asks. |
 | `jobs_create` | Creates a job: name, schedule, action, agent, and optionally target, allow, policy, ends, expiry and jitter. |
 | `jobs_update` | Replaces fields of a job a tool created. |
 | `jobs_delete` | Deletes a job a tool created; its run records stay for history. |

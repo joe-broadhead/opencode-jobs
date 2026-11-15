@@ -64,9 +64,9 @@ its file writes. At `read-only` an all-read script runs, and a script that can c
 approval included. `jobs_script` is an approval, not a tool, so it is not in `jelly.tools`; it falls under the `jobs_*`
 pattern, which follows `access` the same way.
 
-In OpenCode, the plugin's own default rules, inserted after an agent's base allow, give the same results, except that
-under `ask-changes` they also let the two pauses run, because a pause only stops work. A *job* still runs as the agent
-it names, and only that agent's own `permissions` can grant a tool a job needs.
+In OpenCode, the plugin's own default rules, inserted after an agent's base allow, give the same results for every
+access value. `/jobs-pause`, an OpenCode command, is a kill switch that runs with no prompt. A *job* still runs as the
+agent it names, and only that agent's own `permissions` can grant a tool a job needs.
 
 ## Skills, RPC and views
 

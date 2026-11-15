@@ -41,7 +41,8 @@ A new release is a new tag: install it with its own `#v<version>` spec.
 The model has fourteen `jobs_*` tools: `jobs_status`, `jobs_list`, `jobs_get` and `jobs_history` read, `jobs_pause` and
 `jobs_pause_all` pause, `jobs_create`, `jobs_update`, `jobs_delete`, `jobs_run_now`, `jobs_resume`, `jobs_extend`,
 `jobs_approve` and `jobs_run_script` change a job or run a script. The default `access: "all"` allows every tool;
-`ask-changes` asks for changes except pauses, and `read-only` denies changes. `jobs_history` returns run summaries and
+`ask-changes` asks before every change, a pause included, and `read-only` denies changes; `/jobs-pause`, a command,
+pauses every job without asking under any access. `jobs_history` returns run summaries and
 script results; `jobs_get` also returns a script run's capped result. A failed run is retried for its slot by `policy.retries`, and `notify` posts a run's
 outcome into a session as job output.
 
@@ -117,7 +118,7 @@ The `access` option picks the block the plugin inserts after each agent's base r
 | `access` | Jobs' own tools | A script |
 | --- | --- | --- |
 | `all` (default) | allowed, like every other plugin's tools | approved automatically; the digest and the audit record are still kept |
-| `ask-changes` | the four reads and the two pauses are allowed; every change asks | an all-read script with no file writes is approved automatically; anything else asks once per version |
+| `ask-changes` | the four reads are allowed; every change, a pause included, asks | an all-read script with no file writes is approved automatically; anything else asks once per version |
 | `read-only` | the four reads are allowed; every change is denied | an all-read script with no file writes is allowed; anything else is denied |
 
 A script follows `access` like every other Jobs tool: at the default `all` no script asks for approval, `ask-changes`

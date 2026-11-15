@@ -20,8 +20,10 @@ All notable changes to this project are documented here. The format follows [Kee
   one-off run) takes the answer from one place, and the docs and the skill say so.
 - Jelly: the declaration is checked against the tool registry: the fourteen tools, in order, each `allow` at the
   default access, with the four reads read-only and the two pauses, like every other change, not read-only.
-  `docs/jelly.md` now says what each access value does in Jelly, that the two pauses ask under "Ask before changes"
-  there, and that the `access` setting is declared.
+  `docs/jelly.md` now says what each access value does in Jelly, and that the `access` setting is declared.
+- Under `ask-changes`, `jobs_pause` and `jobs_pause_all` ask like every other change (they were allowed), so the
+  plugin's own rules give what Jelly gives the same declaration: only the four reads run without asking.
+  `/jobs-pause`, a command, still pauses every job without asking.
 
 ## [0.0.0] - 2026-11-10
 

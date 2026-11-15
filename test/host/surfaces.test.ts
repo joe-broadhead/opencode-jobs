@@ -106,7 +106,7 @@ describe(`the surfaces in OpenCode ${HOST_VERSION}`, () => {
     }
   }, 120_000)
 
-  test("a read runs without asking, and a write asks for approval under ask-changes", async () => {
+  test("a read runs without asking, and a write or a pause asks for approval under ask-changes", async () => {
     const host = await startHost({ loop: false, config: { agents: GUARDED }, options: { access: "ask-changes" } })
     try {
       const read = await session(host, "build")
@@ -132,6 +132,17 @@ describe(`the surfaces in OpenCode ${HOST_VERSION}`, () => {
       await host.probe().permission.reply({ sessionID: write, requestID: request.id, decision: "reject", message: "not now" })
       await until("the turn ends", async () => (await host.probe().session.get({ sessionID: write })).outcome !== undefined, 30_000)
       expect((await sessionList(host)).filter((name) => name === "Nightly")).toEqual([])
+
+      // A pause changes a job's state, so it asks too, as Jelly asks for it (`/jobs-pause`, a command, never asks).
+      const pause = await session(host, "build")
+      await code(host, pause, "const r = await tools.jobs.pause_all({}); return JSON.stringify(r)")
+      const paused = await until("the pause asks", async () => {
+        const list = (await host.probe().permission.list({ sessionID: pause })) as PermissionRequest[]
+        return list.find((entry) => entry.action === "jobs_pause_all")
+      }, 30_000)
+      expect(paused.action).toBe("jobs_pause_all")
+      await host.probe().permission.reply({ sessionID: pause, requestID: paused.id, decision: "reject", message: "not now" })
+      await until("the pause turn ends", async () => (await host.probe().session.get({ sessionID: pause })).outcome !== undefined, 30_000)
     } finally {
       await host.close()
     }

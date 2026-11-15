@@ -12,15 +12,15 @@ import { agentsFake, memoryStorage, testClock } from "./fake.js"
 const NOW = Date.UTC(2026, 11, 6, 9, 0, 0)
 const HOST = { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }
 
-/** The actions the default rules leave open on purpose: pausing only stops work. */
-const OPEN = ["jobs_pause", "jobs_pause_all"]
+/** The four reads: the only actions the `ask-changes` rules allow, as in Jelly, where they are the read-only tools. */
+const READS = ["jobs_status", "jobs_list", "jobs_get", "jobs_history"]
 
 /** What the default rules do with one tool's action, from the block the plugin inserts. */
 const ASK = defaultRules("ask-changes")
 const defaultEffect = (action: string): Rule["effect"] => evaluateRule(ASK, action)
 
 /** The default rule of a tool: `ask` means it must assert, `allow` means it needs to prove it does not act. */
-const askTools = (): ToolName[] => (Object.keys(SCHEMAS) as ToolName[]).filter((name) => !OPEN.includes(toolId(name)) && defaultEffect(toolId(name)) === "ask")
+const askTools = (): ToolName[] => (Object.keys(SCHEMAS) as ToolName[]).filter((name) => defaultEffect(toolId(name)) === "ask")
 
 function harness() {
   const storage = memoryStorage()
@@ -97,14 +97,12 @@ const entries = () =>
   }))
 
 describe("every tool that changes something asserts before it acts", () => {
-  test("the default rules ask for every change, and allow only the reads and the two pauses", () => {
+  test("the ask-changes rules ask for every change, the two pauses included, and allow only the four reads", () => {
     for (const name of Object.keys(SCHEMAS) as ToolName[]) {
       const action = toolId(name)
-      const reads = ["jobs_status", "jobs_list", "jobs_get", "jobs_history"].includes(action)
-      if (reads || OPEN.includes(action)) expect({ action, effect: defaultEffect(action) }).toEqual({ action, effect: "allow" })
-      else expect({ action, effect: defaultEffect(action) }).toEqual({ action, effect: "ask" })
+      expect({ action, effect: defaultEffect(action) }).toEqual({ action, effect: READS.includes(action) ? "allow" : "ask" })
     }
-    expect(askTools()).toEqual(["create", "update", "delete", "run_now", "resume", "extend", "approve", "run_script"])
+    expect(askTools()).toEqual(["pause", "pause_all", "create", "update", "delete", "run_now", "resume", "extend", "approve", "run_script"])
   })
 
   test("under the default access, no tool description claims a tool asks (VERIFY item 16)", () => {
@@ -121,12 +119,11 @@ describe("every tool that changes something asserts before it acts", () => {
   })
 
   test("the three access values drive the block: all allows every tool, ask-changes asks changes, read-only denies them", () => {
-    const reads = ["jobs_status", "jobs_list", "jobs_get", "jobs_history"]
-    for (const [access, change, pause] of [["all", "allow", "allow"], ["ask-changes", "ask", "allow"], ["read-only", "deny", "deny"]] as const) {
+    for (const [access, change] of [["all", "allow"], ["ask-changes", "ask"], ["read-only", "deny"]] as const) {
       const block = defaultRules(access)
       for (const name of Object.keys(SCHEMAS) as ToolName[]) {
         const action = toolId(name)
-        const want = reads.includes(action) ? "allow" : OPEN.includes(action) ? pause : change
+        const want = READS.includes(action) ? "allow" : change
         expect({ access, action, effect: evaluateRule(block, action) }).toEqual({ access, action, effect: want })
       }
     }
@@ -150,13 +147,12 @@ describe("every tool that changes something asserts before it acts", () => {
     expect(await unasserted(unguarded)).toEqual(["delete"])
   })
 
-  test("the two pause tools are the listed exception, and the reason is that they only stop work", async () => {
+  test("the two pause tools assert their own action, and ask under ask-changes like every other change", async () => {
     for (const name of ["pause", "pause_all"] as const) {
       const { input, asked } = harness()
       await runJobTool(input, name, SAMPLE[name], { sessionID: "ses_1", agent: "build", messageID: "msg_1", id: "call_1" }).catch(() => undefined)
-      // They do assert (a user rule may ask about a pause); the exception is that the default rules do not.
       expect(asked[0]).toMatchObject({ action: toolId(name) })
-      expect(defaultEffect(toolId(name))).toBe("allow")
+      expect(defaultEffect(toolId(name))).toBe("ask")
     }
   })
 
