@@ -23,7 +23,7 @@ Run `opencode reload`, or restart OpenCode, then run `/jobs-status`.
 
 `opencode plugin add opencode-jobs` (unscoped) installs a different, unrelated systemd plugin.
 
-Each release has its own tag, and a Git install does not update by itself. To move to a newer release, remove the old entry with `opencode plugin remove github:joe-broadhead/opencode-jobs#v0.0.0`, then add the new tag with `opencode plugin add github:joe-broadhead/opencode-jobs#v<version>`.
+Each release has its own tag, and a Git install does not update by itself. To move to a newer release, remove the old entry with `opencode plugin remove github:joe-broadhead/opencode-jobs#v<old version>`, then add the new tag with `opencode plugin add github:joe-broadhead/opencode-jobs#v<version>`.
 
 The install takes the GitHub release tag. Its commit carries the built `dist/`, so the install runs no build.
 A new release is a new tag: install it with its own `#v<version>` spec.
