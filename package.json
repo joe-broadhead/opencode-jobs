@@ -197,7 +197,24 @@
           "label": "Access",
           "type": "string",
           "default": "all",
-          "description": "all, ask-changes or read-only. all allows every jobs tool; ask-changes asks before a change; read-only denies every change."
+          "choices": [
+            {
+              "value": "all",
+              "label": "Allowed",
+              "description": "Every tool runs without asking, reads and changes alike."
+            },
+            {
+              "value": "ask-changes",
+              "label": "Ask before changes",
+              "description": "Reads run without asking. Each change asks you first."
+            },
+            {
+              "value": "read-only",
+              "label": "Read only",
+              "description": "Reads run. Changes never run."
+            }
+          ],
+          "description": "What Jobs' tools and scripts may do without asking. Generates default rules for agents with a base allow rule."
         }
       ]
     }

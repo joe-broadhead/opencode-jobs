@@ -1,5 +1,5 @@
 /**
- * The twelve `jobs_*` tools, and the same reads as the tools RPC's methods: one schema each, one compact output, and
+ * The fourteen `jobs_*` tools, and the same reads as the tools RPC's methods: one schema each, one compact output, and
  * the actions in `actions.ts`, so a tool, a script and a command cannot disagree.
  *
  * The default block follows `access`: every tool runs under `all`; under `ask-changes` a change asks and the prompt is the yes
@@ -397,7 +397,7 @@ export function toolTransform(input: ToolInput) {
 
 
 /** Every method's class. The class never decides whether a call runs: the rules do. It is what describe and the approval show. */
-const CLASS_OF: Readonly<Record<ToolName, MethodClass>> = {
+export const CLASS_OF: Readonly<Record<ToolName, MethodClass>> = {
   status: "read",
   list: "read",
   get: "read",
