@@ -17,6 +17,7 @@ import { approveJob } from "./jobs/actions.js"
 import { createScriptGate, type ScriptGate } from "./jobs/script-gate.js"
 import { runScriptOnce } from "./jobs/script-oneoff.js"
 import { registerSafety } from "./jobs/safety.js"
+import { registerBackground } from "./jobs/background.js"
 import { Runner } from "./jobs/runner.js"
 import { migrate, pruneWithSessions, putBeat, readPauseAll } from "./jobs/store.js"
 import { ownedMethods, toolTransform, type ToolInput } from "./jobs/tools.js"
@@ -95,7 +96,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         ...actions,
         report,
         assert: (check) => ctx.permission.assert(check),
-        runScriptOnce: (definition, call) =>
+        runScriptOnce: (definition, call, signal) =>
           runScriptOnce({
             definition,
             ...(typeof (definition as { agent?: unknown }).agent === "string" ? { agent: (definition as { agent: string }).agent } : {}),
@@ -112,6 +113,7 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
             roots: options.scriptFilesRoots,
             access: options.access,
             job: { id: "script", name: "Script" },
+            ...(signal === undefined ? {} : { signal }),
           }),
       }
       // The jobs skill, read from the package root: OpenCode lists it, so a question about scheduled jobs loads it.
@@ -133,6 +135,8 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
         await registerToolsRpc(ctx, { methods: ownedMethods(tools) }),
         // The one evaluate hook: a run of ours never waits for an approval nobody can give.
         await registerSafety(ctx.permission),
+        // A run is finished only when its session is idle with no subagent or shell of its own still running.
+        await registerBackground(ctx.session),
         // Every agent gets the default rules after its base allow: the jobs tools ask, the reads and pauses are allowed.
         await ctx.agent.transform((editor) => {
           for (const { id } of editor.list()) editor.update(id, (info) => insertDefaultRules(info.permissions, options.access))
