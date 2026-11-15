@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.0.1] - 2026-11-15
 
 ### Changed
 
@@ -13,7 +13,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - A person's Stop ends a `jobs_run_script` call's script (OpenCode 2.3.0 aborts the call's signal on Stop): it ends as
   interrupted (`JOBS_SCRIPT_INTERRUPTED`) and writes none of its declared files.
 - Jelly: the `access` setting offers Jelly's three choices, "Allowed" (`all`, the default), "Ask before changes"
-  (`ask-changes`) and "Read only" (`read-only`), so Jelly shows a choice instead of a free text field.
+  (`ask-changes`) and "Read only" (`read-only`), so Jelly shows a choice instead of a free text field (needs a Jelly
+  that includes app#1301).
 - A script's approval follows `access` like every other Jobs tool: at the default `all` no script asks for approval;
   `ask-changes` asks once, through the digest-bound `jobs_script` prompt, before a script that can change something;
   `read-only` denies one. Every path that approves a script (create, update, `jobs_approve`, a job file at load, a
@@ -24,6 +25,13 @@ All notable changes to this project are documented here. The format follows [Kee
 - Under `ask-changes`, `jobs_pause` and `jobs_pause_all` ask like every other change (they were allowed), so the
   plugin's own rules give what Jelly gives the same declaration: only the four reads run without asking.
   `/jobs-pause`, a command, still pauses every job without asking.
+- Releases come from the family's release kit: the release workflow is started on a `master` commit whose CI passed,
+  makes the release commit itself, and creates the tag and the GitHub Release only after the owner approves. Pull
+  requests run CI on Linux; a push to `master` also runs macOS. Jobs ships no native files, so a release carries none.
+- `npm run check` runs the kit's tool drift check. Jobs serves only its own tools (`test/fixtures/tool-registry.json`
+  says `"upstream": "none"`), so no live capture is expected.
+- `package.json` is `"private": true`, so nothing can be published to npm by mistake. Installs from the GitHub release
+  tag are unaffected.
 
 ## [0.0.0] - 2026-11-10
 

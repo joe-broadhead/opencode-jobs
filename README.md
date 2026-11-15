@@ -16,7 +16,7 @@ Unofficial; not affiliated with OpenCode or Anomaly.
 ## Install
 
 ```sh
-opencode plugin add github:joe-broadhead/opencode-jobs#v0.0.0
+opencode plugin add github:joe-broadhead/opencode-jobs#v0.0.1
 ```
 
 Run `opencode reload`, or restart OpenCode, then run `/jobs-status`.
@@ -182,7 +182,7 @@ Set options with the object form of the plugin entry. Every option is optional.
 {
   "plugins": [
     {
-      "package": "github:joe-broadhead/opencode-jobs#v0.0.0",
+      "package": "github:joe-broadhead/opencode-jobs#v0.0.1",
       "options": { "enabled": true, "concurrency": 2, "keepAliveMinutes": 20 }
     }
   ]
@@ -202,7 +202,7 @@ Put the plugin entry in the system config: `/Library/Application Support/opencod
 
 ```json
 {
-  "plugins": [{ "package": "github:joe-broadhead/opencode-jobs#v0.0.0", "options": { "concurrency": 2 } }],
+  "plugins": [{ "package": "github:joe-broadhead/opencode-jobs#v0.0.1", "options": { "concurrency": 2 } }],
   "experimental": { "location_idle_timeout": "60 minutes" }
 }
 ```
@@ -269,7 +269,7 @@ Run `/jobs-status` first. Its last line is the next step.
 ## Uninstall
 
 1. Pause first if a job is mid-run: `/jobs-pause`.
-2. Remove the plugin: `opencode plugin remove github:joe-broadhead/opencode-jobs#v0.0.0`, then `opencode reload`.
+2. Remove the plugin: `opencode plugin remove github:joe-broadhead/opencode-jobs#v0.0.1`, then `opencode reload`.
 3. Remove the agent block you copied into `opencode.json`, or the job agent's Markdown file.
 
 The plugin's storage stays in OpenCode's own database; removing the plugin does not delete it.
@@ -281,6 +281,9 @@ The plugin's storage stays in OpenCode's own database; removing the plugin does 
 - **A changed declared file is re-approved under `all`.** The run record names the script's digest, but not yet the declared-file set (its paths, modes and caps), so the record alone does not show which file declaration a run used.
 - **Declared files are read on the host.** Each one is read up to its size limit, before the VM starts, and that memory is outside `memoryMb`.
 - **A restore can fail.** When a file cannot be put back after a failed commit, its run records `rollback_failed` and the error names the kept original, which a person must restore by hand.
+- **A run stopped while its own subagent works ends at its timeout.** A run waits until its session is idle with no
+  subagent or shell of its own still running. If the session is stopped while one is, OpenCode reports no further idle,
+  so the run is recorded as `timed_out` when the job's timeout passes, rather than at once.
 - **An agent without the default rules still runs its jobs.** Status warns with `JOBS_AGENT_UNGUARDED` and the block to paste; nothing blocks the run.
 - Updates are not automatic for a Git install, and `opencode plugin update` and `opencode plugin check` do not work on one: to move to a newer release, remove the old entry and add the new tag.
 
