@@ -53,8 +53,8 @@ and two pauses follow as explicit allows; with `"access": "read-only"` it is `jo
 the vendor adds later therefore runs under `all`, asks under `ask-changes` and is denied under `read-only`. Every later
 rule still wins, because the last match wins, so an agent's own `deny` or `allow` is untouched.
 
-The access option also decides a script's approval: `all` approves automatically (the digest and the audit record are
-still kept); `ask-changes` approves an all-read script with no file writes automatically and asks once per version for
+The access option also decides a script's approval, the same way it decides Jobs' own tools: `all` approves without a
+prompt (the digest and the audit record are still kept); `ask-changes` approves an all-read script with no file writes automatically and asks once per version for
 anything else; `read-only` allows the all-read case and denies the rest. **An `ask` with nobody present becomes a
 `deny`**, so a run never waits. Pausing every job needs no prompt under `all` or `ask-changes`, because it only stops
 work; under `read-only` even a pause is denied.

@@ -120,6 +120,10 @@ The `access` option picks the block the plugin inserts after each agent's base r
 | `ask-changes` | the four reads and the two pauses are allowed; every change asks | an all-read script with no file writes is approved automatically; anything else asks once per version |
 | `read-only` | the four reads are allowed; every change is denied | an all-read script with no file writes is allowed; anything else is denied |
 
+A script follows `access` like every other Jobs tool: at the default `all` no script asks for approval, `ask-changes`
+asks once (the `jobs_script` prompt, bound to the script's digest) before a script that can change something, and
+`read-only` denies one.
+
 There are three ways to restrict it:
 
 1. **`access`.** Set it in `opencode.json` to `"ask-changes"` or `"read-only"`; the block above changes with it.

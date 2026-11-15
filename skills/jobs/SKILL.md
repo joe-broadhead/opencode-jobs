@@ -69,7 +69,8 @@ where `uses` names every method the script may call, as `<plugin id>.<method>` o
 anything else. Limits default to 100 calls, 64 MB and 64 KB; the job's timeout bounds the wall clock.
 
 Before you call `jobs_create` with a script, state in one sentence what it does, every tool it uses, and whom each write
-reaches. Under the default `access: "all"` it is approved automatically, and the digest and audit are recorded; under
+reaches. A script follows `access` like every other jobs tool. Under the default `access: "all"` it is approved with no
+prompt, and the digest and audit are recorded; under
 `ask-changes` an all-read script with no file writes is automatic and anything else shows one prompt with the source,
 each tool's class and one line per file; `read-only` denies a script that changes anything. A tool the agent denies
 refuses the create with `JOBS_SCRIPT_DENIED`: never add an `allow` to get past it. A changed source, tool list or
