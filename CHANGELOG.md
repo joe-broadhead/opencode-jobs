@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- Admits OpenCode 2.3: the host range is `>=2.2.3 <2.4.0`, tested on 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7 and 2.3.0.
+- A job run that starts a subagent waits for it. From OpenCode 2.3.0 every subagent runs in the background, so a run
+  is finished only when its session is idle with no subagent or shell of its own still running; before, it was
+  recorded at the first idle, with a partial summary. The job's timeout still bounds the whole run.
+- A person's Stop ends a `jobs_run_script` call's script (OpenCode 2.3.0 aborts the call's signal on Stop): it ends as
+  interrupted (`JOBS_SCRIPT_INTERRUPTED`) and writes none of its declared files.
 - Jelly: the `access` setting offers Jelly's three choices, "Allowed" (`all`, the default), "Ask before changes"
   (`ask-changes`) and "Read only" (`read-only`), so Jelly shows a choice instead of a free text field.
 - A script's approval follows `access` like every other Jobs tool: at the default `all` no script asks for approval;

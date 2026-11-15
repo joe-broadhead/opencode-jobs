@@ -9,7 +9,7 @@ import { parseJob, type Job } from "../../src/jobs/model.js"
 import { agentsFake, memoryStorage, testClock } from "./fake.js"
 
 const NOW = Date.UTC(2026, 11, 6, 9, 0, 0)
-const HOST = { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }
+const HOST = { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }
 
 function harness(options: { readonly unguarded?: readonly string[] } = {}) {
   const storage = memoryStorage()

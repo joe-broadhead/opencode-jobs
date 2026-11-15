@@ -17,7 +17,7 @@ beforeAll(() => {
 })
 
 describe("the dialog's text", () => {
-  const facts = { host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20 }
+  const facts = { host: { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }, enabled: true, keepAliveMinutes: 20 }
 
   test("is the report without its heading, or why there is none", () => {
     const text = dialogText({ state: "ready", status: buildStatus(facts) })

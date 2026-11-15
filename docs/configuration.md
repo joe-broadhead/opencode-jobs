@@ -21,7 +21,7 @@ Set options with the object form of the plugin entry. Every option is optional.
 | Option | Values | Default | Effect |
 | --- | --- | --- | --- |
 | `enabled` | `true` or `false` | `true` | `false` stops the runner and leaves the tools, the commands, the dialog and both RPCs working. `/jobs-pause` pauses every job without a restart; this option stops the runner altogether. |
-| `allowUntestedHost` | `true` or `false` | `false` | Starts on an OpenCode version outside `>=2.2.3 <2.3.0`, with the `OpenCode` status row saying it is outside the range. |
+| `allowUntestedHost` | `true` or `false` | `false` | Starts on an OpenCode version outside `>=2.2.3 <2.4.0`, with the `OpenCode` status row saying it is outside the range. |
 | `timezone` | An IANA zone name, such as `Europe/London` | The server's zone | The zone a job that names none runs in. A job's own `tz` wins. |
 | `concurrency` | A whole number from 1 to 8 | `2` | How many runs may be in flight at once, across every job. It bounds cost and file contention, and a run that arrives while the cap is reached waits for the next free slot. |
 | `keepAliveMinutes` | A whole number of minutes from 1 to 59 | `20` | How often the plugin touches its location with an empty session, so the location is never idle-unloaded and the runner keeps running (D2). Keep it below `experimental.location_idle_timeout`; 20 is below the default 60. |
@@ -289,7 +289,7 @@ Jobs status
 - Recent runs: Morning brief succeeded 4 s
 - Failures needing attention: none
 - Agents without default rules: none
-- OpenCode: 2.2.5 (tested; supported range >=2.2.3 <2.3.0)
+- OpenCode: 2.2.5 (tested; supported range >=2.2.3 <2.4.0)
 - Next step: Nothing to do.
 ```
 
@@ -332,7 +332,7 @@ its code and shown in status; it is not thrown at you.
 | Code | When | Next step |
 | --- | --- | --- |
 | `OPTIONS_INVALID` | An option is unknown, or its value is the wrong type or outside its range. | Fix the plugin options in opencode.json; the message names the accepted values and gives an example. |
-| `HOST_UNTESTED` | OpenCode is outside `>=2.2.3 <2.3.0`, and `allowUntestedHost` is not set. | Use a supported OpenCode, or set `"allowUntestedHost": true`. |
+| `HOST_UNTESTED` | OpenCode is outside `>=2.2.3 <2.4.0`, and `allowUntestedHost` is not set. | Use a supported OpenCode, or set `"allowUntestedHost": true`. |
 | `SKILLS_INVALID` | The jobs skill's file, `skills/jobs/SKILL.md`, is missing or its front matter does not name it, so the skill is not listed. | Reinstall the plugin. |
 | `STATUS_UNAVAILABLE` | The status could not be read, or the plugin is not running in this location. | Restart OpenCode, then run `/jobs-status` again. |
 | `JOBS_INVALID_SCHEDULE` | The schedule names two kinds or none, the cron expression is not five fields or never fires, the interval is under a minute, or the zone or time does not exist. | Use a five-field cron expression, an interval of at least a minute, and an IANA time zone such as `Europe/London`. |

@@ -10,7 +10,7 @@ import { defaultRules, evaluate as evaluateRule, type Rule } from "../../src/hos
 import { agentsFake, memoryStorage, testClock } from "./fake.js"
 
 const NOW = Date.UTC(2026, 11, 6, 9, 0, 0)
-const HOST = { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }
+const HOST = { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }
 
 /** The actions the default rules leave open on purpose: pausing only stops work. */
 const OPEN = ["jobs_pause", "jobs_pause_all"]

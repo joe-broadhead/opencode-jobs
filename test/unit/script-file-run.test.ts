@@ -132,7 +132,7 @@ describe("a script's declared file", () => {
         expect(result.record?.reason).toBe(access === "read-only" ? "revoked" : "unapproved")
         const clock = testClock(START, { instantBelow: 0 }).clock
         const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
-        const report = createReport({ storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20, access, scripts: setupRun.gate })
+        const report = createReport({ storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }, enabled: true, keepAliveMinutes: 20, access, scripts: setupRun.gate })
         const view = (await report.list())[0]!.script!
         const input = { storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, source: () => report.source(), wake: () => undefined, ready: true, report, assert: async () => undefined }
         const listed = await runJobTool(input, "list", {})
@@ -159,7 +159,7 @@ describe("a script's declared file", () => {
         await setupRun.run(START)
         const clock = testClock(START, { instantBelow: 0 }).clock
         const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
-        const report = createReport({ storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20, access: "all", scripts: setupRun.gate })
+        const report = createReport({ storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }, enabled: true, keepAliveMinutes: 20, access: "all", scripts: setupRun.gate })
         const input = { storage: setupRun.storage.storage, location: setupRun.root, timezone: "UTC", clock, agent, source: () => report.source(), wake: () => undefined, ready: true, report, assert: async () => undefined }
         const got = await runJobTool(input, "get", { id: setupRun.job.id })
         expect(got.output["job"]).toMatchObject({ action: { type: "script", script: { code, uses: ["host:mem"], files: { state: { path: "state.json", mode: "readwrite", format: "json" } } } } })

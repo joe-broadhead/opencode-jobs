@@ -4,7 +4,7 @@ import { Jobs, registerStatusRpc } from "../../src/rpc.js"
 import { buildStatus } from "../../src/status.js"
 import { rpcContext, rpcRegistry } from "./fake.js"
 
-const HOST = { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }
+const HOST = { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }
 const facts = { host: HOST, enabled: true, keepAliveMinutes: 20 }
 
 /** A report with one job and one run, so the RPC's three methods have something to answer. */

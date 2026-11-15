@@ -55,7 +55,7 @@ function setup(options: { readonly answer?: "yes" | "no" } = {}) {
   const storage = memoryStorage()
   const clock = testClock(NOW, { instantBelow: 0 })
   const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
-  const report = createReport({ storage: storage.storage, location: root, timezone: "UTC", clock: clock.clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20 })
+  const report = createReport({ storage: storage.storage, location: root, timezone: "UTC", clock: clock.clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }, enabled: true, keepAliveMinutes: 20 })
   const input: ActionInput = {
     storage: storage.storage,
     agent,
@@ -186,7 +186,7 @@ test("an actual automatic approval becomes visible as unapproved or revoked afte
     })
     expect(result.record?.reason).toBe(access === "ask-changes" ? "unapproved" : "revoked")
     const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
-    const report = createReport({ storage: setupRun.storage.storage, location: root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20, access, scripts: setupRun.gate })
+    const report = createReport({ storage: setupRun.storage.storage, location: root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }, enabled: true, keepAliveMinutes: 20, access, scripts: setupRun.gate })
     const input = { ...setupRun.input, report, assert: async () => undefined }
     const listed = await runJobTool(input, "list", {})
     const got = await runJobTool(input, "get", { id: job.id })
@@ -208,7 +208,7 @@ test("approval points to the full tool or file job definition, and get returns t
   expect(toolRequest.metadata.script).toHaveLength(8192)
   const clock = testClock(NOW, { instantBelow: 0 }).clock
   const agent = agentsFake({ unguarded: ["build"], names: ["build"] })
-  const report = createReport({ storage: setupRun.storage.storage, location: root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.3.0", tested: true }, enabled: true, keepAliveMinutes: 20, access: "ask-changes", scripts: setupRun.gate })
+  const report = createReport({ storage: setupRun.storage.storage, location: root, timezone: "UTC", clock, agent, host: { version: "2.2.5", range: ">=2.2.3 <2.4.0", tested: true }, enabled: true, keepAliveMinutes: 20, access: "ask-changes", scripts: setupRun.gate })
   const got = await runJobTool({ ...setupRun.input, report, assert: async () => undefined }, "get", { id: toolJob.id })
   expect(got.output["job"]).toMatchObject({ action: { type: "script", script } })
   expect(got.text).toContain("x".repeat(9000))
