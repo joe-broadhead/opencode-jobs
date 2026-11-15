@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Jelly: the `access` setting offers Jelly's three choices, "Allowed" (`all`, the default), "Ask before changes"
+  (`ask-changes`) and "Read only" (`read-only`), so Jelly shows a choice instead of a free text field.
+- A script's approval follows `access` like every other Jobs tool: at the default `all` no script asks for approval;
+  `ask-changes` asks once, through the digest-bound `jobs_script` prompt, before a script that can change something;
+  `read-only` denies one. Every path that approves a script (create, update, `jobs_approve`, a job file at load, a
+  one-off run) takes the answer from one place, and the docs and the skill say so.
+- Jelly: the declaration is checked against the tool registry: the fourteen tools, in order, each `allow` at the
+  default access, with the four reads read-only and the two pauses, like every other change, not read-only.
+  `docs/jelly.md` now says what each access value does in Jelly, that the two pauses ask under "Ask before changes"
+  there, and that the `access` setting is declared.
+
 ## [0.0.0] - 2026-11-10
 
 ### Added
