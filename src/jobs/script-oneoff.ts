@@ -14,7 +14,7 @@ import { denied, limitsOf, scriptSessionRules, worstClass, type Script, type Scr
 import type { Access } from "../options.js"
 import { createBridge } from "./script-bridge.js"
 import { commitFiles, filePolicy, resolveScriptFiles, snapshotFiles, FileCommitError, type FileRecord } from "./script-files.js"
-import type { ScriptGate } from "./script-gate.js"
+import { scriptDecision, type ScriptGate } from "./script-gate.js"
 import { runScript } from "./script-runtime.js"
 
 export interface OneOffInput {
@@ -81,12 +81,11 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
       `Add this rule to that agent's permissions: ${JSON.stringify({ action: "external_directory", resource: outside.resource, effect: "allow" })}.`,
     )
   }
-  const access = input.access ?? "all"
-  const worst = worstClass(resolved, resolvedFiles)
-  if (access === "read-only" && worst === "change") {
+  // OD-29: the access option decides the one approval, as it does for a scheduled script (`scriptDecision`).
+  const approved = scriptDecision(input.access ?? "all", worstClass(resolved, resolvedFiles))
+  if (approved === "deny") {
     throw jobsError("JOBS_SCRIPT_DENIED", `The script changes something, and the plugin's access option is "read-only".`, `Set the plugin option "access" to "ask-changes" or "all".`)
   }
-  const approved = access === "all" || worst === "read" ? "auto" : "prompt"
   let approval: ScriptApproval
   try {
     approval = await input.gate.approve({

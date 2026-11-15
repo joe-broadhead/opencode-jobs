@@ -12,7 +12,9 @@ import { createReport } from "../../src/jobs/report.js"
 import { readJobFiles } from "../../src/jobs/files.js"
 import { execute } from "../../src/jobs/execute.js"
 import { runJobTool } from "../../src/jobs/tools.js"
-import { createScriptGate, type ScriptHost } from "../../src/jobs/script-gate.js"
+import { createScriptGate, scriptDecision, type ScriptHost } from "../../src/jobs/script-gate.js"
+import { approvalAccess, approvalResource, type ScriptApproval } from "../../src/jobs/script.js"
+import { defaultRules, evaluate } from "../../src/host/permissions.js"
 import { runScriptOnce } from "../../src/jobs/script-oneoff.js"
 import type { Script } from "../../src/jobs/script.js"
 import type { Access } from "../../src/options.js"
@@ -77,6 +79,38 @@ const readwriteFile = (mode: "read" | "write" | "readwrite"): Script => ({
   code: "return files.state;",
   uses: ["x.posts.read"],
   files: { state: { path: "state.json", mode, format: "json" } },
+})
+
+describe("OD-29: a script's one approval follows access like every other jobs tool", () => {
+  const ACCESS: readonly Access[] = ["all", "ask-changes", "read-only"]
+
+  test("all approves without a prompt; ask-changes asks for a change; read-only denies a change; a read never asks", () => {
+    expect(ACCESS.map((access) => [access, scriptDecision(access, "change"), scriptDecision(access, "read")])).toEqual([
+      ["all", "auto", "auto"],
+      ["ask-changes", "prompt", "auto"],
+      ["read-only", "deny", "auto"],
+    ])
+  })
+
+  test("the jobs_script prompt falls under the jobs_* pattern, which gives the same answer in the default rules", () => {
+    const expected = { all: "allow", "ask-changes": "ask", "read-only": "deny" } as const
+    for (const access of ACCESS) expect(evaluate([...ALLOW, ...defaultRules(access)], "jobs_script", approvalResource("x"))).toBe(expected[access])
+  })
+
+  test("a run re-checks an approval with the same answer the approval got", () => {
+    const tool = (cls: "read" | "write") => ({ method: "x.posts.m", action: "x_m", class: cls, kind: "family" as const, effect: "allow" as const })
+    const approval = (approved: "auto" | "prompt") => ({ approved }) as ScriptApproval
+    for (const access of ACCESS) {
+      for (const cls of ["read", "write"] as const) {
+        const decision = scriptDecision(access, cls === "read" ? "read" : "change")
+        const auto = approvalAccess(approval("auto"), [tool(cls)], [], access)
+        const prompted = approvalAccess(approval("prompt"), [tool(cls)], [], access)
+        if (decision === "auto") expect([auto, prompted]).toEqual([undefined, undefined])
+        if (decision === "prompt") expect([auto, prompted]).toEqual(["unapproved", undefined])
+        if (decision === "deny") expect([auto, prompted]).toEqual(["revoked", "revoked"])
+      }
+    }
+  })
 })
 
 describe("R18: the access policy decides a script's approval", () => {
