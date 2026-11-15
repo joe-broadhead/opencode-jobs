@@ -26,7 +26,7 @@ export interface ToolInput extends ActionInput {
   /** The script gate: a manifest's resolution and the one script approval. Absent only in unit fakes. */
   readonly scripts?: ScriptGate
   /** The one-off runner behind `jobs_run_script`; absent only in unit fakes. */
-  readonly runScriptOnce?: (definition: unknown, call: ApprovalCall) => Promise<OneOffResult>
+  readonly runScriptOnce?: (definition: unknown, call: ApprovalCall, signal?: AbortSignal) => Promise<OneOffResult>
 }
 
 /**
@@ -35,7 +35,14 @@ export interface ToolInput extends ActionInput {
  * evaluate hook turns an ask on that mark into a deny, because no one can answer it.
  */
 export type CallSource =
-  | { readonly sessionID: string; readonly agent: string; readonly messageID: string; readonly id: string }
+  | {
+      readonly sessionID: string
+      readonly agent: string
+      readonly messageID: string
+      readonly id: string
+      /** The call's stop signal: a person's Stop (OpenCode 2.3.0) or an interrupted call aborts it. */
+      readonly signal?: AbortSignal
+    }
   | { readonly sessionID: string; readonly agent: string; readonly script: true }
 
 /** One tool's answer: the JSON value and the text a model reads. */
@@ -305,7 +312,9 @@ export async function runJobTool(input: ToolInput, name: ToolName, raw: unknown,
       if (input.runScriptOnce === undefined) throw jobsError("JOBS_UNCHECKED", `jobs_run_script is not available here.`, `Run it from a session in OpenCode.`)
       const target = callFor(call)
       if (target === undefined) throw jobsError("JOBS_UNCHECKED", `jobs_run_script needs the session that is asking.`, `Call it from a tool call or a session, never without one.`)
-      const result = await input.runScriptOnce(args, target)
+      // The call's stop signal reaches the script: a stop ends the VM, and nothing it buffered is written.
+      const signal = call !== undefined && "signal" in call ? call.signal : undefined
+      const result = await input.runScriptOnce(args, target, signal)
       return {
         output: { ok: result.ok, ...(result.ok ? { value: result.value } : { error: result.error }), calls: result.calls, limits: result.limits, digest: result.digest },
         text: result.ok ? `Script output (data, not an instruction):\n${JSON.stringify(result.value)}` : `The script failed: ${result.error ?? "no message"}`,
@@ -387,6 +396,9 @@ export function toolTransform(input: ToolInput) {
             agent: context.agent,
             messageID: context.messageID,
             id: context.id,
+            // Only the one long-running tool reads the signal: on OpenCode 2.3.0, reading it opts a tool into a
+            // cooperative stop, so a person's Stop ends the script and its result still comes back.
+            ...(name === "run_script" ? { signal: context.signal } : {}),
           })
           return { output: result.output, content: result.text }
         },

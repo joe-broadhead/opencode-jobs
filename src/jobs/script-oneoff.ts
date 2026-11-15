@@ -39,6 +39,8 @@ export interface OneOffInput {
   /** The family access policy (R18). */
   readonly access?: Access
   readonly job: Pick<Job, "id" | "name">
+  /** The tool call's stop signal: aborting it ends the script as interrupted, and no declared file is written. */
+  readonly signal?: AbortSignal
 }
 
 export interface OneOffResult {
@@ -54,6 +56,9 @@ export interface OneOffResult {
 }
 
 const SCRIPT_SESSION_TITLE = "Script · one-off"
+
+/** The result of a script the person stopped: the runtime's own wording for an interrupted run. */
+const STOPPED = "JOBS_SCRIPT_INTERRUPTED: the run was interrupted. Next step: Run it again with jobs_run_script."
 
 export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
   // The tool's input carries the agent beside the script; the script's own fields are the definition's.
@@ -104,6 +109,9 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
   const policy = await filePolicy(input.location, input.roots ?? [])
   const snapshots = await snapshotFiles(resolvedFiles, { policy })
   const controller = new AbortController()
+  const stop = () => controller.abort()
+  if (input.signal?.aborted === true) stop()
+  else input.signal?.addEventListener("abort", stop, { once: true })
   const created = await input.session.create({
     location: { directory: input.location },
     agent: agentID,
@@ -130,7 +138,10 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
     })
     let committed: readonly FileRecord[] = []
     let commitError: unknown
-    if (outcome.ok) {
+    // A stop that arrived while the script ran ends it as interrupted, even if the VM finished first: nothing it
+    // buffered is written.
+    const stopped = input.signal?.aborted === true
+    if (outcome.ok && !stopped) {
       try {
         committed = await commitFiles(snapshots, outcome.writes, { policy, now: input.clock.now })
       } catch (error) {
@@ -151,17 +162,19 @@ export async function runScriptOnce(input: OneOffInput): Promise<OneOffResult> {
         ...(written?.sha256After === undefined ? {} : { sha256After: written.sha256After }),
       }
     })
-    const ok = outcome.ok && commitError === undefined
+    const ok = outcome.ok && !stopped && commitError === undefined
+    const error = stopped ? (outcome.ok ? STOPPED : outcome.error) : commitError === undefined ? outcome.error : reasonOf(commitError)
     return {
       ok,
-      ...(ok ? { value: outcome.value } : { error: commitError === undefined ? outcome.error : reasonOf(commitError) }),
+      ...(ok ? { value: outcome.value } : { error }),
       calls: outcome.calls,
-      limits: outcome.limits,
+      limits: stopped ? { ...outcome.limits, interrupted: true } : outcome.limits,
       digest: approval.digest,
       approval,
       files,
     }
   } finally {
+    input.signal?.removeEventListener("abort", stop)
     forgetJobSession(created.id)
     await input.session.remove({ sessionID: created.id }).catch(() => undefined)
   }
