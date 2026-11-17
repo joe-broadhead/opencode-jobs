@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.0.2] - 2026-11-17
 
 ### Added
 
@@ -19,6 +19,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - `events_list` and `probe` are reads: the default rules allow `jobs_events_list` and `jobs_probe` under every `access`.
 - A slot the runner skips (overlap, expired or ended) records when the skip was recorded as its end, so the
   `jobs.runs` source lists it like every other skip.
+- Tested on OpenCode 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7 and 2.3.0 (`TESTED_HOSTS` in `src/constants.ts`), within the
+  host range `>=2.2.3 <2.4.0`.
 
 ## [0.0.1] - 2026-11-15
 

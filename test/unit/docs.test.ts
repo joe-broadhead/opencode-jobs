@@ -143,7 +143,7 @@ describe("docs", () => {
 
   test("the README's Uninstall removes the plugin, and its commands are the ones the plugin registers", () => {
     const uninstall = /## Uninstall\n([\s\S]*?)## Links/.exec(text("README.md"))?.[1] ?? ""
-    expect(uninstall).toContain("opencode plugin remove github:joe-broadhead/opencode-jobs#v0.0.1")
+    expect(uninstall).toContain("opencode plugin remove github:joe-broadhead/opencode-jobs#v0.0.2")
     expect(flat("README.md")).toContain("`/jobs-status`")
     expect(flat("README.md")).toContain("Jobs: Status")
   })
