@@ -44,29 +44,32 @@ export const AGENT_BLOCK: readonly Rule[] = [
 export const DEFAULT_AGENT: string = "jobs"
 
 /**
- * The four reads, the tools declared read-only to Jelly: allowed under `ask-changes` and `read-only`. A pause changes a
- * job's state, so it is a change like any other and follows the namespace rule, as it does in Jelly.
+ * The reads, allowed under `ask-changes` and `read-only`: the four tools declared read-only to Jelly, and the `jobs.runs`
+ * source's two tools RPC methods, `events_list` and `probe`. A pause changes a job's state, so it is a change like any
+ * other and follows the namespace rule, as it does in Jelly.
  */
 const READS: readonly Rule[] = [
   { action: "jobs_status", resource: "*", effect: "allow" },
   { action: "jobs_list", resource: "*", effect: "allow" },
   { action: "jobs_get", resource: "*", effect: "allow" },
   { action: "jobs_history", resource: "*", effect: "allow" },
+  { action: "jobs_events_list", resource: "*", effect: "allow" },
+  { action: "jobs_probe", resource: "*", effect: "allow" },
 ]
 
 /**
  * The rules this plugin inserts into every agent after its base allow, by the family `access` option (R18):
  *
  * - `all`: every `jobs_` tool is allowed, like every other plugin's tools by default;
- * - `ask-changes`: the four reads are allowed, and every other `jobs_` tool asks, a pause included;
- * - `read-only`: the four reads are allowed, and every other `jobs_` tool is denied, a pause included.
+ * - `ask-changes`: the reads are allowed, and every other `jobs_` tool asks, a pause included;
+ * - `read-only`: the reads are allowed, and every other `jobs_` tool is denied, a pause included.
  *
  * These are the effects Jelly gives the same declaration. `/jobs-pause`, a command, never goes through these rules.
  *
  * Inserted after the base `* * allow` and before the agent's own rules, so a later rule wins.
  */
 export function defaultRules(access: "all" | "ask-changes" | "read-only"): readonly Rule[] {
-  // The namespace pattern's effect follows `access`, then the four reads are allowed explicitly, as wisprflow's block
+  // The namespace pattern's effect follows `access`, then the reads are allowed explicitly, as wisprflow's block
   // does. A tool added later therefore runs under `all`, asks under `ask-changes` and is denied under `read-only`
   // (R18's namespace amendment).
   const namespace: Rule = { action: "jobs_*", resource: "*", effect: access === "all" ? "allow" : access === "ask-changes" ? "ask" : "deny" }

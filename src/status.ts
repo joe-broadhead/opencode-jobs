@@ -238,7 +238,8 @@ function nextText(runs: readonly NextRunView[]): string {
   return runs.map((run) => `${run.name} at ${iso(run.at)}`).join("; ")
 }
 
-function runText(run: RunView): string {
+/** One run as the status row writes it: the job's name, the status, the duration, late and the skip reason. */
+export function runText(run: RunView): string {
   const parts = [`${run.name} ${run.status}`]
   if (run.durationMs !== undefined) parts.push(duration(run.durationMs))
   if (run.late) parts.push("late")

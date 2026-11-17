@@ -7,7 +7,24 @@
 import { describe, expect, test } from "bun:test"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { registerToolsRpc, type MethodSpec, type ToolCall, type ToolsRpcOptions } from "../../src/host/tools-rpc.js"
+// The transport is source-contract's tools-rpc module, which Jobs registers with its own block (JOBS_RPC). This matrix runs
+// it on a fake MCP table, so the block gets the MCP-only next steps a table with MCP methods needs.
+import { registerToolsRpc, type MethodSpec, type ToolCall, type ToolsRpcOptions } from "@we-the-rebel-alliance/source-contract/tools-rpc"
+import { JOBS_RPC } from "../../src/host/tools-rpc.js"
+
+const PLUGIN: ToolsRpcOptions["plugin"] = {
+  ...JOBS_RPC,
+  nextSteps: {
+    ...JOBS_RPC.nextSteps,
+    AUTH_REQUIRED: "Connect the account.",
+    CONNECTING: "Wait a few seconds, then call the method again.",
+    CONNECTION_FAILED: "Run /jobs-status and follow its next step.",
+    DISABLED: "Enable the server.",
+    NOT_REGISTERED: "Run /jobs-status and follow its next step.",
+    TOOL_UNAVAILABLE: "Call describe to see which methods OpenCode lists now.",
+    UPSTREAM_ERROR: "Check the input against the method's schema from describe.",
+  },
+}
 
 type Effect = "allow" | "deny" | "ask"
 type Rule = { action: string; resource: string; effect: Effect }
@@ -105,7 +122,7 @@ async function setup(options: { agent: readonly Rule[]; session: readonly Rule[]
     mcp: { list: async () => ({ data: [{ name: SERVER, status: { status: "connected" } }] }) },
   }
   const optionsMcp: ToolsRpcOptions["mcp"] = { server: SERVER, managed: () => true }
-  await registerToolsRpc(ctx as never, { methods, mcp: optionsMcp })
+  await registerToolsRpc(ctx as never, { plugin: PLUGIN, methods, mcp: optionsMcp })
   return { handlers, executions }
 }
 

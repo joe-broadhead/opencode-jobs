@@ -17,7 +17,8 @@ code comments carry the detail.
 | `src/jobs/actions.ts` | Every change: create, update, delete, pause, resume, extend, run now, pause all. |
 | `src/jobs/watch.ts` | The job-file watch: one mtime check a minute, a parse only when a file changed. |
 | `src/jobs/tools.ts` | The fourteen tools and their tools-RPC methods, over `actions.ts` and `report.ts`. |
-| `src/host/tools-rpc.ts` | The shared tools-RPC v2 module: the one file copied verbatim from the family's shared copy, with only its `PLUGIN-SPECIFIC` block edited. It holds the second evaluate hook. |
+| `src/host/tools-rpc.ts` | Jobs' part of the tools RPC: its id, next steps and error mapping, over source-contract's `tools-rpc` module, which is bundled into `dist/index.js` and holds the second evaluate hook. |
+| `src/jobs/source.ts` | The `jobs.runs` source: `events_list` and `probe` over the run records, as source-contract events. |
 | `src/jobs/script.ts` | A script's definition, digest, approval, limits and the run session's rules. |
 | `src/jobs/script-gate.ts` | Manifest resolution (family `describe`, host tools) and the one `jobs_script` approval. |
 | `src/jobs/script-bridge.ts` | The guest's one call path: a family tools RPC, or a host tool after a pre-dispatch resolve. |
@@ -69,6 +70,8 @@ adoption registers an adopted session again — and it only ever tightens.
 
 The leader prunes on start and once an hour: the last 50 runs of each job and the last 30 days, whichever keeps less,
 never a `running` record and never a job's newest. A pruned record's session goes too, unless that session is still busy.
+Before it removes anything, it records the newest finished run it removes (`meta/pruned`), so the `jobs.runs` source can
+tell a reader whose cursor had not reached it that a run is gone.
 
 ## Reload and stall recovery
 

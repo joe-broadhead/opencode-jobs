@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- The `jobs.runs` source (source contract version 1, `package.json`'s `sources`): one event per finished job run, from
+  the plugin's own run records, with no network. `events_list` and `probe` are tools RPC methods; an event is the job's
+  name and how its run ended, at the run's end, never what the run said. When retention has removed a run a read had
+  not reached, the page says so with `gap`. `npm run conformance` runs the source contract's kit and writes the report
+  a release attaches.
+
+### Changed
+
+- The tools RPC's transport is source-contract's `tools-rpc` module (v0.2.0), bundled, instead of the family's copy:
+  the same rules, `describe` and envelope.
+- `events_list` and `probe` are reads: the default rules allow `jobs_events_list` and `jobs_probe` under every `access`.
+
 ## [0.0.1] - 2026-11-15
 
 ### Changed
