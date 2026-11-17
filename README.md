@@ -119,7 +119,8 @@ fenced to the source's grants.
   `external_id` is `<job id>/<slot>/<attempt>`, its `thread` is `jobs-job:<job id>`, and it has no actors and no link.
 - **`occurred_at` is the run's end.** A run is known only once it ends, and runs are listed in the order they finished,
   so a cursor never passes a run that was still in flight. A run is listed once it has been finished for a minute; its
-  start is in the text.
+  start is in the text. A slot skipped before it started (overlap, expired or ended) has no start, and its time is when
+  the skip was recorded.
 - **The plugin's words only.** The title is the job's name and the run's status, as `/jobs-status` writes them; the text
   is the status row, the planned slot, the start, the end, the attempt and the failure's code. It never carries the
   prompt, a run's summary, a script's result or any other output. A run whose job name holds a secret is refused.

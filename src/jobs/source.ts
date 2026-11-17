@@ -9,7 +9,8 @@
  *   listed on its own; the retry's event names its attempt.
  * - **Order and time.** Runs are listed in the order they finished, and `occurred_at` is the run's end: a run is known
  *   only once it ends, and ordering by the end keeps a cursor from passing a run that was still in flight when it was
- *   issued. The start is in the event's text. A run is listed once it has been finished for `SETTLE_MS`, so a run whose
+ *   issued. The start is in the event's text. A slot the runner skipped before it started (overlap, expired, ended)
+ *   has no start, and its end is when the skip was recorded. A run is listed once it has been finished for `SETTLE_MS`, so a run whose
  *   record is still being written is never passed.
  * - **Words.** The title is the job's name and the run's status, as `/jobs-status` writes them; the text is the status
  *   row, the planned slot, the start, the end, the attempt and the failure's code. Never the prompt, a summary, a
@@ -118,14 +119,20 @@ const asPosition = (value: unknown): RunPosition | undefined => {
   return typeof at === "number" && Number.isSafeInteger(at) && at >= 0 && typeof key === "string" ? { at, key } : undefined
 }
 
-/** The account a cursor names, read before its binding is checked, so another machine's cursor is ACCOUNT_MISMATCH. */
-function cursorAccount(cursor: string): string | undefined {
+/**
+ * The other machine a cursor belongs to: one this source issued for another account, which is ACCOUNT_MISMATCH. Only a
+ * cursor that decodes under this source's binding for the account it names counts; any other cursor, another plugin's
+ * included, is left to `readCursor`, which refuses it as CURSOR_INVALID.
+ */
+function otherMachine(cursor: string, account: string): string | undefined {
+  let named: unknown
   try {
-    const value = (JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>)["a"]
-    return typeof value === "string" ? value : undefined
+    named = (JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>)["a"]
   } catch {
     return undefined
   }
+  if (typeof named !== "string" || named === account) return undefined
+  return decodeBoundCursor(binding(named), cursor).ok ? named : undefined
 }
 
 function readCursor(cursor: string, identity: LocalIdentity): CursorState {
@@ -165,7 +172,8 @@ export function runEvent(record: RunRecord, at: RunPosition, names: ReadonlyMap<
     `${runText(view)}.`,
     `Planned for ${record.slot}.`,
     ...(record.startedAt === undefined ? [] : [`Started ${iso(record.startedAt)}.`]),
-    `Ended ${iso(at.at)}.`,
+    // A slot skipped before it started has no start: its time is when the skip was recorded.
+    record.startedAt === undefined ? `Recorded ${iso(at.at)}.` : `Ended ${iso(at.at)}.`,
     `Attempt ${record.attempt}.`,
     ...(code === undefined ? [] : [`Code ${code}.`]),
   ].join(" ")
@@ -184,11 +192,16 @@ export function runEvent(record: RunRecord, at: RunPosition, names: ReadonlyMap<
   })
 }
 
-/** What a page is read from: retention's newest removal, every run record and the jobs' names. UNAVAILABLE when the store fails. */
+/**
+ * What a page is read from: every run record, retention's newest removal and the jobs' names. UNAVAILABLE when the store
+ * fails. The records are scanned before `meta/pruned` is read, and retention writes `meta/pruned` before it removes
+ * anything: so a run that a prune running during the read removed is either in the scan or no newer than the `pruned`
+ * read after it, and is never passed without a gap.
+ */
 async function readStore(input: SourceInput): Promise<{ pruned: RunPosition | undefined; records: readonly RunRecord[]; names: ReadonlyMap<string, string> }> {
   try {
-    const pruned = await readPruned(input.storage)
     const records = await scanRuns(input.storage)
+    const pruned = await readPruned(input.storage)
     return { pruned, records, names: await input.names() }
   } catch {
     return refuse("UNAVAILABLE", "The job store could not be read.", "Call events_list again with the same cursor later, and run /jobs-status if it keeps failing.")
@@ -215,8 +228,7 @@ export async function eventsList(raw: unknown, input: SourceInput): Promise<Even
   const now = input.now()
   let state: CursorState = { from: { at: startTime(request, now), key: "" } }
   if (request.cursor !== undefined) {
-    const other = cursorAccount(request.cursor)
-    if (other !== undefined && other !== account) {
+    if (otherMachine(request.cursor, account) !== undefined) {
       refuse("ACCOUNT_MISMATCH", "The cursor is another machine's, and Jobs lists only this machine's runs.", START_AGAIN)
     }
     state = readCursor(request.cursor, identity)

@@ -10,6 +10,7 @@ import { defaultRules, evaluate } from "../../src/host/permissions.js"
 import { pluginError, TOOLS_RPC_ID } from "../../src/host/tools-rpc.js"
 import { EVENTS_ACTION, eventsList, HISTORY_ACTION, identityOf, PROBE_ACTION, probe, RUN_KIND, RUNS_SOURCE, SETTLE_MS, SOURCE_ID, sourceMethods } from "../../src/jobs/source.js"
 import { MAX_RUNS, prune, putRun, readPruned, type Storage } from "../../src/jobs/store.js"
+import { encodeBoundCursor } from "@we-the-rebel-alliance/source-contract/cursor"
 import { ACCOUNT, conformanceReports, cursorAt, declaredSources, FIXTURE, fixtureStorage, IDENTITY, ROOT, sourceInput } from "../support/conformance.js"
 import { memoryStorage } from "./fake.js"
 
@@ -179,6 +180,55 @@ describe("events_list", () => {
     expect([...expired.events, ...pages.flatMap((page) => page.events)]).toHaveLength(MAX_RUNS)
   })
 
+  test("a prune that runs during a read never lets a run it removed pass without a gap", async () => {
+    // The review's repro: retention fires while the read is in flight, at each of the read's own store calls.
+    for (const when of ["meta/pruned", "scan"] as const) {
+      const { storage } = memoryStorage(1000)
+      const minute = 60_000
+      const start = NOW - 3_600_000 - (MAX_RUNS + 2) * minute
+      for (let index = 0; index <= MAX_RUNS; index += 1) {
+        const at = start + index * minute
+        await putRun(storage, { job: "tick", slot: new Date(at).toISOString(), status: "succeeded", late: false, attempt: 1, startedAt: at, endedAt: at + 1_000 })
+      }
+      let fired = false
+      const fire = async () => {
+        if (fired) return
+        fired = true
+        await prune(storage, NOW)
+      }
+      const racy: Storage = {
+        ...storage,
+        // Retention lands just after the reader's own read returns: its answer is already the old one.
+        get: async (key) => {
+          const value = await storage.get(key)
+          if (when === "meta/pruned" && key === "meta/pruned") await fire()
+          return value
+        },
+        scan: async (options) => {
+          const page = await storage.scan(options)
+          if (when === "scan") await fire()
+          return page
+        },
+      }
+      const page = await list({ cursor: cursorAt(start - minute, ""), limit: 5 }, racy)
+      expect(fired).toBe(true)
+      const next = await list({ cursor: page.cursor, limit: 500 }, storage)
+      const lost = `tick/${new Date(start).toISOString()}/1`
+      const listed = [...page.events, ...next.events].some((event) => event.external_id === lost)
+      expect({ when, told: listed || page.gap?.reason === "expired" || next.gap?.reason === "expired" }).toEqual({ when, told: true })
+    }
+  })
+
+  test("lists a slot the runner skipped before it started, at the time the skip was recorded", async () => {
+    const { storage } = memoryStorage()
+    const recorded = NOW - 300_000
+    await putRun(storage, { job: "sync", slot: "2026-11-17T11:00:00.000Z", status: "skipped", reason: "overlap", late: false, attempt: 1, endedAt: recorded })
+    const page = await list({ since: "2026-11-17T00:00:00Z" }, storage)
+    expect(page.events.map((event) => [event.title, event.occurred_at, event.labels])).toEqual([["sync skipped", new Date(recorded).toISOString(), ["status:skipped", "skipped:overlap"]]])
+    expect(page.events[0]!.text).toContain(`Recorded ${new Date(recorded).toISOString()}.`)
+    expect(page.events[0]!.text).not.toContain("Started")
+  })
+
   test("refuses another machine's account or cursor, a foreign cursor, a source it does not have, and a bad input", async () => {
     const storage = await fixtureStorage()
     const other = identityOf("sam", "other-mac")
@@ -186,6 +236,9 @@ describe("events_list", () => {
     expect(await refusal(list({ cursor: cursorAt(NOW, "x", undefined, other) }, storage))).toBe("ACCOUNT_MISMATCH|next")
     expect(await refusal(list({ cursor: cursorAt(NOW, "x", undefined, IDENTITY, "history") }, storage))).toBe("CURSOR_INVALID|next")
     expect(await refusal(list({ cursor: "not a cursor" }, storage))).toBe("CURSOR_INVALID|next")
+    // Another plugin's cursor that keeps an account under the same key is foreign, not another machine's.
+    const foreign = encodeBoundCursor({ plugin: "gws", source: "mail", account: "sam@example.com", scope: {} }, { a: "sam@example.com", p: 5 })
+    expect(await refusal(list({ cursor: foreign }, storage))).toBe("CURSOR_INVALID|next")
     expect(await refusal(list({ source: "meetings" }, storage))).toBe("SOURCE_UNKNOWN|next")
     expect(await refusal(list({ limit: 501 }, storage))).toBe("INPUT_INVALID|next")
     expect(await refusal(list({ since: "yesterday" }, storage))).toBe("INPUT_INVALID|next")

@@ -17,6 +17,8 @@ All notable changes to this project are documented here. The format follows [Kee
 - The tools RPC's transport is source-contract's `tools-rpc` module (v0.2.0), bundled, instead of the family's copy:
   the same rules, `describe` and envelope.
 - `events_list` and `probe` are reads: the default rules allow `jobs_events_list` and `jobs_probe` under every `access`.
+- A slot the runner skips (overlap, expired or ended) records when the skip was recorded as its end, so the
+  `jobs.runs` source lists it like every other skip.
 
 ## [0.0.1] - 2026-11-15
 
