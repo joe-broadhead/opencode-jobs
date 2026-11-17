@@ -14,6 +14,7 @@ import {
   putRun,
   putState,
   readJobs,
+  readPruned,
   readState,
   removeJob,
   removeRun,
@@ -181,6 +182,36 @@ describe("retention", () => {
     expect(pruned.remove).toHaveLength(55)
     expect(await scanRuns(storage)).toHaveLength(1)
     expect(keys().filter((key) => key.startsWith("run/"))).toHaveLength(1)
+  })
+
+  test("records the newest finished run it removes before it removes any, so a reader can tell what it lost", async () => {
+    const { storage } = memoryStorage(3)
+    expect(await readPruned(storage)).toBeUndefined()
+    await putRun(storage, run("daily", 1))
+    // Old enough to go: a finished run, a collapsed missed record and a skipped one; the missed record has no end.
+    await putRun(storage, run("daily", 60 * 24 * 40))
+    await putRun(storage, run("daily", 60 * 24 * 35, { status: "skipped", reason: "overlap", outcome: undefined }))
+    await putRun(storage, run("daily", 60 * 24 * 33, { status: "missed", outcome: undefined, startedAt: undefined, endedAt: undefined, count: 2 }))
+    const order: string[] = []
+    const watched: typeof storage = {
+      ...storage,
+      set: async (key, value) => {
+        order.push(`set ${key}`)
+        await storage.set(key, value)
+      },
+      remove: async (key) => {
+        order.push("remove")
+        await storage.remove(key)
+      },
+    }
+    await prune(watched, NOW)
+    const skipped = run("daily", 60 * 24 * 35)
+    expect(await readPruned(storage)).toEqual({ at: skipped.endedAt!, key: `daily/${skipped.slot}` })
+    expect(order).toEqual(["set meta/pruned", "remove", "remove", "remove"])
+    // A later pass that removes only an older run never moves it back.
+    await putRun(storage, run("daily", 60 * 24 * 50))
+    await prune(storage, NOW)
+    expect(await readPruned(storage)).toEqual({ at: skipped.endedAt!, key: `daily/${skipped.slot}` })
   })
 })
 

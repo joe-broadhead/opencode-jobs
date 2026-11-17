@@ -1,6 +1,6 @@
 {
   "name": "@joe-broadhead/opencode-jobs",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "Unofficial OpenCode plugin that runs agent prompts, slash commands, reminders and no-model scripts on cron, interval and one-off schedules, inside OpenCode, with run history and unattended permissions",
   "keywords": [
@@ -70,6 +70,7 @@
     "test:host": "node scripts/check.mjs host",
     "test:pack": "node scripts/check.mjs pack",
     "lint": "node scripts/check.mjs forbidden",
+    "conformance": "bun scripts/conformance.ts",
     "drift": "bun scripts/drift.mjs",
     "capture": "node scripts/capture-tools.mjs"
   },
@@ -83,6 +84,7 @@
     "@opentui/solid": "0.8.0",
     "@types/bun": "1.4.4",
     "@types/node": "24.19.2",
+    "@we-the-rebel-alliance/source-contract": "github:we-the-rebel-alliance/source-contract#v0.2.0",
     "babel-preset-solid": "1.9.16",
     "croner": "11.0.0",
     "esbuild": "0.28.2",
@@ -90,6 +92,38 @@
     "solid-js": "1.9.17",
     "typescript": "5.9.3",
     "yaml": "2.9.1"
+  },
+  "sources": {
+    "contractVersion": 1,
+    "rpc": "jobs.scheduler.tools",
+    "probe": {
+      "action": "jobs_probe"
+    },
+    "items": [
+      {
+        "id": "jobs.runs",
+        "kind": "events",
+        "reads": "x-jobs/run",
+        "tool": "events_list",
+        "input": {
+          "source": "runs"
+        },
+        "accounts": {
+          "named": false
+        },
+        "permission": {
+          "events": "jobs_events_list",
+          "operations": [
+            "history"
+          ]
+        },
+        "private": true,
+        "cost": {
+          "class": "free"
+        },
+        "maxBytes": 65536
+      }
+    ]
   },
   "jelly": {
     "title": "Jobs",

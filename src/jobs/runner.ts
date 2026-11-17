@@ -357,8 +357,9 @@ export class Runner {
     return this.writeState(state.job, (current) => ({ ...current, done: true, nextDueAt: undefined }))
   }
 
+  /** A slot the runner skipped. It never started, so it has no start; its end is when the skip was recorded. */
   private async recordSkipped(job: Job, slot: number, reason: "overlap" | "expired" | "ended", now: number): Promise<void> {
-    await putRun(this.storage, { job: job.id, slot: slotISO(slot), status: "skipped", reason, late: isLate(slot, now), attempt: 1 })
+    await putRun(this.storage, { job: job.id, slot: slotISO(slot), status: "skipped", reason, late: isLate(slot, now), attempt: 1, endedAt: now })
   }
 
   /** One collapsed record per gap of missed slots, with a count, the design's `missed` shape (D9). */

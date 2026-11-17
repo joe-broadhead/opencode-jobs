@@ -362,9 +362,53 @@ export function pruneRuns(records: readonly RunRecord[], now: number): Pruned {
 
 const runTime = (record: RunRecord) => record.endedAt ?? record.startedAt ?? Date.parse(record.slot)
 
-/** Removes the records retention drops and returns them, so their sessions can go with them. */
+/**
+ * Where a finished run stands in the `jobs.runs` source's order: the time it ended, then its key (`<job>/<slot>`), so
+ * two runs that ended in the same millisecond still have one order.
+ */
+export interface RunPosition {
+  readonly at: number
+  readonly key: string
+}
+
+/** True when `left` comes after `right` in the source's order. */
+export const after = (left: RunPosition, right: RunPosition): boolean => left.at > right.at || (left.at === right.at && left.key > right.key)
+
+/**
+ * A run the `jobs.runs` source lists: one that finished, with the time it ended. A collapsed `missed` record stands for
+ * slots that never started and has no time of its own, and a queued or running record has not finished yet.
+ */
+export function finishedAt(record: RunRecord): RunPosition | undefined {
+  if (record.status === "queued" || record.status === "running" || record.status === "missed") return undefined
+  if (typeof record.endedAt !== "number" || !Number.isFinite(record.endedAt)) return undefined
+  return { at: record.endedAt, key: `${record.job}/${record.slot}` }
+}
+
+const PRUNED_KEY = "meta/pruned"
+
+/**
+ * The newest finished run retention has removed: a reader whose cursor stands before it has lost a run it never read.
+ * Absent while retention has removed none.
+ */
+export async function readPruned(storage: Storage): Promise<RunPosition | undefined> {
+  const value = await storage.get(PRUNED_KEY)
+  if (!isObject(value) || typeof value.at !== "number" || !Number.isFinite(value.at) || typeof value.key !== "string") return undefined
+  return { at: value.at, key: value.key }
+}
+
+/**
+ * Removes the records retention drops and returns them, so their sessions can go with them. The newest finished run
+ * among them is recorded first, so a crash between the two never removes a run without saying so.
+ */
 export async function prune(storage: Storage, now: number): Promise<Pruned> {
   const pruned = pruneRuns(await scanRuns(storage), now)
+  let newest = await readPruned(storage)
+  const before = newest
+  for (const record of pruned.remove) {
+    const position = finishedAt(record)
+    if (position !== undefined && (newest === undefined || after(position, newest))) newest = position
+  }
+  if (newest !== undefined && newest !== before) await storage.set(PRUNED_KEY, newest as unknown as Parameters<Storage["set"]>[1])
   for (const record of pruned.remove) await removeRun(storage, record)
   return pruned
 }

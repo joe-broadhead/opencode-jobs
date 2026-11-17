@@ -39,13 +39,14 @@ npm run check
 | Stage | What it does |
 | --- | --- |
 | `typecheck` | `tsc --noEmit` over `src/` (both `.ts` and the TUI's `.tsx`) and `test/`, strict, with unused names as errors |
-| `unit` | `bun test ./test/unit`: every module in `src/`, the twelve tools, the status model, both RPC contracts, the docs, and the built TUI under OpenTUI 0.8's test renderer |
+| `unit` | `bun test ./test/unit`: every module in `src/`, the twelve tools, the status model, both RPC contracts, the `jobs.runs` source, the docs, and the built TUI under OpenTUI 0.8's test renderer |
+| `conformance` | `bun scripts/conformance.ts` (`npm run conformance`): the source contract's conformance kit over the `jobs.runs` source and `test/fixtures/runs-source.json`; writes `reports/conformance-report.json` and fails unless it is `ok` |
 | `build` | `node scripts/build.mjs`: deletes `dist/` and bundles `src/index.ts` and `src/tui.tsx` with esbuild into the self-contained `dist/index.js` and `dist/tui.js`. The TUI goes through Solid's universal transform first, so its props stay reactive. Fails if a bundle imports anything the host does not provide |
 | `icons` | `node scripts/check-icons.mjs`: the family's icon contract for `assets/icon.svg`, its two rasters and `opencode.icons` |
 | `host` | `bun test ./test/host`: the plugin inside an embedded OpenCode host, once on each tested release (`@opencode/sdk` 2.2.3 to 2.2.7 and 2.3.0) |
 | `pack` | `bun test ./test/pack`: builds, packs and installs the package, imports both entry points, and loads it in stock OpenCode 2.2.3 to 2.2.7 and 2.3.0 |
 | `forbidden` | `node scripts/check-forbidden.mjs`: scans `src/`, `test/`, `scripts/` and `dist/` for forbidden APIs and machine-local paths |
-| `copies` | `node scripts/check-copies.mjs`: the declaration kit (`test/support/jelly-kit.ts`) and the tools RPC outside its `PLUGIN-SPECIFIC` block equal the copy every plugin carries |
+| `copies` | `node scripts/check-copies.mjs`: the declaration kit (`test/support/jelly-kit.ts`), Jelly's setting rules and the release kit equal the copy every plugin carries |
 | `whitelist` | Checks `package.json` against the approved package shape, and that `dist/` holds exactly `index.js`, `tui.js` and `quickjs.wasm`, the script runtime's data file |
 
 `npm run drift` is a manual check, not part of `npm run check`. It compares the Jelly declaration's tool list with the tools the code registers, prints each difference by name and exits 1 when there is one.

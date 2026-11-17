@@ -1,5 +1,5 @@
-// The forbidden scan's one exception: the two evaluate hooks, in their two files and the bundle that inlines both, and
-// nothing anywhere else. The scan is run here against a throwaway tree, so a second hook or a stray one fails here.
+// The forbidden scan's one exception: the two evaluate hooks, the job session's in its file and both in the bundle that
+// inlines the source contract's tools RPC too, and nothing anywhere else. The scan is run here against a throwaway tree, so a second hook or a stray one fails here.
 import { afterAll, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -27,14 +27,13 @@ afterAll(() => {
 })
 
 describe("the forbidden scan", () => {
-  test("allows the tools RPC's hook and the job session's, one each, and the bundle that inlines both", () => {
+  test("allows the job session's hook, and the bundle that inlines it and the tools RPC's", () => {
     const root = tree({
-      "src/host/tools-rpc.ts": `export async function register(ctx) {\n${evaluate("  ")}  }\n`,
       "src/jobs/safety.ts": `export async function registerSafety(ctx) {\n${evaluate("  ")}  }\n`,
       "dist/index.js": `${evaluate()}${evaluate()}`,
     })
     expect(findForbidden(root)).toEqual([])
-    expect([...HOOK_FILES.keys()]).toEqual(["src/host/tools-rpc.ts", "src/jobs/safety.ts", "dist/index.js"])
+    expect([...HOOK_FILES.keys()]).toEqual(["src/jobs/safety.ts", "dist/index.js"])
   })
 
   test("fails a hook in any other file", () => {
@@ -44,7 +43,7 @@ describe("the forbidden scan", () => {
       "dist/index.js": `${evaluate()}${evaluate()}`,
       "src/jobs/other.ts": evaluate(),
     })
-    expect(hookIds(root).map((finding: { path: string }) => finding.path)).toEqual(["src/jobs/other.ts"])
+    expect(hookIds(root).map((finding: { path: string }) => finding.path).sort()).toEqual(["src/host/tools-rpc.ts", "src/jobs/other.ts"])
   })
 
   test("fails a second hook in a file that may hold one", () => {

@@ -14,14 +14,15 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
 - **Greenfield.** No legacy, migration code, compatibility shim, dual path or deprecated alias, and nothing dead.
   Delete rather than deprecate.
 - **No peers, no runtime dependencies, no lifecycle scripts.** `@opencode/plugin`, `@opencode/sdk` and
-  `@opencode/client` (whose types the host tests use) are devDependencies pinned to exactly `2.2.3`. Do not add
+  `@opencode/client` (whose types the host tests use) are devDependencies pinned to exactly `2.2.3`. The source contract
+  (`@we-the-rebel-alliance/source-contract`) is a devDependency pinned to a release tag and bundled into `dist/index.js`. Do not add
   another host version to the lockfile: the host stage installs the other tested SDKs into a temp folder.
 - **Ship prebuilt, one file per entry.** `scripts/build.mjs` bundles `src/index.ts` and `src/tui.ts` with esbuild into
   the self-contained `dist/index.js` and `dist/tui.js`: no chunks, no relative imports, and only host-provided modules
   external. `tsc` only typechecks. No declaration files, and no `.tsx` or JSX in `dist/`; the TUI source is `src/tui.tsx`, built
   through Solid's Babel transform before esbuild.
 - **Default rules follow `access`, never a grant.** The plugin inserts one block after each agent's base allow, chosen by
-  the `access` option: `all` (the default) allows every `jobs_` tool; `ask-changes` allows the four reads and asks for every
+  the `access` option: `all` (the default) allows every `jobs_` tool; `ask-changes` allows the reads and asks for every
   change, a pause included; `read-only` allows the reads and denies every change. It weakens no deny, and inserts
   nothing into an agent without a base allow. A job runs as the agent it names, and that agent's own `permissions` are
   its profile; a run's session rules only ever narrow them. An agent that does not deny by default is a status warning
@@ -33,11 +34,11 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   declared file writes) and the current `access` before the first call: `read-only` skips a change as `revoked`,
   `ask-changes` skips an automatically approved change as `unapproved` until a person approves that exact digest.
 - **The permission hooks.** Two `permission.hook("evaluate")` calls are allowed, and only these: the one in
-  `src/host/tools-rpc.ts` turns an `ask` on one of the tools RPC's own script calls in flight into a deny, and the one
-  in `src/jobs/safety.ts` does the same for a session this plugin created for a run, and for a script's call, which is
-  marked `script` because no tool call stands behind it. Each file holds exactly one hook, the bundle that inlines both
-  holds two, and `scripts/check-forbidden.mjs` fails any other file, any extra hook, and any hook that is not an
-  `evaluate` one. Neither ever turns a deny into anything, and neither touches a session it did not create.
+  source-contract's `tools-rpc` module turns an `ask` on one of the tools RPC's own script calls in flight into a deny,
+  and the one in `src/jobs/safety.ts` does the same for a session this plugin created for a run, and for a script's
+  call, which is marked `script` because no tool call stands behind it. `src/jobs/safety.ts` holds exactly one hook, the
+  bundle that inlines both holds two, and `scripts/check-forbidden.mjs` fails any other file, any extra hook, and any
+  hook that is not an `evaluate` one. Neither ever turns a deny into anything, and neither touches a session it did not create.
 - **Tools assert.** The host does not check a plugin tool's `options.permission` before running it, so every tool in
   `src/jobs/tools.ts` asserts its own action before it acts; `test/unit/permission-audit.test.ts` fails any write that
   does not. Under `ask-changes` every one of them asks, the two pauses included; `/jobs-pause`, a command, is the
@@ -56,13 +57,18 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   `unguardedAgents` and `nextStep`, under those names. Status names jobs, agents, times and outcomes, never a prompt or
   a transcript, and cuts a failure's reason to one line of 160 characters with `src/redact.ts`.
 - **`src/constants.ts` has no imports at all**: `scripts/check.mjs` loads it with Node's type stripping.
-- **The tools RPC.** `src/host/tools-rpc.ts` is a copy of the v2 module shared by several plugins (shared-part hash
-  `5bb87ba0…`), synced with `shared-v2/sync-copy.mjs`. Change only its block between the `PLUGIN-SPECIFIC` markers here;
-  change the rest in the shared copy first. Every known tool is a method with a class, and the rule is resolved before
-  dispatch: only `allow` runs, so a run session's grants are the only path to a write. Keep the RPC id
-  `jobs.scheduler.tools` and its method names stable: scripts call them by name.
+- **The tools RPC.** The transport is source-contract's `tools-rpc` module (version 2.3), pinned in `package.json` and
+  bundled; `src/host/tools-rpc.ts` is Jobs' part of it: the id, the next steps and the error mapping. Never copy the
+  module back in. Every known tool is a method with a class, and the rule is resolved before dispatch: only `allow`
+  runs, so a run session's grants are the only path to a write. Keep the RPC id `jobs.scheduler.tools` and its method
+  names stable: scripts and consumers call them by name.
+- **The `jobs.runs` source.** `src/jobs/source.ts` lists finished runs as source-contract events over the tools RPC
+  (`events_list`, `probe`), declared in `package.json`'s `sources`. An event carries the plugin's words only: the job's
+  name, the status, the times, the attempt and a failure's code, never a prompt, a summary, a result or any run output.
+  Declared equals asserted: `events_list` asserts `jobs_events_list` and `jobs_history`, `probe` asserts `jobs_probe`.
+  `npm run conformance` runs the kit; keep its report `ok`.
 - **State is OpenCode's.** Jobs, their runtime state and their run records live in `ctx.storage`, one key per job and
-  per run, written only by the leader. Nothing else is written: no file outside `ctx.storage`, and job files are read,
+  per run, written only by the leader, with `meta/pruned`, the newest finished run retention removed. Nothing else is written: no file outside `ctx.storage`, and job files are read,
   never edited.
 - **Job output is untrusted.** A run's summary, a reminder and a notification are job output, labelled as such, never
   instructions. Job prompts name real tools and say what is data.
@@ -100,9 +106,9 @@ permissions. Read [docs/configuration.md](docs/configuration.md) before you chan
   `permission.ask`;
 - the deprecated `ctx.generate.text` and `experimental.policies`;
 - importing `@opencode/ai`;
-- a permission hook, except the two `permission.hook("evaluate")` calls, exactly one each: the tools RPC's, in
-  `src/host/tools-rpc.ts`, which turns an `ask` on its own script calls in flight into a deny, and the job session's, in
-  `src/jobs/safety.ts`, which does the same for a run nobody is watching; and except the bundle, `dist/index.js`, which
+- a permission hook, except the two `permission.hook("evaluate")` calls: the tools RPC's, in source-contract's
+  bundled `tools-rpc` module, which turns an `ask` on its own script calls in flight into a deny, and the job session's,
+  exactly one in `src/jobs/safety.ts`, which does the same for a run nobody is watching; so the bundle, `dist/index.js`,
   inlines both and must hold exactly two;
 - references to private host source or host checkouts;
 - machine-local home and temp paths;

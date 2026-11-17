@@ -63,7 +63,22 @@ describe(`in OpenCode ${HOST_VERSION}`, () => {
         "jobs_extend",
         "jobs_approve",
         "jobs_run_script",
+        "events_list",
+        "probe",
       ])
+
+      // The jobs.runs source, as a consumer reads it through the tools RPC: whose runs they are, and a page of none yet.
+      const sessionID = (await host.client.session.create({ location: { directory: host.location.directory }, agent: "build" })).id
+      const envelope = { input: { type: "object" }, output: { type: "object" } }
+      const source = host.client.rpc({ id: TOOLS_RPC_ID, methods: { events_list: envelope, probe: envelope }, events: {} }) as unknown as Record<
+        "events_list" | "probe",
+        (input: unknown, options: unknown) => Promise<Record<string, unknown>>
+      >
+      const probed = await source.probe({ sessionID, input: { source: "runs" } }, { location: host.location })
+      expect(probed).toMatchObject({ source: "runs", owner: { id: expect.stringMatching(/^os-user:/), label: expect.any(String) }, trust: "untrusted" })
+      const page = await source.events_list({ sessionID, input: { source: "runs", account: probed["account"] } }, { location: host.location })
+      expect(page).toMatchObject({ source: "runs", account: probed["account"], owner: probed["owner"], events: [], more: false, trust: "untrusted" })
+      expect(page["cursor"]).toBeString()
     } finally {
       await host.close()
     }

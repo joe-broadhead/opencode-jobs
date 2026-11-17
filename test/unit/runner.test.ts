@@ -151,7 +151,7 @@ describe("the overlap table", () => {
     await setup5.runner.tick(START + 5 * MINUTE)
     await setup5.runner.tick(START + 10 * MINUTE)
     expect(slots(runs.asked)).toEqual([5])
-    expect(await getRun(setup5.storage.storage, "five", new Date(START + 10 * MINUTE).toISOString())).toMatchObject({ status: "skipped", reason: "overlap" })
+    expect(await getRun(setup5.storage.storage, "five", new Date(START + 10 * MINUTE).toISOString())).toMatchObject({ status: "skipped", reason: "overlap", endedAt: START + 10 * MINUTE })
     runs.release()
     await setup5.runner.settle()
   })

@@ -17,10 +17,11 @@ import { approveJob } from "./jobs/actions.js"
 import { createScriptGate, type ScriptGate } from "./jobs/script-gate.js"
 import { runScriptOnce } from "./jobs/script-oneoff.js"
 import { registerSafety } from "./jobs/safety.js"
+import { localIdentity, sourceMethods } from "./jobs/source.js"
 import { registerBackground } from "./jobs/background.js"
 import { Runner } from "./jobs/runner.js"
 import { migrate, pruneWithSessions, putBeat, readPauseAll } from "./jobs/store.js"
-import { ownedMethods, toolTransform, type ToolInput } from "./jobs/tools.js"
+import { ownedMethods, SCRIPT_MARK, toolTransform, type ToolInput } from "./jobs/tools.js"
 import { createFileWatch, type FileWatch } from "./jobs/watch.js"
 import { parseOptions, type Access } from "./options.js"
 import { registerStatusRpc } from "./rpc.js"
@@ -131,8 +132,22 @@ export function createJobsPlugin(deps: JobsDeps = {}) {
           },
         }),
         await registerStatusRpc(ctx.rpc, report),
-        // Every tool as a method with its class: a script calls them with no model, as a session and its agent.
-        await registerToolsRpc(ctx, { methods: ownedMethods(tools) }),
+        // Every tool as a method with its class: a script calls them with no model, as a session and its agent. Then the
+        // jobs.runs source's events_list and probe, which a consumer such as Memory reads in a session fenced to its grants.
+        await registerToolsRpc(ctx, {
+          methods: [
+            ...ownedMethods(tools),
+            ...sourceMethods({
+              storage: ctx.storage,
+              names: async () => new Map((await report.source()).jobs.map((job) => [job.id, job.name] as const)),
+              identity: localIdentity(),
+              now: () => clock.now(),
+              // A script's call is marked rather than sourced, as every other method's: the evaluate hook denies its ask.
+              assert: (call, action) =>
+                ctx.permission.assert({ sessionID: call.sessionID, agent: call.agent, action, resources: ["*"], save: ["*"], metadata: { [SCRIPT_MARK]: true } }),
+            }),
+          ],
+        }),
         // The one evaluate hook: a run of ours never waits for an approval nobody can give.
         await registerSafety(ctx.permission),
         // A run is finished only when its session is idle with no subagent or shell of its own still running.

@@ -11,7 +11,7 @@ Set options with the object form of the plugin entry. Every option is optional.
 {
   "plugins": [
     {
-      "package": "github:joe-broadhead/opencode-jobs#v0.0.1",
+      "package": "github:joe-broadhead/opencode-jobs#v0.0.2",
       "options": { "enabled": true, "concurrency": 2, "keepAliveMinutes": 20 }
     }
   ]
@@ -42,12 +42,16 @@ set: OpenCode's base `* * allow` is the grant. Jobs inserts one block directly a
   { "action": "jobs_status", "resource": "*", "effect": "allow" },
   { "action": "jobs_list", "resource": "*", "effect": "allow" },
   { "action": "jobs_get", "resource": "*", "effect": "allow" },
-  { "action": "jobs_history", "resource": "*", "effect": "allow" }
+  { "action": "jobs_history", "resource": "*", "effect": "allow" },
+  { "action": "jobs_events_list", "resource": "*", "effect": "allow" },
+  { "action": "jobs_probe", "resource": "*", "effect": "allow" }
 ]
 ```
 
-That is `all`, the default. With `"access": "ask-changes"` the namespace rule is `jobs_* ask` and the same four reads
-follow as explicit allows, so every change asks, a pause included; with `"access": "read-only"` it is `jobs_* deny` plus the four reads. A tool
+The reads are the four read tools and the `jobs.runs` source's two tools RPC methods, `events_list` and `probe`.
+
+That is `all`, the default. With `"access": "ask-changes"` the namespace rule is `jobs_* ask` and the same reads follow
+as explicit allows, so every change asks, a pause included; with `"access": "read-only"` it is `jobs_* deny` plus the reads. A tool
 the vendor adds later therefore runs under `all`, asks under `ask-changes` and is denied under `read-only`. Every later
 rule still wins, because the last match wins, so an agent's own `deny` or `allow` is untouched.
 

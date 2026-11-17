@@ -1,5 +1,5 @@
 // The phase-5 surfaces inside an embedded OpenCode host: the twelve tools, the default rules every agent gets, a write
-// that asks while a read does not, the commands, and the tools RPC's describe listing exactly the four reads.
+// that asks while a read does not, the commands, and the tools RPC's describe listing exactly the reads.
 import { afterAll, describe, expect, test } from "bun:test"
 import type { PermissionRequest } from "@opencode/client"
 import type { Clock } from "../../src/jobs/clock.js"
@@ -97,10 +97,11 @@ describe(`the surfaces in OpenCode ${HOST_VERSION}`, () => {
       const described = (await host.client
         .rpc({ id: TOOLS_RPC_ID, methods: { describe: { input: { type: "object" }, output: { type: "object" } } }, events: {} })
         .describe({}, { location: host.location })) as { methods: { name: string; kind: string; action: string; class: string }[] }
-      expect(described.methods.map((method) => method.name)).toEqual(TOOLS)
+      // Then the jobs.runs source's two methods, which are not tools.
+      expect(described.methods.map((method) => method.name)).toEqual([...TOOLS, "events_list", "probe"])
       expect(described.methods.every((method) => method.kind === "plugin")).toBe(true)
-      expect(described.methods.map((method) => method.action)).toEqual(TOOLS)
-      expect(described.methods.filter((method) => method.class === "read").map((method) => method.name)).toEqual(["jobs_status", "jobs_list", "jobs_get", "jobs_history"])
+      expect(described.methods.map((method) => method.action)).toEqual([...TOOLS, "jobs_events_list", "jobs_probe"])
+      expect(described.methods.filter((method) => method.class === "read").map((method) => method.name)).toEqual(["jobs_status", "jobs_list", "jobs_get", "jobs_history", "events_list", "probe"])
     } finally {
       await host.close()
     }
