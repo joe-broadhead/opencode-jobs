@@ -122,6 +122,34 @@
           "class": "free"
         },
         "maxBytes": 65536
+      },
+      {
+        "id": "jobs.runs.list",
+        "kind": "snapshot",
+        "tool": "jobs_history",
+        "input": {
+          "source": "runs",
+          "list": "runs"
+        },
+        "output": "list",
+        "accounts": {
+          "named": false
+        },
+        "permission": {
+          "tool": "jobs_history",
+          "rules": [
+            {
+              "action": "jobs_history",
+              "resource": "*"
+            }
+          ]
+        },
+        "private": true,
+        "cost": {
+          "class": "free"
+        },
+        "maxAgeSec": 900,
+        "maxBytes": 65536
       }
     ]
   },
