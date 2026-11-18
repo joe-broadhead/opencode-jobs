@@ -119,7 +119,7 @@ Each was measured on isolated stock binaries; the spike files are in the design 
 | F7 | A reload runs `cleanup` then `setup`. | Every registration is disposed, and adoption re-attaches the open run. |
 | F8 | 60-minute idle unload by default. | The keep-alive, and the `Liveness` row. |
 | F9 | Events are server-wide; `wait` is the truth. | Nothing is driven by an event; the loop reads state. |
-| F10 | Core's `experimental.schedules` is off by default on every tested release. | Jobs never calls it, and does not depend on it. |
+| F10 | Core's scheduled work is off by default on every tested release: `experimental.schedules` (schedules, 2.2.3 to 2.3.0), and from 2.3.1 `experimental.automations` (automations, which replace schedules; `experimental.schedules` is still read as its old name). | Jobs never calls either, and does not depend on them. |
 | F11 | A session can have children; removing a parent removes them. | Runs hang off one parked `Jobs` parent, recreated if it is deleted. |
 | F12 | Session rules merge with the agent's and override them; within a block, the later rule wins. | The agent block starts with a blanket deny; a job's list is deny-only. |
 | F13 | `ctx.rpc` reaches another plugin's handler by id; the server validates the registrant's schema. | The v0.1 `rpc` action is viable; not built in v0. |
