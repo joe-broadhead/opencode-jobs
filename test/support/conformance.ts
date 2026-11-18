@@ -12,8 +12,9 @@ import { readInstalledDescriptor, type InstalledDescriptor } from "@we-the-rebel
 import { SOURCES_SCHEMA, type Sources } from "@we-the-rebel-alliance/source-contract/schema"
 import { TOOLS_RPC_ID, type PluginMethod, type ToolCall } from "../../src/host/tools-rpc.js"
 import { identityOf, PACKAGE, RUNS_SOURCE, sourceMethods, type LocalIdentity, type SourceInput } from "../../src/jobs/source.js"
-import { ownedMethods, type ToolInput } from "../../src/jobs/tools.js"
-import type { Storage } from "../../src/jobs/store.js"
+import { ownedMethods, runListItems, type ToolInput } from "../../src/jobs/tools.js"
+import { runView } from "../../src/jobs/report.js"
+import { scanRuns, type Storage } from "../../src/jobs/store.js"
 import { memoryStorage } from "../unit/fake.js"
 
 export const ROOT = join(import.meta.dir, "..", "..")
@@ -136,5 +137,32 @@ export async function conformanceReports(fixture: Fixture = FIXTURE): Promise<Co
     describe: { id: TOOLS_RPC_ID },
     atomicPages: { reason: "a page is one read of the plugin's own store, and no run is read on its own, so no single run can fail on its own" },
   })
-  return [report]
+  const listed = sources.items.find((item) => item.id === "jobs.runs.list")
+  if (listed === undefined) throw new Error("package.json must declare jobs.runs.list")
+  const records = await scanRuns(storage)
+  const names = new Map(Object.entries(fixture.names))
+  const snapshot = await sourceConformance({
+    plugin: PACKAGE,
+    source: listed,
+    tools: declaredTools(),
+    calls: {
+      snapshot: async (input, context) => {
+        await context.permission.assert({ action: "jobs_history", resources: ["*"] })
+        const account = typeof input["account"] === "string" ? input["account"] : ACCOUNT
+        return {
+          account,
+          data: { items: runListItems(records.slice(0, 50).map((record) => runView(record, names))), editable: false },
+          asOf: fixture.now,
+          trust: "untrusted" as const,
+        }
+      },
+      probe: run("probe"),
+    },
+    snapshotCases: [{ ...(listed.input ?? {}), account: ACCOUNT }],
+    cases: [],
+    account: ACCOUNT,
+    sources,
+    describe: { id: TOOLS_RPC_ID },
+  })
+  return [report, snapshot]
 }
