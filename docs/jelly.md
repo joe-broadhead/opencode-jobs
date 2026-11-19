@@ -12,6 +12,8 @@ outside reference. The mark is a neutral clock face on a slate tile. Jelly's dec
 drop a top-level key they don't know, and refuse an unknown key inside a tool, sign-in or
 `contributes` entry, so the section uses only the keys Jelly reads.
 
+`jelly.cost` is the line Jelly shows on the plugin's review before it installs: "Jobs has no provider bill. A reminder is posted with no model turn, a script calls plugin tools and no model, and the source reads only this machine. A prompt uses the agent's model." It names no price. It changes nothing Jelly allows.
+
 ## Icons and the vendor
 
 `opencode.icons` lists the same mark in three files of this package, in order: `assets/icon.svg`,
