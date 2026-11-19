@@ -129,6 +129,7 @@
     "title": "Jobs",
     "summary": "Run prompts, slash commands, reminders and no-model scripts on a schedule, inside OpenCode.",
     "icon": "assets/icon.svg",
+    "cost": "Jobs has no provider bill. A reminder is posted with no model turn, a script calls plugin tools and no model, and the source reads only this machine. A prompt uses the agent's model.",
     "tools": [
       {
         "name": "jobs.status",

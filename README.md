@@ -55,6 +55,7 @@ A job is one of four things:
   declared files and is re-checked every slot; changes can require `/jobs-approve`.
 
 A script is the no-model path: `uses` names the tools it can reach, it cannot ask, and the record keeps only what each call did.
+Jobs has no provider bill. A reminder is posted with no model turn, a script calls plugin tools and no model, and the source reads only this machine. A prompt uses the agent's model.
 A job may also declare files it reads and writes, so a script can keep state between runs:
 
 ```yaml
