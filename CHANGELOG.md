@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] - 2026-11-20
+
+### Added
+
+- **List snapshot** `jobs.runs.list` (`output: "list"`). An app can bind it and render recent runs without knowing Jobs. It calls the existing `jobs_history` read and leaves out run summaries. `jobs.runs` stays the events source and is not renamed. No write is declared.
+- `jelly.cost`, the line Jelly shows on the plugin's review before it installs: Jobs adds no provider bill of its own. A prompt, a command, and a reminder set to wake the agent use the agent's model; a plain reminder and a script run no model turn, and the source reads only this machine. No price is stated.
+
+### Fixed
+
+- **`jobs.runs.list` is readable through the tools RPC on every tested release**, proven by a host test that reads it on each. The list rides the `jobs_history` method, whose answer the host validates: that method declares an object, so the list answer is accepted, and the method now declares the `list` and `account` inputs it takes. The model's `jobs_history` tool keeps its own schema, so no `list` input is ever a model's.
+- A run's name is screened whole and only then cut to the item's length, so a secret that straddles the cut cannot pass as a prefix; control characters are dropped, a repeated run id is listed once, and the list stops before the answer passes the declared `maxBytes`.
+
+### Changed
+
+- `sources` gains `jobs.runs.list` and `jelly` gains `cost`, so Jelly asks for consent again.
+- The list's rules are guarded by unit and host tests now: the screen and its order, the id screen, a repeated run once, the 50-item cap, the order, the byte bound, the account check, and a host test that reads two seeded runs rather than an empty list.
+- The source-contract devDependency is pinned at v0.3.0, still bundled into `dist/index.js`. Jobs declares no fact, hint or routine, so a page reads the same for a consumer still on v0.2.0.
+
 ## [0.0.3] - 2026-11-18
 
 ### Changed

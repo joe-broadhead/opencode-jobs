@@ -1,6 +1,6 @@
 {
   "name": "@joe-broadhead/opencode-jobs",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": true,
   "description": "Unofficial OpenCode plugin that runs agent prompts, slash commands, reminders and no-model scripts on cron, interval and one-off schedules, inside OpenCode, with run history and unattended permissions",
   "keywords": [
@@ -84,7 +84,7 @@
     "@opentui/solid": "0.8.0",
     "@types/bun": "1.4.4",
     "@types/node": "24.19.2",
-    "@we-the-rebel-alliance/source-contract": "github:we-the-rebel-alliance/source-contract#v0.2.0",
+    "@we-the-rebel-alliance/source-contract": "github:we-the-rebel-alliance/source-contract#v0.3.0",
     "babel-preset-solid": "1.9.16",
     "croner": "11.0.0",
     "esbuild": "0.28.2",
@@ -122,6 +122,34 @@
           "class": "free"
         },
         "maxBytes": 65536
+      },
+      {
+        "id": "jobs.runs.list",
+        "kind": "snapshot",
+        "tool": "jobs_history",
+        "input": {
+          "source": "runs",
+          "list": "runs"
+        },
+        "output": "list",
+        "accounts": {
+          "named": false
+        },
+        "permission": {
+          "tool": "jobs_history",
+          "rules": [
+            {
+              "action": "jobs_history",
+              "resource": "*"
+            }
+          ]
+        },
+        "private": true,
+        "cost": {
+          "class": "free"
+        },
+        "maxAgeSec": 900,
+        "maxBytes": 65536
       }
     ]
   },
@@ -129,6 +157,7 @@
     "title": "Jobs",
     "summary": "Run prompts, slash commands, reminders and no-model scripts on a schedule, inside OpenCode.",
     "icon": "assets/icon.svg",
+    "cost": "Jobs adds no provider bill of its own. A prompt, a command, and a reminder set to wake the agent use the agent's model; a plain reminder and a script run no model turn, and the source reads only this machine.",
     "tools": [
       {
         "name": "jobs.status",

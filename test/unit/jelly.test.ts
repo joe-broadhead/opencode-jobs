@@ -1,4 +1,4 @@
-// The Jelly declaration: the nine keys Jelly reads, the fourteen tools with the action, effect and read-only flag each
+// The Jelly declaration: the keys Jelly reads, the fourteen tools with the action, effect and read-only flag each
 // one truly has, the one skill, and the `access` setting with Jelly's three choices. A declaration a reviewer can check
 // against the live tool table without loading the plugin, and docs/jelly.md says the same.
 import { describe, expect, test } from "bun:test"
@@ -31,8 +31,9 @@ describe("the jelly declaration", () => {
     expect(docProblems(ROOT)).toEqual([])
   })
 
-  test("has the nine keys Jelly reads, and nothing it would refuse", () => {
-    expect(Object.keys(jelly).sort()).toEqual(["contributes", "icon", "rpc", "signIns", "skills", "summary", "title", "tools", "views"].sort())
+  test("has the keys Jelly reads, and nothing it would refuse", () => {
+    expect(Object.keys(jelly).sort()).toEqual(["contributes", "cost", "icon", "rpc", "signIns", "skills", "summary", "title", "tools", "views"].sort())
+    expect(jelly.cost).toBe("Jobs adds no provider bill of its own. A prompt, a command, and a reminder set to wake the agent use the agent's model; a plain reminder and a script run no model turn, and the source reads only this machine.")
     expect(jelly.title).toBe("Jobs")
     expect(jelly.summary).toBeString()
     expect(jelly.icon).toBe("assets/icon.svg")
