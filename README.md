@@ -111,7 +111,7 @@ is a full file to copy.
 ## The `jobs.runs` source
 
 Jobs declares one source for Memory and other consumers, in `package.json`'s `sources` key (the source contract,
-version 1): `jobs.runs`, this machine's finished job runs as events. A consumer reads it through the tools RPC
+version 1): `jobs.runs`, this machine's finished job runs as events, and `jobs.runs.list`, the same runs as a list an app can render. `jobs.runs` is not renamed. The list leaves out run summaries. A consumer reads it through the tools RPC
 (`jobs.scheduler.tools`): `probe` names whose runs they are, and `events_list` lists them after a cursor, in a session
 fenced to the source's grants.
 

@@ -36,8 +36,9 @@ describe("the declaration", () => {
     expect(sources.rpc).toBe(TOOLS_RPC_ID)
     expect(sources.probe?.action).toBe(PROBE_ACTION)
     const item = sources.items[0]!
-    expect(sources.items).toHaveLength(1)
+    expect(sources.items.map((entry) => entry.id)).toEqual([SOURCE_ID, "jobs.runs.list"])
     expect({ id: item.id, kind: item.kind, tool: item.tool, input: item.input }).toEqual({ id: SOURCE_ID, kind: "events", tool: "events_list", input: { source: RUNS_SOURCE } })
+    expect(sources.items[1]).toMatchObject({ kind: "snapshot", tool: "jobs_history", output: "list" })
     expect(item.kind === "events" ? item.reads : undefined).toBe(RUN_KIND)
     expect(item.kind === "events" ? item.permission.events : undefined).toBe(EVENTS_ACTION)
     // The fence a consumer runs a read in: everything denied, then the method and the run history it reads.
@@ -52,8 +53,10 @@ describe("the declaration", () => {
   test("declares none of the keys a consumer on source-contract 0.1.x refuses", () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { sources: { items: { permission: Record<string, unknown>; accounts?: Record<string, unknown> }[] } }
     for (const item of pkg.sources.items) {
-      expect(Object.keys(item.permission).sort()).toEqual(["events", "operations"])
+      const keys = Object.keys(item.permission).sort()
+      expect(keys).toEqual("events" in item.permission ? ["events", "operations"] : ["rules", "tool"])
       expect(item.accounts).toEqual({ named: false })
+      for (const key of ["identityRules", "readsIdentity", "identity"]) expect(item.permission[key]).toBeUndefined()
     }
   })
 
