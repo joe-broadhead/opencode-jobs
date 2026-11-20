@@ -6,7 +6,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- **List snapshot** `jobs.runs.list` (`output: "list"`). An app can bind it and render recent runs without knowing Jobs. It calls the existing `jobs_history` read and leaves out run summaries. `jobs.runs` stays the events source and is not renamed. No write is declared. The source-contract pin stays v0.2.0.
+- **List snapshot** `jobs.runs.list` (`output: "list"`). An app can bind it and render recent runs without knowing Jobs. It calls the existing `jobs_history` read and leaves out run summaries. `jobs.runs` stays the events source and is not renamed. No write is declared.
+- `jelly.cost`, the line Jelly shows on the plugin's review before it installs: Jobs has no provider bill. A reminder is posted with no model turn, a script calls plugin tools and no model, and the source reads only this machine. A prompt uses the agent's model. No price is stated.
 
 ## [0.0.3] - 2026-11-18
 
