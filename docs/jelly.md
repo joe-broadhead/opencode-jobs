@@ -12,7 +12,7 @@ outside reference. The mark is a neutral clock face on a slate tile. Jelly's dec
 drop a top-level key they don't know, and refuse an unknown key inside a tool, sign-in or
 `contributes` entry, so the section uses only the keys Jelly reads.
 
-`jelly.cost` is the line Jelly shows on the plugin's review before it installs: "Jobs has no provider bill. A reminder is posted with no model turn, a script calls plugin tools and no model, and the source reads only this machine. A prompt uses the agent's model." It names no price. It changes nothing Jelly allows.
+`jelly.cost` is the line Jelly shows on the plugin's review before it installs: "Jobs adds no provider bill of its own. A prompt, a command, and a reminder set to wake the agent use the agent's model; a plain reminder and a script run no model turn, and the source reads only this machine." It names no price. It changes nothing Jelly allows.
 
 ## Icons and the vendor
 

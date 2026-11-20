@@ -33,7 +33,7 @@ describe("the jelly declaration", () => {
 
   test("has the keys Jelly reads, and nothing it would refuse", () => {
     expect(Object.keys(jelly).sort()).toEqual(["contributes", "cost", "icon", "rpc", "signIns", "skills", "summary", "title", "tools", "views"].sort())
-    expect(jelly.cost).toBe("Jobs has no provider bill. A reminder is posted with no model turn, a script calls plugin tools and no model, and the source reads only this machine. A prompt uses the agent's model.")
+    expect(jelly.cost).toBe("Jobs adds no provider bill of its own. A prompt, a command, and a reminder set to wake the agent use the agent's model; a plain reminder and a script run no model turn, and the source reads only this machine.")
     expect(jelly.title).toBe("Jobs")
     expect(jelly.summary).toBeString()
     expect(jelly.icon).toBe("assets/icon.svg")

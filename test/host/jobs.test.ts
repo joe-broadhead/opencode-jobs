@@ -79,6 +79,36 @@ describe(`in OpenCode ${HOST_VERSION}`, () => {
       const page = await source.events_list({ sessionID, input: { source: "runs", account: probed["account"] } }, { location: host.location })
       expect(page).toMatchObject({ source: "runs", account: probed["account"], owner: probed["owner"], events: [], more: false, trust: "untrusted" })
       expect(page["cursor"]).toBeString()
+
+      // jobs.runs.list rides the `jobs_history` method. The host validates a tools-RPC method's answer against the
+      // method's declared output, so this is the read that proves a list answer is accepted on this release.
+      const history = host.client.rpc({ id: TOOLS_RPC_ID, methods: { jobs_history: envelope }, events: {} }) as unknown as {
+        jobs_history: (input: unknown, options: unknown) => Promise<Record<string, unknown>>
+      }
+      // Seed two finished runs in the plugin's own storage, so the list validates real items on every host.
+      const storage = host.worker().storage
+      for (const [slot, name, status] of [["2026-11-20T09:00:00Z", "Nightly", "succeeded"], ["2026-11-20T10:00:00Z", "Weekly", "failed"]] as const) {
+        await storage.set(`run/job_${name}/${slot}`, { job: `job_${name}`, slot, status, late: false, attempt: 1, summary: "run output, never in the list" } as never)
+      }
+      const listed = (await history.jobs_history({ sessionID, input: { list: "runs", account: probed["account"] } }, { location: host.location })) as {
+        account: string
+        data: { items: { id: string; text: string }[]; editable: boolean }
+        asOf: string
+        trust: string
+      }
+      const items = listed.data.items
+      // Seeded runs are listed (not an empty answer), and never a run's summary.
+      expect(Array.isArray(items)).toBe(true)
+      expect(items.length).toBeGreaterThan(0)
+      expect(JSON.stringify(items)).not.toContain("run output")
+      expect(listed.account).toBe(String(probed["account"]))
+      expect(listed.data.editable).toBe(false)
+      expect(listed.trust).toBe("untrusted")
+      expect(Number.isNaN(Date.parse(String(listed["asOf"])))).toBe(false)
+      // The run history the model's tool answers is unchanged: the seeded runs, with their summaries.
+      const model = (await history.jobs_history({ sessionID, input: {} }, { location: host.location })) as { runs: unknown[] }
+      expect(Object.keys(model)).toEqual(["runs"])
+      expect(model.runs).toHaveLength(2)
     } finally {
       await host.close()
     }
