@@ -6,6 +6,8 @@ one third-party WebAssembly data file, dist/quickjs.wasm:
 croner
 yaml
 quickjs-wasi
+QuickJS-NG
+@we-the-rebel-alliance/source-contract
 
 croner
 
@@ -53,11 +55,11 @@ OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
 TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 
-quickjs-wasi
+quickjs-wasi 3.6.2
 
-dist/index.js bundles the quickjs-wasi JavaScript API and dist/quickjs.wasm is
-its QuickJS-NG WebAssembly image, both from quickjs-wasi
-(https://github.com/vercel-labs/quickjs-wasi) under the MIT License:
+dist/index.js bundles the quickjs-wasi JavaScript API, and dist/quickjs.wasm is the
+WebAssembly module built by quickjs-wasi (https://github.com/vercel-labs/quickjs-wasi).
+The wrapper and its C interface are MIT, Copyright (c) 2026 Vercel, Inc.:
 
 MIT License
 
@@ -80,3 +82,70 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+QuickJS-NG 0.17.0
+
+dist/quickjs.wasm contains the QuickJS-NG engine. Its own qjs_get_quickjs_version export
+reports 0.17.0, and its embedded source paths name quickjs-ng/quickjs.c,
+quickjs-ng/libregexp.c, quickjs-ng/libunicode.c and quickjs-ng/dtoa.c. The upstream
+`v0.17.0` tag resolves to commit `6d46d07d04041b40f4f49eaa7fdebe44c314c699`; its LICENSE
+at that commit is reproduced here. The wrapper's notice does not replace it.
+
+The MIT License (MIT)
+
+Copyright (c) 2017-2026 Fabrice Bellard
+Copyright (c) 2017-2024 Charlie Gordon
+Copyright (c) 2023-2026 Ben Noordhuis
+Copyright (c) 2023-2026 Saúl Ibarra Corretgé
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+The quickjs.c file header separately records Charlie Gordon's copyright through 2025,
+whereas the release LICENSE above records 2024; both are recorded as verified. The
+inspected libregexp.c, libunicode.c and dtoa.c carry Fabrice Bellard MIT headers. No
+separate grafted component is proven in the module; the wrapper's C interface and snapshot
+support are part of quickjs-wasi 3.6.2 above.
+
+@we-the-rebel-alliance/source-contract 0.3.0
+
+dist/index.js bundles source-contract's tools-rpc, events and cursor modules
+(https://github.com/we-the-rebel-alliance/source-contract), the plugin family's tools RPC transport and source contract,
+under the MIT License:
+
+MIT License
+
+Copyright (c) 2026 Joe Broadhead
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -134,6 +134,33 @@ describe("package tarball", () => {
     expect(paths.filter((path) => path.endsWith(".d.ts"))).toEqual([])
   }, 120_000)
 
+  test("ships the NOTICE for the bundled source contract", () => {
+    const notice = run("tar", ["-xzOf", join(work, pack().filename), "package/NOTICE"], root)
+    expect(notice).toContain("@we-the-rebel-alliance/source-contract 0.3.0")
+    expect(notice).toContain("tools-rpc, events and cursor modules")
+    expect(notice).toContain("Copyright (c) 2026 Joe Broadhead")
+    expect(notice).toContain("MIT License")
+  })
+
+  test("separates the quickjs-wasi wrapper notice from the QuickJS-NG engine", () => {
+    const notice = run("tar", ["-xzOf", join(work, pack().filename), "package/NOTICE"], root)
+    expect(notice).toContain("quickjs-wasi 3.6.2")
+    expect(notice).toContain("Copyright (c) 2026 Vercel, Inc.")
+    expect(notice).toContain("QuickJS-NG 0.17.0")
+    expect(notice).toContain("qjs_get_quickjs_version")
+    expect(notice).toContain("6d46d07d04041b40f4f49eaa7fdebe44c314c699")
+    expect(notice).toContain("The MIT License (MIT)")
+    expect(notice).toContain("Copyright (c) 2017-2026 Fabrice Bellard")
+    expect(notice).toContain("Copyright (c) 2017-2024 Charlie Gordon")
+    expect(notice).toContain("Copyright (c) 2023-2026 Ben Noordhuis")
+    expect(notice).toContain("Copyright (c) 2023-2026 Saúl Ibarra Corretgé")
+    expect(notice).toContain("quickjs.c file header")
+    expect(notice).toContain("through 2025")
+    expect(notice).not.toContain("does not contain QuickJS-NG's LICENSE")
+    expect(notice).not.toContain("not complete for QuickJS-NG")
+    expect(notice).not.toContain("its QuickJS-NG WebAssembly image, both from quickjs-wasi")
+  })
+
   test("installs with scripts disabled and loads both entry points under Bun, next to the host packages", () => {
     const consumer = install(true)
     const probe = join(consumer, "probe.mjs")
