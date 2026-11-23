@@ -1,6 +1,6 @@
 // The package ships no runtime dependencies: the two libraries the scheduler and the file parser use are bundled into
-// dist/index.js and declared in NOTICE. A library is imported from one module only, so it can be replaced there, and
-// nothing under src/jobs/ reads the clock by itself.
+// dist/index.js and declared in NOTICE, as is the source contract's transport. A library is imported from one module only,
+// so it can be replaced there, and nothing under src/jobs/ reads the clock by itself.
 import { describe, expect, test } from "bun:test"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -50,6 +50,29 @@ describe("bundled libraries", () => {
     expect(notice).toContain("ISC")
     expect(notice).toContain("Copyright (c) 2015-2021 Hexagon <github.com/Hexagon>")
     expect(notice).toContain("Copyright Eemeli Aro <eemeli@gmail.com>")
+  })
+
+  test("NOTICE names the bundled source contract with its licence", () => {
+    const notice = read("NOTICE")
+    expect(notice).toContain("@we-the-rebel-alliance/source-contract 0.3.0")
+    expect(notice).toContain("tools-rpc, events and cursor modules")
+    expect(notice).toContain("Copyright (c) 2026 Joe Broadhead")
+  })
+
+  test("NOTICE separates the quickjs-wasi wrapper from the QuickJS-NG engine", () => {
+    const notice = read("NOTICE")
+    expect(notice).toContain("quickjs-wasi 3.6.2")
+    expect(notice).toContain("QuickJS-NG 0.17.0")
+    expect(notice).toContain("qjs_get_quickjs_version")
+    expect(notice).toContain("6d46d07d04041b40f4f49eaa7fdebe44c314c699")
+    expect(notice).toContain("Copyright (c) 2017-2026 Fabrice Bellard")
+    expect(notice).toContain("Copyright (c) 2017-2024 Charlie Gordon")
+    expect(notice).toContain("Copyright (c) 2023-2026 Ben Noordhuis")
+    expect(notice).toContain("Copyright (c) 2023-2026 Saúl Ibarra Corretgé")
+    expect(notice).toContain("quickjs.c file header")
+    expect(notice).toContain("through 2025")
+    expect(notice).not.toContain("does not contain QuickJS-NG's LICENSE")
+    expect(notice).not.toContain("not complete for QuickJS-NG")
   })
 })
 
