@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] - 2026-11-23
+
+### Fixed
+
+- `NOTICE` now attributes the bundled Source Contract separately from the quickjs-wasi wrapper and the QuickJS-NG engine, with each licence and the QuickJS-NG version and commit. The package ships the corrected `NOTICE`; no tool, job or run behaviour changes.
+
 ## [0.0.4] - 2026-11-20
 
 ### Added
